@@ -34,7 +34,7 @@ sub main() {
 }
 ```
 
-### Embed and call C and Assembly code directly inside rock code
+#### Embed and call C and Assembly code directly inside rock code
 ```rock
   @embed c
   int square(int x) { return x * x; }
@@ -45,7 +45,12 @@ sub main() {
   }
 ```
 
-### Records can be given methods
+#### enums
+```rock
+  enum Direction { North, South, East, West }
+```
+
+#### Records (with methods)
 ```rock
   record Point { 
     int x, 
@@ -63,7 +68,7 @@ sub main() {
 
 ```
 
-### Organise code into modules
+#### Organise code into modules
 
 ```rock
   module Scoreboard;
@@ -73,6 +78,27 @@ sub main() {
     this.score := this.score + points;
   }
 ```
+
+#### Tagged Unions & Case selector
+```rock
+  union Token {
+    // a Token instance is allowed to be *one* of these:
+    int Number,
+    string Name,
+    char Operator,
+    End
+  }
+
+  Token token := Number(42);
+
+  case token {
+    Number: print("a number");
+    Name: print("a name");
+    Operator: print("an operator");
+    End: print("the end");
+  }
+```
+
 
 ## Requirements
 

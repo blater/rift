@@ -6,6 +6,8 @@
 
 #define __INTERNAL_DYNAMIC_ARRAY_CAP 64
 
+void __internal_set_dynamic_array_initial_capacity(size_t capacity);
+
 void init_rocker(int argc, char **argv);
 void end_rocker(void);
 void exit_rocker(int status);
@@ -15,8 +17,10 @@ void exit_rocker(int status);
 void halt(byte code);
 
 __internal_dynamic_array_t __internal_make_array(size_t size, size_t max_capacity);
+__internal_dynamic_array_t __internal_make_array_with_release(
+    size_t size, size_t max_capacity, __internal_array_release_fn release_elem);
 int __internal_push_array(__internal_dynamic_array_t arr, void *elem);
-void *__internal_pop_array(__internal_dynamic_array_t arr);
+int __internal_pop_into(__internal_dynamic_array_t arr, void *out);
 void __internal_insert(__internal_dynamic_array_t arr, size_t index,
                        void *elem);
 void *__internal_get_elem(__internal_dynamic_array_t arr, size_t index);
@@ -24,6 +28,7 @@ void __internal_set_elem(__internal_dynamic_array_t arr, size_t index,
                          void *elem);
 
 void __internal_free_array(__internal_dynamic_array_t arr, int is_string_array);
+void __internal_retain_array(__internal_dynamic_array_t arr);
 
 size_t __length_array(__internal_dynamic_array_t arr);
 size_t __length_string(string s);

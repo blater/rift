@@ -10,7 +10,7 @@ OBJECTS = $(BUILD)alloc.o $(BUILD)ast.o $(BUILD)lexer.o $(BUILD)token.o \
           $(BUILD)main.o
 DEPS = $(OBJECTS:.o=.d)
 
-.PHONY: all clean test-pools test-negative test-refcount test-zxn
+.PHONY: all clean test-pools test-negative test-refcount test-zxn test-autolink test-memory-profile
 
 all: $(BUILD) rockc
 
@@ -47,20 +47,17 @@ test-negative: rockc
 # Synthesises longlived backings to exercise the live refcount paths
 # since no Rock program path populates `backing` until Phase H.
 #
-# fundefs.c, alloc.c, fundefs_internal.c are compiled with the same
+# fundefs.c and fundefs_internal.c are compiled with the same
 # relaxed flags the `rock` script uses for runtime sources (the strict
 # rockc flags would catch pre-existing sign-compare warnings unrelated
 # to ADR-0003 work).
 RUNTIME_CFLAGS = -Wall -Wno-unused-variable -I src
 $(BUILD)fundefs_for_test.o: $(LIB)fundefs.c $(LIB)fundefs.h $(LIB)pools.h | $(BUILD)
 	$(CC) $(RUNTIME_CFLAGS) -c $< -o $@
-$(BUILD)alloc_for_test.o: $(LIB)alloc.c $(LIB)alloc.h | $(BUILD)
-	$(CC) $(RUNTIME_CFLAGS) -c $< -o $@
 $(BUILD)fundefs_internal_for_test.o: $(LIB)fundefs_internal.c $(LIB)fundefs_internal.h | $(BUILD)
 	$(CC) $(RUNTIME_CFLAGS) -c $< -o $@
 $(BUILD)string_refcount_test: test/string_refcount_test.c $(BUILD)pools.o \
                               $(BUILD)fundefs_for_test.o \
-                              $(BUILD)alloc_for_test.o \
                               $(BUILD)fundefs_internal_for_test.o | $(BUILD)
 	$(CC) $(RUNTIME_CFLAGS) -o $@ $^
 
@@ -71,6 +68,17 @@ test-refcount: $(BUILD)string_refcount_test
 # `tools/test-zxn --emulator-bin ...`.
 test-zxn: rockc
 	tools/test-zxn
+
+# Build a representative multi-component RTL program with both ZXN link modes.
+# The script verifies that auto-linking resolves all required dependencies and
+# leaves a materially smaller target artifact than the compatibility mode.
+test-autolink: rockc
+	sh test/test_rtl_autolink.sh
+
+# Host execution under the exact constrained pool sizes used by the ZX Next
+# target. Ownership loops must complete without pool exhaustion or UAF.
+test-memory-profile: rockc
+	sh test/test_memory_profile.sh
 
 clean:
 	rm -rf $(BUILD)

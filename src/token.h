@@ -79,6 +79,7 @@ typedef enum token_type_t {
   TOK_RETURNS,
   TOK_UNION,
   TOK_GRAPHICS,
+  TOK_COLLECT,
   TOK_EOF,
   TOK_COUNT
 

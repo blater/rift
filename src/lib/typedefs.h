@@ -19,13 +19,10 @@ typedef struct string {
   size_t length;
   size_t capacity;       /* 0 = read-only view; >0 = writable backing */
   __string_block *backing; /* header for refcounted backing; NULL = bump/static */
-  /* Phase D transition: `owned` retained for compatibility with the existing
-   * runtime allocator path. Phase E removes it as refcount semantics take
-   * over. New code paths must set both fields consistently. */
-  char owned;    /* 1 = heap-allocated via malloc; 0 = static/borrowed */
 } string;
 
 typedef struct __internal_dynamic_array *__internal_dynamic_array_t;
+typedef void (*__internal_array_release_fn)(void *slot);
 
 struct __internal_dynamic_array {
   void *data;
@@ -33,6 +30,7 @@ struct __internal_dynamic_array {
   size_t capacity;
   size_t elem_size;
   size_t max_capacity;  // 0 = unlimited (dynamic), >0 = fixed size limit
+  __internal_array_release_fn release_elem; // NULL for scalar elements
 };
 
 typedef char boolean;

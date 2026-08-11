@@ -40,6 +40,9 @@ static int tests_failed = 0;
     }                                                                         \
   } while (0)
 
+#define IS_FREE_STATE(refcount) \
+  ((refcount) == ROCK_RC_FREE || (refcount) == ROCK_RC_MAGAZINE)
+
 /* ---- Helpers to synthesise a longlived-backed string descriptor ---- */
 
 /* Allocate a longlived block of `payload_size` bytes, copy `data` into it,
@@ -53,7 +56,6 @@ static string make_longlived_string(const char *data, size_t length) {
   s.length   = length;
   s.capacity = length;
   s.backing  = ((rock_block_header *)payload) - 1;
-  s.owned    = 0;
   return s;
 }
 
@@ -66,7 +68,6 @@ static void retain_release_on_null_backing_is_noop(void) {
   s.length   = 5;
   s.capacity = 0;
   s.backing  = NULL;
-  s.owned    = 0;
 
   /* Should be safe to call any number of times; no refcount, no free. */
   __string_retain(s);
@@ -94,7 +95,6 @@ static void retain_release_on_static_sentinel_is_noop(void) {
   s.length   = 7;
   s.capacity = 0;
   s.backing  = h;
-  s.owned    = 0;
 
   /* retain/release must NOT touch the refcount of a static block. */
   __string_retain(s);
@@ -139,7 +139,7 @@ static void release_to_zero_frees_block(void) {
   __string_release(s);
   /* After free, the block's refcount is set to ROCK_RC_FREE by the
    * pool runtime's freelist push. */
-  EXPECT(s.backing->refcount == ROCK_RC_FREE,
+  EXPECT(IS_FREE_STATE(s.backing->refcount),
          "freed block should be marked as free");
   rock_pools_deinit();
 }
@@ -168,7 +168,7 @@ static void multiple_descriptors_share_backing(void) {
   __string_release(b);
   EXPECT(a.backing->refcount == 1, "after release rc should be 1");
   __string_release(a);
-  EXPECT(a.backing->refcount == ROCK_RC_FREE,
+  EXPECT(IS_FREE_STATE(a.backing->refcount),
          "second release should free the block");
   rock_pools_deinit();
 }
@@ -189,7 +189,6 @@ static void return_static_passes_through_unchanged(void) {
   s.length   = 7;
   s.capacity = 0;
   s.backing  = h;
-  s.owned    = 0;
 
   string r = __return_string(s);
   EXPECT(r.backing == h, "static return should preserve backing pointer");
@@ -209,7 +208,7 @@ static void return_longlived_increments_refcount(void) {
   __string_release(s);
   EXPECT(r.backing->refcount == 1, "after one release rc=1, block alive");
   __string_release(r);
-  EXPECT(r.backing->refcount == ROCK_RC_FREE, "second release frees");
+  EXPECT(IS_FREE_STATE(r.backing->refcount), "second release frees");
   rock_pools_deinit();
 }
 
@@ -225,7 +224,6 @@ static void return_bump_allocates_longlived_copy(void) {
   s.length   = 5;
   s.capacity = 0;
   s.backing  = NULL;
-  s.owned    = 0;
 
   string r = __return_string(s);
   EXPECT(r.backing != NULL, "bump return must allocate fresh backing");
@@ -234,7 +232,7 @@ static void return_bump_allocates_longlived_copy(void) {
   EXPECT(r.data != bump_payload, "data must point at new longlived block");
   EXPECT(memcmp(r.data, "bump!", 5) == 0, "bytes copied");
   __string_release(r);
-  EXPECT(r.backing->refcount == ROCK_RC_FREE, "release frees the copy");
+  EXPECT(IS_FREE_STATE(r.backing->refcount), "release frees the copy");
   rock_pools_deinit();
 }
 
@@ -258,7 +256,7 @@ static void handle_retain_increments_refcount(void) {
   __handle_release(payload);
   EXPECT(h->refcount == 1, "release dec rc");
   __handle_release(payload);
-  EXPECT(h->refcount == ROCK_RC_FREE, "second release frees");
+  EXPECT(IS_FREE_STATE(h->refcount), "second release frees");
   rock_pools_deinit();
 }
 
@@ -275,7 +273,7 @@ static void return_handle_increments_refcount(void) {
   EXPECT(h->refcount == 1, "after callee release, caller still owns rc=1");
   /* Simulate caller scope exit. */
   __handle_release(r);
-  EXPECT(h->refcount == ROCK_RC_FREE, "caller's release frees");
+  EXPECT(IS_FREE_STATE(h->refcount), "caller's release frees");
   rock_pools_deinit();
 }
 

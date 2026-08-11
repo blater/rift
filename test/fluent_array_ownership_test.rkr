@@ -1,0 +1,11 @@
+sub string[].add(string s) returns string[] {
+  append(this, s);
+  return this;
+}
+
+sub main() {
+  for i := 1 to 200 {
+    string[] sentence;
+    sentence.add("one").add("two");
+  }
+}

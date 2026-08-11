@@ -19,7 +19,7 @@ typedef enum {
 // --- Unified scope tracking (linked lists, zero pre-allocation) ---
 
 typedef enum {
-  TRACK_STRING,   // emit __string_release + __free_string
+  TRACK_STRING,   // emit __string_release
   TRACK_ARRAY,    // emit __internal_free_array(name, is_string_array)
   TRACK_HANDLE    // record/union/module — emit __handle_release(name)
 } track_kind_t;
@@ -27,6 +27,7 @@ typedef enum {
 typedef struct tracked_var {
   struct tracked_var *next;
   string_view name;
+  string_view type_name;     // aggregate type for its generated release walker
   track_kind_t kind;
   int is_string_array;   // only meaningful when kind == TRACK_ARRAY
   int owns_name;         // 1 if name.data was strdup'd and must be freed
@@ -35,6 +36,7 @@ typedef struct tracked_var {
 typedef struct scope {
   struct scope *prev;       // outer scope (NULL at bottom of stack)
   tracked_var_t *vars;      // linked list head (most-recently-added first)
+  int bump_mark_id;         // generated bump mark for this lexical region, or -1
 } scope_t;
 
 typedef struct generator_t generator_t;
@@ -57,8 +59,10 @@ typedef struct generator_t {
   scope_t *scope;             // top of scope stack (NULL when empty)
   int auto_cast;             // when set, wrap int args with (byte)/(word)/(dword) for matching callee params
   int zxn_test;              // when set, emit test-only ZXN emulator result markers
+  int zxn_memory_profile;    // host build using the exact 1 KiB/6 KiB ZXN pools
   int lit_counter;            // ADR-0003 §7.1: unique id for each emitted static __string_block
   ast_t current_fundef;       // ADR-0003 §10.3: enclosing fundef during body emission (NULL otherwise)
+  int bump_mark_counter;
 } generator_t;
 
 generator_t new_generator(char *filename);

@@ -19,6 +19,7 @@ void usage(char *name) {
   printf("\t--target=zxn\t\tCompile for ZX Spectrum Next\n");
   printf("\t--auto-cast\t\tWrap int args with (byte)/(word)/(dword) when callee param is narrower\n");
   printf("\t--zxn-test\t\tEmit ZXN emulator test result markers\n");
+  printf("\t--memory-profile=zxn\tUse ZXN's 1 KiB/6 KiB pools on a host build\n");
   // printf("\t%s [flags] <input file> [output file] [flags]\n", name);
   // printf("Possible flags:\n");
   // printf("\t-t:\t\tPrints the ast\n");
@@ -38,6 +39,7 @@ int main(int argc, char *argv[]) {
   int target_zxn = 0;
   int auto_cast = 0;
   int zxn_test = 0;
+  int zxn_memory_profile = 0;
 
   for (int i = 1; i < argc; i++) {
     char *arg = argv[i];
@@ -62,6 +64,9 @@ int main(int argc, char *argv[]) {
       }
       else if (strcmp(arg, "--zxn-test") == 0) {
         zxn_test = 1;
+      }
+      else if (strcmp(arg, "--memory-profile=zxn") == 0) {
+        zxn_memory_profile = 1;
       }
       //  else if (*(arg + 1) == 't' && !print_tree)
       //   print_tree = 1;
@@ -121,6 +126,7 @@ int main(int argc, char *argv[]) {
     return 1;
   }
   g.zxn_test = zxn_test;
+  g.zxn_memory_profile = zxn_memory_profile;
   g.auto_cast = auto_cast;
   transpile(&g, p.prog);
   kill_generator(g);

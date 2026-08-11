@@ -17,7 +17,6 @@ void new_string(string *out, string s);
 void write_string_to_file(string s, string filename);
 int equals(string s1, string s2);
 void __get_abs_path_impl(string *out, string path);
-void __free_string(string *s);
 
 /* ADR-0003 §7.6 — refcount on long-lived string backing.
  *
@@ -27,7 +26,7 @@ void __free_string(string *s);
  *   - backing->refcount  < 0xFFFF      longlived; inc/dec
  *
  * On release dropping refcount to zero, the block returns to its
- * size-class freelist via rock_longlived_free.
+ * address-ordered free list via rock_longlived_free.
  *
  * These helpers are call-site-safe at every site listed in §7.6:
  *   variable initialiser, slot write, scope exit, parameter entry/exit,

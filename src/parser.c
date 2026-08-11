@@ -494,6 +494,12 @@ ast_t parse_statement(parser_t *p) {
     return parse_ret(p);
   } else if (a == TOK_MATCH)
     return parse_match(p);
+  else if (a == TOK_COLLECT) {
+    consume_token(p);
+    expect(*p, TOK_SEMICOL);
+    consume_token(p);
+    return new_ast((node_t){collect_stmt, {0}});
+  }
   else if (a == TOK_EMBED)
     return parse_embed(p);
   else if (a == TOK_GRAPHICS)

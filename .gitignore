@@ -15,6 +15,7 @@ out.c
 *_CODE.bin
 *.lis
 *.sym
+*.map
 
 # Generated dep files in vendored deps
 src/ext/src/termbox2/demo/*.d

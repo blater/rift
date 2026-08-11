@@ -1,4 +1,4 @@
-# Rock
+# Rock (Retro·Oriented·Compiler·Kit)
 
 Rock is a statically typed language written in C and targeted at the ZX Next retro system.  
 It liberally takes inspiration from C, Rust, Zig, Java, and Modula/Pascal.  
@@ -17,6 +17,7 @@ Rock provides:
 - Functions, methods, loops, and `match`
 - C and Z80 assembly embed blocks
 - A runtime library for strings, arrays, input, graphics, sound, and ZX Spectrum Next access
+- Automatic memory allocation, reclaimed automatically when its final reference dies
 
 For example:
 

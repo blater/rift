@@ -85,12 +85,13 @@ static void bump_save_restore_nested(void) {
 
 static void bump_alignment(void) {
   rock_pools_init(BUMP_CAP, LL_CAP);
-  /* Allocate odd sizes; subsequent allocations should be 4-byte aligned. */
+  /* Allocate odd sizes; every result must meet the runtime alignment. */
   void *a = rock_bump_alloc(1);
   void *b = rock_bump_alloc(1);
   void *c = rock_bump_alloc(1);
-  EXPECT(((uintptr_t)b - (uintptr_t)a) == 4, "1-byte alloc did not advance to 4-byte boundary");
-  EXPECT(((uintptr_t)c - (uintptr_t)b) == 4, "1-byte alloc did not advance to 4-byte boundary (2)");
+  EXPECT(((uintptr_t)a % sizeof(void *)) == 0, "first bump allocation is misaligned");
+  EXPECT(((uintptr_t)b % sizeof(void *)) == 0, "second bump allocation is misaligned");
+  EXPECT(((uintptr_t)c % sizeof(void *)) == 0, "third bump allocation is misaligned");
   rock_pools_deinit();
 }
 
@@ -106,11 +107,12 @@ static void longlived_alloc_returns_payload(void) {
   rock_pools_deinit();
 }
 
-static void longlived_size_rounds_to_class(void) {
+static void longlived_size_rounds_to_alignment(void) {
   rock_pools_init(BUMP_CAP, LL_CAP);
-  void *p = rock_longlived_alloc(20); /* between class 16 and 32 */
+  void *p = rock_longlived_alloc(20);
   rock_block_header *h = ((rock_block_header *)p) - 1;
-  EXPECT(h->size == 32, "size did not round up to class 32");
+  EXPECT(h->size >= 20, "size is below request");
+  EXPECT((h->size % sizeof(void *)) == 0, "size is not allocation-aligned");
   rock_pools_deinit();
 }
 
@@ -119,7 +121,8 @@ static void longlived_free_marks_free(void) {
   void *p = rock_longlived_alloc(16);
   rock_longlived_free(p);
   rock_block_header *h = ((rock_block_header *)p) - 1;
-  EXPECT(h->refcount == ROCK_RC_FREE, "freed block must have ROCK_RC_FREE refcount");
+  EXPECT(h->refcount == ROCK_RC_MAGAZINE || h->refcount == ROCK_RC_FREE,
+         "freed block must enter a magazine or buddy free list");
   rock_pools_deinit();
 }
 
@@ -152,20 +155,28 @@ static void longlived_payload_writable(void) {
   rock_pools_deinit();
 }
 
+static void longlived_payload_alignment(void) {
+  rock_pools_init(BUMP_CAP, LL_CAP);
+  void *a = rock_longlived_alloc(1);
+  void *b = rock_longlived_alloc(17);
+  void *c = rock_longlived_alloc(63);
+  EXPECT(((uintptr_t)a % sizeof(void *)) == 0, "first longlived payload is misaligned");
+  EXPECT(((uintptr_t)b % sizeof(void *)) == 0, "second longlived payload is misaligned");
+  EXPECT(((uintptr_t)c % sizeof(void *)) == 0, "third longlived payload is misaligned");
+  rock_pools_deinit();
+}
+
 /* ---- Reclaim ---- */
 
-static void reclaim_coalesces_two_adjacent(void) {
+static void reclaim_drains_magazines_and_coalesces_buddies(void) {
   rock_pools_init(BUMP_CAP, LL_CAP);
   void *p1 = rock_longlived_alloc(16);
   void *p2 = rock_longlived_alloc(16);
   rock_longlived_free(p1);
   rock_longlived_free(p2);
   rock_longlived_reclaim();
-  rock_block_header *h1 = ((rock_block_header *)p1) - 1;
-  /* Merged size = 16 + sizeof(header) + 16 = 16 + 4 + 16 = 36 */
-  EXPECT(h1->size == 16 + sizeof(rock_block_header) + 16,
-         "merged size incorrect");
-  EXPECT(h1->refcount == ROCK_RC_FREE, "merged block must remain free");
+  EXPECT(rock_longlived_largest_free_block() >= 32,
+         "collection did not make a larger buddy class available");
   rock_pools_deinit();
 }
 
@@ -181,9 +192,11 @@ static void reclaim_does_not_merge_live_with_free(void) {
   rock_block_header *h1 = ((rock_block_header *)p1) - 1;
   rock_block_header *h2 = ((rock_block_header *)p2) - 1;
   rock_block_header *h3 = ((rock_block_header *)p3) - 1;
-  EXPECT(h1->size == 16, "h1 size changed despite live h2 between");
   EXPECT(h2->refcount == 1, "live block was disturbed by reclaim");
-  EXPECT(h3->size == 16, "h3 size changed despite live h2 between");
+  EXPECT(h1->refcount == ROCK_RC_FREE || h1->refcount == ROCK_RC_MAGAZINE,
+         "first free block was disturbed");
+  EXPECT(h3->refcount == ROCK_RC_FREE || h3->refcount == ROCK_RC_MAGAZINE,
+         "last free block was disturbed");
   rock_pools_deinit();
 }
 
@@ -196,10 +209,93 @@ static void reclaim_chains_three_adjacent(void) {
   rock_longlived_free(p2);
   rock_longlived_free(p3);
   rock_longlived_reclaim();
-  rock_block_header *h1 = ((rock_block_header *)p1) - 1;
-  /* Merged size = 16 + h + 16 + h + 16 = 16*3 + 4*2 = 56 */
-  EXPECT(h1->size == 16 * 3 + sizeof(rock_block_header) * 2,
-         "three-way merged size incorrect");
+  EXPECT(rock_longlived_largest_free_block() >= 32,
+         "three frees did not restore a useful buddy class");
+  rock_pools_deinit();
+}
+
+static void coalesced_region_serves_smaller_allocation(void) {
+  rock_pools_init(BUMP_CAP, 256);
+  void *p1 = rock_longlived_alloc(16);
+  void *p2 = rock_longlived_alloc(16);
+  void *p3 = rock_longlived_alloc(16);
+  rock_longlived_free(p1);
+  rock_longlived_free(p2);
+  rock_longlived_free(p3);
+  EXPECT(rock_longlived_largest_free_block() >= 48,
+         "three freed blocks were not coalesced into a reusable region");
+  void *reuse = rock_longlived_alloc(32);
+  EXPECT(reuse != NULL, "smaller allocation did not use recovered capacity");
+  rock_pools_deinit();
+}
+
+static void common_short_lived_workload_has_constant_scan_depth(void) {
+  rock_pools_init(1024, 6144);
+  rock_allocator_stats_reset();
+  for (int i = 0; i < 50; i++) {
+    void *number = rock_longlived_alloc(8);
+    void *message = rock_longlived_alloc(16);
+    rock_longlived_free(message);
+    rock_longlived_free(number);
+  }
+  rock_allocator_stats stats = rock_allocator_stats_get();
+  EXPECT(stats.allocations == 100, "short-lived workload allocation count is wrong");
+  EXPECT(stats.allocation_scan_steps == 0 && stats.free_scan_steps == 0,
+         "normal workload must not scan heap blocks");
+  EXPECT(stats.magazine_hits >= 90,
+         "short-lived workload did not remain on the magazine fast path");
+  rock_pools_deinit();
+}
+
+static void hot_small_block_cache_avoids_a_list_scan(void) {
+  rock_pools_init(1024, 1024);
+  void *before = rock_longlived_alloc(16);
+  void *hot = rock_longlived_alloc(8);
+  void *after = rock_longlived_alloc(16);
+  rock_longlived_free(hot);
+  rock_allocator_stats_reset();
+  void *reuse = rock_longlived_alloc(8);
+  rock_allocator_stats stats = rock_allocator_stats_get();
+  EXPECT(reuse == hot, "hot cache did not reuse the recently freed small block");
+  EXPECT(stats.allocation_scan_steps == 0,
+         "hot-cache allocation should not traverse the free list");
+  rock_longlived_free(before);
+  rock_longlived_free(reuse);
+  rock_longlived_free(after);
+  rock_pools_deinit();
+}
+
+static void collect_reclaims_magazines_for_a_larger_class(void) {
+  rock_pools_init(1024, 128);
+  void *blocks[4];
+  for (int i = 0; i < 4; i++) blocks[i] = rock_longlived_alloc(1);
+  for (int i = 0; i < 4; i++) rock_longlived_free(blocks[i]);
+  EXPECT(rock_longlived_largest_free_block() < 16,
+         "magazine-only capacity must not look like a larger class");
+  rock_allocator_stats_reset();
+  rock_collect();
+  rock_allocator_stats stats = rock_allocator_stats_get();
+  EXPECT(stats.collect_calls == 1, "explicit collection was not counted");
+  EXPECT(rock_longlived_largest_free_block() >= 16,
+         "collection did not coalesce cached blocks into a larger class");
+  EXPECT(rock_longlived_alloc(16) != NULL,
+         "larger allocation did not use collected capacity");
+  rock_pools_deinit();
+}
+
+static void fragmented_large_request_uses_bounded_buddy_classes(void) {
+  rock_pools_init(1024, 1024);
+  void *blocks[16];
+  for (int i = 0; i < 16; i++) blocks[i] = rock_longlived_alloc(16);
+  for (int i = 0; i < 16; i += 2) rock_longlived_free(blocks[i]);
+  rock_allocator_stats_reset();
+  void *large = rock_longlived_alloc(24);
+  rock_allocator_stats stats = rock_allocator_stats_get();
+  EXPECT(large != NULL, "fragmented fallback allocation failed unexpectedly");
+  EXPECT(stats.allocation_scan_steps == 0 && stats.free_scan_steps == 0,
+         "fragmented allocation must not inspect heap blocks");
+  rock_longlived_free(large);
+  for (int i = 1; i < 16; i += 2) rock_longlived_free(blocks[i]);
   rock_pools_deinit();
 }
 
@@ -246,19 +342,24 @@ static void diagnostics_track_usage(void) {
   EXPECT(rock_longlived_used() == 0, "longlived used should start at 0");
   rock_bump_alloc(64);
   EXPECT(rock_bump_used() == 64, "bump used should be 64");
-  rock_longlived_alloc(64);
-  /* longlived used = header(4) + class-rounded payload(64) = 68 */
-  EXPECT(rock_longlived_used() == sizeof(rock_block_header) + 64,
+  void *block = rock_longlived_alloc(64);
+  EXPECT(rock_longlived_used() >= sizeof(rock_block_header) + 64,
          "longlived used incorrect");
+  EXPECT(rock_longlived_peak_used() == rock_longlived_used(),
+         "longlived peak used incorrect");
+  rock_longlived_free(block);
+  EXPECT(rock_longlived_peak_used() >= sizeof(rock_block_header) + 64,
+         "longlived peak should survive reclamation");
   rock_pools_deinit();
 }
 
-static void free_bytes_reflects_freelist(void) {
+static void free_bytes_reflects_available_classes(void) {
   rock_pools_init(BUMP_CAP, LL_CAP);
+  size_t before = rock_longlived_free_bytes();
   void *p = rock_longlived_alloc(64);
-  EXPECT(rock_longlived_free_bytes() == 0, "no free bytes before free");
+  EXPECT(rock_longlived_free_bytes() < before, "allocation did not consume free capacity");
   rock_longlived_free(p);
-  EXPECT(rock_longlived_free_bytes() == 64, "free bytes should reflect freed block");
+  EXPECT(rock_longlived_free_bytes() > 0, "free bytes should reflect recovered capacity");
   rock_pools_deinit();
 }
 
@@ -272,21 +373,27 @@ int main(void) {
   RUN(bump_alignment);
 
   RUN(longlived_alloc_returns_payload);
-  RUN(longlived_size_rounds_to_class);
+  RUN(longlived_size_rounds_to_alignment);
   RUN(longlived_free_marks_free);
   RUN(longlived_free_then_realloc_reuses);
   RUN(longlived_static_sentinel_not_freed);
   RUN(longlived_payload_writable);
+  RUN(longlived_payload_alignment);
 
-  RUN(reclaim_coalesces_two_adjacent);
+  RUN(reclaim_drains_magazines_and_coalesces_buddies);
   RUN(reclaim_does_not_merge_live_with_free);
   RUN(reclaim_chains_three_adjacent);
+  RUN(coalesced_region_serves_smaller_allocation);
+  RUN(common_short_lived_workload_has_constant_scan_depth);
+  RUN(hot_small_block_cache_avoids_a_list_scan);
+  RUN(collect_reclaims_magazines_for_a_larger_class);
+  RUN(fragmented_large_request_uses_bounded_buddy_classes);
 
   RUN(bump_oom_invokes_handler);
   RUN(longlived_oom_invokes_handler);
 
   RUN(diagnostics_track_usage);
-  RUN(free_bytes_reflects_freelist);
+  RUN(free_bytes_reflects_available_classes);
 
   printf("\n%d/%d passed (%d failed)\n", tests_passed, tests_run, tests_failed);
   return tests_failed == 0 ? 0 : 1;

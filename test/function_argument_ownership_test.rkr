@@ -1,0 +1,41 @@
+record Item {
+  int value
+}
+
+union Choice { Item Some, Empty }
+
+sub makeItem(int n) returns Item {
+  Item result := {value := n};
+  return result;
+}
+
+sub makeItems(int n) returns Item[] {
+  Item[] result;
+  append(result, makeItem(n));
+  return result;
+}
+
+sub consumeItem(Item item) {
+  int value := item.value;
+}
+
+sub consumeItems(Item[] items) {
+  int value := length(items);
+}
+
+sub makeChoice(int n) returns Choice {
+  return Some(makeItem(n));
+}
+
+sub main() {
+  for i := 1 to 200 {
+    consumeItem(makeItem(i));
+    makeItem(i);
+    consumeItems(makeItems(i));
+    makeItems(i);
+    match makeChoice(i) {
+      Some : int observed := i;
+      Empty : int observed := 0;
+    }
+  }
+}

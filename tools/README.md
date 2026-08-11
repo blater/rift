@@ -10,6 +10,25 @@ tools/rock-emu inspect --target zxn program.nex
 tools/rock-emu test --target zxn program.nex
 ```
 
+`measure` is the target-cycle mode. It first stops a benchmark at a known gate
+with a real breakpoint, resets ZEsarUX's partial T-state counter only after
+that pause is acknowledged, sets the PC just after the gate, and stops on a
+breakpoint. This avoids relying on a debugger memory write across the target's
+paged address space.
+`--breakpoint-pass-count 2` is useful when the same marker wraps
+both the workload and its endpoint.
+
+```sh
+tools/rock-emu measure --target zxn program.nex \
+  --gate-address 0x7146 --breakpoint 0x7136 --breakpoint-pass-count 2 \
+  --release-pc 0x714d
+```
+
+It requires the headless CPU-step and acknowledged-counter-reset patches in
+[`emulators/zxn/zesarux`](emulators/zxn/zesarux/0002-zrcp-headless-cpu-step.patch)
+and [`0003-zrcp-tstate-reset-ack.patch`](emulators/zxn/zesarux/0003-zrcp-tstate-reset-ack.patch),
+as well as the loopback-bind patch.
+
 `run` reports whether the emulator process completed. `inspect` keeps VM
 diagnostics. `test` requires a `.nex` built with `rock --zxn-test` and accepts
 only a `ROCKTEST:FINISH` marker with no `ROCKTEST:FAIL` marker as success.
@@ -38,7 +57,32 @@ tools/rock-emu test --target=zxn /private/tmp/simple.nex
 
 `--zxn-test` is test-only. It activates `zxn_test.c`, has `Assert.rkr` emit
 PASS/FAIL markers, and asks ZEsarUX to exit once the generated `main` returns.
+
+`--allocator-stats` enables per-operation allocator counters for target
+diagnostics. They are intentionally disabled in ordinary ZXN builds so timing
+measurements represent the runtime fast path rather than instrumentation.
 Normal Rock programs do not emit emulator debug-port traffic.
+
+Assertion markers include the Rock assertion description, and the launcher's
+JSON result exposes the boot stages plus observed pass/fail descriptions. This
+makes an execution failure diagnosable without relying on the emulator's text
+screen.
+
+## ZXN memory-aware linking
+
+ZXN builds link only the runtime components referenced by generated C. This is
+the default `--rtl=auto` behaviour and is essential for leaving room below the
+reserved high stack for a Rock program's BSS pools and data. Use `--rtl=all`
+only when hand-written embedded C calls an RTL symbol that the generated code
+cannot expose to the linker; it is a diagnostic compatibility mode and can
+consume the flat target address space.
+
+The target begins at `$5B00`, reserves `$F758-$FF58` (2 KiB) for the Z80
+stack, and uses fixed BSS pools of 1 KiB bump space plus 6 KiB long-lived
+space. `rock` requests a Z88DK link map for every ZXN build and rejects the
+artifact if its BSS would enter the stack reservation. `--debug` retains the
+resulting `.map` beside the generated C; normal builds remove it after the
+check.
 
 `test` is deliberately strict: a timeout, malformed marker stream, missing
 `BEGIN`/`FINISH`, non-zero reported failure count, or non-zero emulator exit

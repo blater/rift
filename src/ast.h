@@ -226,6 +226,7 @@ struct node_t {
     arr_index,
     embed,
     method_call,
+    collect_stmt,
   } tag;
   union data {
     ast_op op;

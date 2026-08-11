@@ -74,10 +74,10 @@ RTL_HOST_SRCS="\
 RTL_ZXN_ASM="\
   $RT/lib/zxn/keyboard.asm"
 
-# The allocator's direct magazine-hit shim is core RTL, rather than an
-# optional language component.  Diagnostic target builds deliberately leave
-# it out so their C counters describe every operation exactly.
-RTL_ZXN_CORE_ASM="$RT/lib/zxn/pools_fast.asm"
+# The allocator's assembly experiment remains version-controlled but is not
+# linked while its target timing/correctness work is under review.  The C
+# magazine implementation is the supported ZX Next allocator path.
+RTL_ZXN_CORE_ASM=""
 
 
 transpile() {
@@ -172,12 +172,7 @@ build() {
   else
     nex_file="${exe_abs%%.*}.nex"
     [ "$ZXN_TEST" = "1" ] && zxn_test_define="-DROCK_ZXN_TEST"
-    if [ "$ALLOCATOR_STATS" = "1" ]; then
-      allocator_stats_define="-DROCK_ALLOCATOR_STATS"
-      ZXN_ASM_SRCS="${ZXN_ASM_SRCS/$RTL_ZXN_CORE_ASM/}"
-    else
-      pool_fast_define="-DROCK_POOL_ASM_FAST"
-    fi
+    [ "$ALLOCATOR_STATS" = "1" ] && allocator_stats_define="-DROCK_ALLOCATOR_STATS"
     zcc +zxn -m -vn -subtype=nex -startup=1 -clib=$CLIB -create-app \
       $zxn_test_define \
       $allocator_stats_define \

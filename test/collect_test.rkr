@@ -1,0 +1,15 @@
+include "Assert.rkr"
+Assert a;
+
+sub main() {
+  string first := concat("safe", " point");
+  a.AssertEquals("value survives collection", "safe point", first);
+  // Fill the small-string magazine with discarded producer results. The
+  // following explicit safe point must coalesce those dead blocks without
+  // disturbing the still-live `first` value.
+  for i := 0 to 4 {
+    toString(i);
+  }
+  collect;
+  a.AssertEquals("collection does not release live values", "safe point", first);
+}

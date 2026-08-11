@@ -47,6 +47,24 @@ void zxn_test_fail(void) {
   emit_text("ROCKTEST:FAIL\n");
 }
 
+void zxn_test_assert_pass(string description) {
+  pass_count++;
+  emit_text("ROCKTEST:PASS:");
+  emit_text(description.data);
+  emit_char('\n');
+}
+
+void zxn_test_assert_fail(string description, string expected, string actual) {
+  fail_count++;
+  emit_text("ROCKTEST:FAIL:");
+  emit_text(description.data);
+  emit_text(":expected=");
+  emit_text(expected.data);
+  emit_text(":actual=");
+  emit_text(actual.data);
+  emit_char('\n');
+}
+
 void zxn_test_finish(void) {
   emit_text("ROCKTEST:FINISH:");
   emit_count(pass_count);
@@ -63,6 +81,12 @@ void zxn_test_begin(void) {}
 void zxn_test_stage(const char *stage) { (void)stage; }
 void zxn_test_pass(void) {}
 void zxn_test_fail(void) {}
+void zxn_test_assert_pass(string description) { (void)description; }
+void zxn_test_assert_fail(string description, string expected, string actual) {
+  (void)description;
+  (void)expected;
+  (void)actual;
+}
 void zxn_test_finish(void) {}
 
 #endif

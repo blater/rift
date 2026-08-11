@@ -33,10 +33,20 @@ def write_text(path, value):
 def zrcp_command(port, command, timeout=1.0):
   with socket.create_connection(("127.0.0.1", port), timeout=timeout) as conn:
     conn.settimeout(0.15)
-    try:
-      conn.recv(4096)
-    except socket.timeout:
-      pass
+    # Wait for the initial prompt before sending a command. Otherwise a slow
+    # ZRCP greeting can be mistaken for this command's response.
+    greeting = b""
+    greeting_deadline = time.monotonic() + timeout
+    while time.monotonic() < greeting_deadline:
+      try:
+        data = conn.recv(4096)
+      except socket.timeout:
+        continue
+      if not data:
+        break
+      greeting += data
+      if b"command" in greeting:
+        break
     conn.sendall((command + "\n").encode("ascii"))
     chunks = []
     deadline = time.monotonic() + timeout
@@ -48,6 +58,8 @@ def zrcp_command(port, command, timeout=1.0):
       if not data:
         break
       chunks.append(data)
+      if b"command>" in b"".join(chunks):
+        break
     return b"".join(chunks).decode("utf-8", errors="replace")
 
 
@@ -138,7 +150,7 @@ ADAPTERS = {
 
 def parse_args():
   parser = argparse.ArgumentParser(description=__doc__)
-  parser.add_argument("mode", choices=("run", "inspect", "test"))
+  parser.add_argument("mode", choices=("run", "inspect", "test", "measure"))
   parser.add_argument("artifact", type=Path, help="built target artifact (.nex for ZXN)")
   parser.add_argument("--target", required=True)
   parser.add_argument("--emulator", default="zesarux")
@@ -147,11 +159,32 @@ def parse_args():
   parser.add_argument("--artifacts", type=Path)
   parser.add_argument("--keep-all", action="store_true")
   parser.add_argument("--require-emulator", action="store_true")
+  parser.add_argument("--breakpoint", type=lambda value: int(value, 0),
+                      help="CPU address at which measure mode pauses and samples T-states")
+  parser.add_argument("--gate-address", type=lambda value: int(value, 0),
+                      help="CPU address of the benchmark's waiting gate; required for measure mode")
+  parser.add_argument("--release-address", type=lambda value: int(value, 0),
+                      help="optional target byte set to 1 after measure setup")
+  parser.add_argument("--release-pc", type=lambda value: int(value, 0),
+                      help="optional PC to set after measure setup; resumes after a benchmark gate")
+  parser.add_argument("--breakpoint-pass-count", type=int, default=1,
+                      help="stop after this many hits of the measurement breakpoint")
+  parser.add_argument("--capture-memory", action="append", default=[], metavar="ADDRESS:LENGTH",
+                      help="read target memory after a measurement breakpoint (repeatable)")
   return parser.parse_args()
 
 
 def main():
   args = parse_args()
+  if args.breakpoint_pass_count < 1:
+    raise SystemExit("--breakpoint-pass-count must be positive")
+  for capture in args.capture_memory:
+    try:
+      address, length = capture.split(":", 1)
+      if int(address, 0) < 0 or int(length, 0) < 1:
+        raise ValueError
+    except ValueError:
+      raise SystemExit("--capture-memory must be ADDRESS:LENGTH")
   started = time.monotonic()
   result = {"target": args.target, "emulator": args.emulator, "mode": args.mode}
   adapter_class = ADAPTERS.get((args.target, args.emulator))
@@ -184,7 +217,169 @@ def main():
     with (artifacts / "emulator.stdout.log").open("w", encoding="utf-8") as stdout, \
          (artifacts / "emulator.stderr.log").open("w", encoding="utf-8") as stderr:
       process = subprocess.Popen(command, stdout=stdout, stderr=stderr, start_new_session=True)
+      if args.mode == "measure":
+        if args.breakpoint is None:
+          raise LauncherError("measure mode requires --breakpoint ADDRESS")
+        if args.gate_address is None:
+          raise LauncherError("measure mode requires --gate-address ADDRESS")
+        deadline = time.monotonic() + 5
+        while True:
+          try:
+            zrcp_command(adapter.port, "get-registers")
+            break
+          except OSError:
+            if time.monotonic() >= deadline:
+              raise LauncherError("ZRCP did not become ready")
+            time.sleep(0.1)
       write_text(artifacts / "load.txt", adapter.load(artifact))
+      if args.mode == "measure":
+        # Verify the program is spinning at its gate, then stop it on a real
+        # breakpoint before resetting the counter. Sampling PC alone is not a
+        # pause acknowledgement: the emulated CPU could still execute gate
+        # iterations between a ZRCP command and the counter reset.
+        deadline = time.monotonic() + args.timeout_seconds
+        gate_registers = ""
+        while time.monotonic() < deadline:
+          gate_registers = zrcp_command(adapter.port, "get-registers")
+          pc = re.search(r"\bPC=([0-9a-fA-F]+)", gate_registers)
+          if pc and int(pc.group(1), 16) == args.gate_address:
+            break
+          time.sleep(0.01)
+        else:
+          write_text(artifacts / "gate-registers.txt", gate_registers)
+          raise LauncherError("benchmark did not reach gate 0x%04X" % args.gate_address)
+        enter_output = zrcp_command(adapter.port, "enter-cpu-step", timeout=2)
+        active_breakpoint = args.breakpoint
+        breakpoint_output = enter_output + zrcp_command(adapter.port, "enable-breakpoints")
+        # ZRCP acknowledges a command before the emulator thread has observed
+        # the state change. Poll its state instead of assuming a fixed delay.
+        setup_deadline = time.monotonic() + 2
+        while time.monotonic() < setup_deadline:
+          breakpoint_state = zrcp_command(adapter.port, "get-breakpoints 1 1")
+          breakpoint_output += breakpoint_state
+          if "Breakpoints: On" in breakpoint_state:
+            break
+          time.sleep(0.05)
+        else:
+          raise LauncherError("ZRCP did not enable breakpoints")
+        # First use the gate itself as the breakpoint. Its spin loop keeps
+        # this deterministic even if the CPU-step command was observed by
+        # ZRCP before the CPU core noticed it.
+        breakpoint_output += zrcp_command(adapter.port, "set-breakpoint 1 pc=%d" % args.gate_address) + \
+            zrcp_command(adapter.port, "set-breakpointpasscount 1 1") + \
+            zrcp_command(adapter.port, "enable-breakpoint 1")
+        write_text(artifacts / "breakpoint.txt", breakpoint_output)
+        setup_deadline = time.monotonic() + 2
+        while time.monotonic() < setup_deadline:
+          breakpoint_state = zrcp_command(adapter.port, "get-breakpoints 1 1")
+          breakpoint_output += breakpoint_state
+          if "Enabled 1:" in breakpoint_state and "None" not in breakpoint_state:
+            break
+          time.sleep(0.05)
+        else:
+          raise LauncherError("ZRCP did not install gate breakpoint 0x%04X" % args.gate_address)
+        breakpoint_output += zrcp_command(adapter.port, "get-breakpoints 1 1")
+        # ZRCP normally treats incoming protocol data as a reason to return
+        # from `run`. The setup commands immediately preceding this call can
+        # otherwise leave the CPU paused at the gate without an error. These
+        # timing runs are controlled solely by the installed breakpoint.
+        gate_run_output = zrcp_command(adapter.port, "run no-stop-on-data", timeout=args.timeout_seconds)
+        breakpoint_output += gate_run_output
+        gate_matched = "Breakpoint fired" in gate_run_output
+        deadline = time.monotonic() + args.timeout_seconds
+        gate_registers = ""
+        while time.monotonic() < deadline:
+          gate_registers = zrcp_command(adapter.port, "get-registers")
+          pc = re.search(r"\bPC=([0-9a-fA-F]+)", gate_registers)
+          if pc and int(pc.group(1), 16) == args.gate_address:
+            gate_matched = True
+            break
+          time.sleep(0.01)
+        write_text(artifacts / "gate-breakpoint-registers.txt", gate_registers)
+        if not gate_matched:
+          raise LauncherError("benchmark did not stop at gate breakpoint 0x%04X" % args.gate_address)
+        # The gate breakpoint is the pause acknowledgement. Install the
+        # endpoint only after it has fired, while the CPU is demonstrably
+        # stopped, then begin the measured interval.
+        # ZEsarUX caches optimized breakpoint predicates. Disable the gate
+        # before replacing it so its old PC predicate cannot fire again when
+        # the measured run begins.
+        breakpoint_output += zrcp_command(adapter.port, "disable-breakpoint 1") + \
+            zrcp_command(adapter.port, "set-breakpoint 1 pc=%d" % active_breakpoint) + \
+            zrcp_command(adapter.port, "set-breakpointpasscount 1 %d" % args.breakpoint_pass_count) + \
+            zrcp_command(adapter.port, "enable-breakpoint 1")
+        endpoint_state = zrcp_command(adapter.port, "get-breakpoints 1 1")
+        breakpoint_output += endpoint_state
+        write_text(artifacts / "breakpoint.txt", breakpoint_output)
+        if "Enabled 1: PC=%d" % active_breakpoint not in endpoint_state:
+          raise LauncherError("ZRCP did not replace gate breakpoint with endpoint 0x%04X" % active_breakpoint)
+        # The reset command must report its own acknowledged zero while the
+        # gate breakpoint holds the CPU. A bare set command is insufficient:
+        # its socket reply can arrive before the command has affected the
+        # emulator state. This command is supplied by patch 0003.
+        reset_output = zrcp_command(adapter.port, "reset-tstates-partial-ack")
+        breakpoint_output += reset_output
+        write_text(artifacts / "breakpoint.txt", breakpoint_output)
+        if "TSTATES-PARTIAL-RESET:000000000" not in reset_output:
+          raise LauncherError("ZEsarUX lacks acknowledged partial T-state reset (apply patch 0003)")
+        if args.release_address is not None:
+          breakpoint_output += zrcp_command(
+              adapter.port, "write-memory %d 1" % args.release_address)
+          release_state = zrcp_command(adapter.port,
+                                       "read-memory %d 1" % args.release_address)
+          breakpoint_output += release_state
+          if not re.search(r"\b01\b", release_state, re.IGNORECASE):
+            write_text(artifacts / "breakpoint.txt", breakpoint_output)
+            raise LauncherError("benchmark gate release write was not observable at 0x%04X" % args.release_address)
+        if args.release_pc is not None:
+          release_registers = zrcp_command(
+              adapter.port, "set-register PC=%04XH" % args.release_pc)
+          breakpoint_output += release_registers
+          release_match = re.search(r"\bPC=([0-9a-fA-F]+)", release_registers)
+          if not release_match or int(release_match.group(1), 16) != args.release_pc:
+            write_text(artifacts / "breakpoint.txt", breakpoint_output)
+            raise LauncherError("benchmark release PC was not set to 0x%04X" % args.release_pc)
+        write_text(artifacts / "breakpoint.txt", breakpoint_output)
+        matched = False
+        run_output = zrcp_command(adapter.port, "run no-stop-on-data", timeout=args.timeout_seconds)
+        breakpoint_output += run_output
+        write_text(artifacts / "breakpoint.txt", breakpoint_output)
+        matched = "Breakpoint fired" in run_output
+        deadline = time.monotonic() + args.timeout_seconds
+        registers = ""
+        while time.monotonic() < deadline:
+          registers = zrcp_command(adapter.port, "get-registers")
+          pc = re.search(r"\bPC=([0-9a-fA-F]+)", registers)
+          if pc and int(pc.group(1), 16) == active_breakpoint:
+            matched = True
+            break
+          time.sleep(0.01)
+        write_text(artifacts / "measure-registers.txt", registers)
+        if not matched:
+          raise LauncherError("benchmark did not reach breakpoint 0x%04X" % active_breakpoint)
+        sample = zrcp_command(adapter.port, "get-tstates-partial")
+        write_text(artifacts / "tstates-partial.txt", sample)
+        digits = re.search(r"\d+", sample)
+        if not digits:
+          raise LauncherError("invalid T-state sample: %s" % sample.strip())
+        result["tstates_partial"] = int(digits.group(0))
+        result["breakpoint"] = "0x%04X" % args.breakpoint
+        if args.capture_memory:
+          result["memory"] = {}
+          for capture in args.capture_memory:
+            address_text, length_text = capture.split(":", 1)
+            address = int(address_text, 0)
+            length = int(length_text, 0)
+            memory = zrcp_command(adapter.port,
+                                  "read-memory %d %d" % (address, length))
+            result["memory"][capture] = memory.strip()
+            safe_capture = "%04X-%d" % (address, length)
+            write_text(artifacts / ("memory-" + safe_capture + ".txt"), memory)
+        result["status"] = "measured"
+        adapter.stop()
+        process.wait(timeout=2)
+        result["exit_code"] = process.returncode
+        raise StopIteration
       try:
         process.wait(timeout=args.timeout_seconds)
       except subprocess.TimeoutExpired:
@@ -203,6 +398,16 @@ def main():
         output = (artifacts / "emulator.stdout.log").read_text(encoding="utf-8", errors="replace")
         if args.mode == "test":
           finish = re.search(r"ROCKTEST:FINISH:(\d+):(\d+)", output)
+          passed_assertions = re.findall(r"ROCKTEST:PASS:([^\n?]*)", output)
+          failed_assertions = re.findall(r"ROCKTEST:FAIL:([^\n?]*)", output)
+          result["markers"] = {
+              "begin_count": output.count("ROCKTEST:BEGIN"),
+              "stages": re.findall(r"ROCKTEST:STAGE:([^\n?]*)", output),
+              "observed_passes": passed_assertions,
+              "observed_failures": failed_assertions,
+              "passes": int(finish.group(1)) if finish else None,
+              "failures": int(finish.group(2)) if finish else None,
+          }
           if output.count("ROCKTEST:BEGIN") != 1 or not finish or int(finish.group(2)) != 0 or "ROCKTEST:FAIL:" in output:
             result["status"] = "failed"
           elif process.returncode == 0:
@@ -211,12 +416,18 @@ def main():
             result["status"] = "failed"
         else:
           result["status"] = "completed" if process.returncode == 0 else "failed"
+  except StopIteration:
+    pass
   except (LauncherError, OSError, subprocess.SubprocessError) as exc:
     result.update(status="unsupported", error=str(exc))
   result["elapsed_seconds"] = round(time.monotonic() - started, 3)
   write_text(artifacts / "result.json", json.dumps(result, indent=2, sort_keys=True) + "\n")
   print(json.dumps(result, sort_keys=True))
-  return 0 if result["status"] in ("completed", "passed", "unsupported") and not args.require_emulator else 1
+  if result["status"] in ("completed", "passed", "measured"):
+    return 0
+  if result["status"] == "unsupported" and not args.require_emulator:
+    return 0
+  return 1
 
 
 if __name__ == "__main__":

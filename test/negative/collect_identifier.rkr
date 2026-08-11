@@ -1,0 +1,3 @@
+sub main() {
+  int collect := 1;
+}

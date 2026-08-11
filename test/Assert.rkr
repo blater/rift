@@ -1,14 +1,14 @@
 module Assert;
 
 sub printPass(string desc) {
-  zxn_test_pass();
+  zxn_test_assert_pass(desc);
   printf("PASS: ");
   printf(desc);
   printf("\n");
 }
 
 sub printFail(string desc, string expected, string actual) {
-  zxn_test_fail();
+  zxn_test_assert_fail(desc, expected, actual);
   printf("FAIL: ");
   printf(desc);
   printf(" (expected:");

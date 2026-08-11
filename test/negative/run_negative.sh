@@ -88,10 +88,14 @@ run_compile_neg test/negative/legacy_case_selector.rkr \
                 "After identifier 'case', expected '(' for function call"
 run_compile_neg test/negative/match_keyword.rkr \
                 "Expected ':=' in assignment, got match"
+run_compile_neg test/negative/collect_identifier.rkr \
+                "Expected ':=' in assignment, got collect"
 
 # Runtime-halt tests (program compiles but halts at runtime).
 run_runtime_neg test/negative/setcharat_on_literal.rkr \
                 "cannot mutate read-only string view"
+run_runtime_neg test/negative/empty_array_pop.rkr \
+                "Could not pop elem out of dynamic array: EMPTY ARRAY"
 
 echo
 echo "$pass passed, $fail failed"

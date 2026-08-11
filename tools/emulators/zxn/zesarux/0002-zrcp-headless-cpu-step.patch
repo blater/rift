@@ -1,0 +1,17 @@
+--- a/src/zrcp/remote.c
++++ b/src/zrcp/remote.c
+@@ -2049,6 +2049,16 @@ void remote_cpu_enter_step(int misocket)
+ 	//Si ya estaba este modo, salir sin mas
+ 	if (menu_event_remote_protocol_enterstep.v) return;
+ 
++  /* Headless automation has no debug window to acknowledge CPU-step mode.
++   * Keep the protocol state and pause the core, so `run` can stop at a
++   * breakpoint over ZRCP when the null video driver is selected. */
++  if (!strcmp(scr_new_driver_name,"null")) {
++    menu_event_remote_protocol_enterstep.v=1;
++    menu_set_menu_abierto(1);
++    remote_ack_enter_cpu_step.v=1;
++    return;
++  }
++
+   //De momento solo simular pulsacion de tecla de menu, eso hace saltar el step

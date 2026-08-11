@@ -45,15 +45,15 @@ sub main() {
   // Group 1: Scope cleanup basics
   // =========================================================================
 
-  // 1a: String literal (owned=0) — no-op cleanup
+  // 1a: String literal (static backing) — no-op cleanup
   string lit := "hello";
   a.AssertEquals("literal survives", "hello", lit);
 
-  // 1b: Concat result (owned=1) — freed at scope exit
+  // 1b: Concat result (long-lived backing) — released at scope exit
   string cat := concat("Hello", " World");
   a.AssertEquals("concat in outer scope", "Hello World", cat);
 
-  // 1c: toString result (owned=1) — freed at scope exit
+  // 1c: toString result (long-lived backing) — released at scope exit
   string numstr := toString(42);
   a.AssertEquals("toString in scope", "42", numstr);
 
@@ -61,17 +61,17 @@ sub main() {
   // Group 2: Reassignment patterns
   // =========================================================================
 
-  // 2a: Literal to concat (unowned to owned)
+  // 2a: Literal to concat (static to long-lived)
   string r1 := "start";
   r1 := concat("re", "placed");
   a.AssertEquals("literal->concat reassign", "replaced", r1);
 
-  // 2b: Concat to literal (owned to unowned)
+  // 2b: Concat to literal (long-lived to static)
   string r2 := concat("heap", "val");
   r2 := "back to literal";
   a.AssertEquals("concat->literal reassign", "back to literal", r2);
 
-  // 2c: Concat to concat (owned to owned, old freed)
+  // 2c: Concat to concat (long-lived to long-lived, old released)
   string r3 := concat("first", " value");
   r3 := concat("second", " value");
   a.AssertEquals("concat->concat reassign", "second value", r3);

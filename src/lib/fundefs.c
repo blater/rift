@@ -1,5 +1,4 @@
 #include "fundefs.h"
-#include "alloc.h"
 #include "fundefs_internal.h"
 #include "pools.h"
 #include <stdio.h>
@@ -17,22 +16,18 @@ void __rock_make_string(string *out, const char *data, size_t length) {
   out->length = length;
   out->capacity = 0;       /* read-only view by default */
   out->backing = NULL;     /* no refcounted backing (Phase E will populate) */
-  out->owned = 0;
 }
 
 /* ADR-0003 §7.1: allocate a fresh writable string in the longlived pool.
  * Returns through `out` with backing pointing at the rock_block_header
  * (refcount = 1 from rock_longlived_alloc). The caller writes `length+1`
- * bytes into out->data (including the null terminator). owned stays 0 so
- * the legacy __free_string skips this descriptor — refcount-driven
- * __string_release is the canonical reclamation path. */
+ * bytes into out->data (including the null terminator). */
 void __rock_make_longlived_string(string *out, size_t length) {
   char *payload = (char *)rock_longlived_alloc(length + 1);
   out->data     = payload;
   out->length   = length;
   out->capacity = length;
   out->backing  = ((rock_block_header *)payload) - 1;
-  out->owned    = 0;
 }
 
 char charAt(string s, int n) {
@@ -186,30 +181,19 @@ void __get_abs_path_impl(string *out, string path) {
 }
 #endif
 
-void __free_string(string *s) {
-  if (s->data != NULL && s->owned) {
-    deregister_compiler_persistent(s->data);
-    free(s->data);
-    s->data = NULL;
-    s->length = 0;
-    s->capacity = 0;
-    s->backing = NULL;
-    s->owned = 0;
-  }
-}
-
-/* ADR-0003 §7.6: retain/release on string backing. See header for the
- * three-class discriminant. Until Phase H populates `backing` for
- * concat/toString/clone/read_file results and for string literals, every
- * descriptor in the wild has `backing == NULL` and these helpers no-op
- * unconditionally. The C-level unit tests in test/pools_test.c synthesise
- * fake backings to exercise the live paths. */
+/* Retain/release on string backing. NULL backing denotes a borrowed view;
+ * static literal backing is immortal; all produced mutable strings live in
+ * the long-lived pool. */
 
 void __string_retain(string s) {
   if (s.backing == NULL) return;
   if (s.backing->refcount == ROCK_RC_STATIC) return;
-  if (s.backing->refcount == ROCK_RC_FREE) {
+  if (s.backing->refcount == ROCK_RC_FREE || s.backing->refcount == ROCK_RC_MAGAZINE) {
     fprintf(stderr, "rock: __string_retain on freed block\n");
+    exit(1);
+  }
+  if (s.backing->refcount >= ROCK_RC_FREE - 1) {
+    fprintf(stderr, "rock: __string_retain refcount overflow\n");
     exit(1);
   }
   s.backing->refcount++;
@@ -218,7 +202,7 @@ void __string_retain(string s) {
 void __string_release(string s) {
   if (s.backing == NULL) return;
   if (s.backing->refcount == ROCK_RC_STATIC) return;
-  if (s.backing->refcount == ROCK_RC_FREE) {
+  if (s.backing->refcount == ROCK_RC_FREE || s.backing->refcount == ROCK_RC_MAGAZINE) {
     fprintf(stderr, "rock: __string_release on already-freed block\n");
     exit(1);
   }
@@ -252,7 +236,7 @@ string __return_string(string s) {
   }
   /* Longlived source — inc refcount so the caller has an owned reference
    * independent of any other live alias. */
-  s.backing->refcount++;
+  __string_retain(s);
   return s;
 }
 
@@ -260,8 +244,12 @@ void *__handle_retain(void *payload) {
   if (!payload) return payload;
   rock_block_header *h = ((rock_block_header *)payload) - 1;
   if (h->refcount == ROCK_RC_STATIC) return payload;
-  if (h->refcount == ROCK_RC_FREE) {
+  if (h->refcount == ROCK_RC_FREE || h->refcount == ROCK_RC_MAGAZINE) {
     fprintf(stderr, "rock: __handle_retain on already-freed block at %p\n", payload);
+    exit(1);
+  }
+  if (h->refcount >= ROCK_RC_FREE - 1) {
+    fprintf(stderr, "rock: __handle_retain refcount overflow\n");
     exit(1);
   }
   h->refcount++;
@@ -272,7 +260,7 @@ void __handle_release(void *payload) {
   if (!payload) return;
   rock_block_header *h = ((rock_block_header *)payload) - 1;
   if (h->refcount == ROCK_RC_STATIC) return;
-  if (h->refcount == ROCK_RC_FREE) {
+  if (h->refcount == ROCK_RC_FREE || h->refcount == ROCK_RC_MAGAZINE) {
     fprintf(stderr, "rock: __handle_release on already-freed block at %p\n", payload);
     exit(1);
   }
@@ -313,7 +301,6 @@ void __substring_from(string *out, string s, int start) {
   out->length   = (size_t)len;
   out->capacity = 0;             /* view: read-only */
   out->backing  = s.backing;     /* inherit source's lifetime anchor */
-  out->owned    = 0;
   __string_retain(*out);
 }
 
@@ -335,7 +322,6 @@ void __substring_range(string *out, string s, int start, int end) {
   out->length   = (size_t)len;
   out->capacity = 0;
   out->backing  = s.backing;
-  out->owned    = 0;
   __string_retain(*out);
 }
 

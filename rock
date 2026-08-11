@@ -10,11 +10,16 @@ target="gcc"
 nex_file=""
 
 DEBUG=0
+ALLOCATOR_STATS=0
 RUN=0
 ZXN_TEST=0
+MEMORY_PROFILE=""
+RTL_MODE="auto"
+ZXN_STACK_TOP=65368
+ZXN_STACK_RESERVE=2048
 
 usage() {
-  echo "usage: rock [run] [-t zxn|gcc] [--target=zxn|gcc] [--zxn-test] [--debug] filename"
+  echo "usage: rock [run] [-t zxn|gcc] [--target=zxn|gcc] [--memory-profile=zxn] [--zxn-test] [--allocator-stats] [--rtl=auto|all] [--debug] filename"
 }
 
 if [ $# -eq 0 ]; then 
@@ -33,7 +38,6 @@ fi
 
 # Core runtime — always linked on both host and ZXN targets.
 RTL_CORE_SRCS="\
-  $RT/lib/alloc.c \
   $RT/lib/pools.c \
   $RT/lib/fundefs.c \
   $RT/lib/fundefs_internal.c \
@@ -70,19 +74,95 @@ RTL_HOST_SRCS="\
 RTL_ZXN_ASM="\
   $RT/lib/zxn/keyboard.asm"
 
+# The allocator's direct magazine-hit shim is core RTL, rather than an
+# optional language component.  Diagnostic target builds deliberately leave
+# it out so their C counters describe every operation exactly.
+RTL_ZXN_CORE_ASM="$RT/lib/zxn/pools_fast.asm"
+
 
 transpile() {
-  local target="$1" exe_abs="$2" source_abs="$3" auto_cast="$4" zxn_test="$5"
+  local target="$1" exe_abs="$2" source_abs="$3" auto_cast="$4" zxn_test="$5" memory_profile="$6"
   local extra=""
   [ -n "$auto_cast" ] && extra="--auto-cast"
   [ "$zxn_test" = "1" ] && extra="$extra --zxn-test"
+  [ -n "$memory_profile" ] && extra="$extra --memory-profile=$memory_profile"
   "$ROCK_ROOT/rockc" "${source_abs}" "${exe_abs}" "--target=${target}" $extra
 }
 
 build() {
   local target="$1" exe_abs="$2" sourcefile="$3"
   local LIB_SRCS="${RTL_CORE_SRCS} ${RTL_C_SRCS}"
+  local ZXN_ASM_SRCS="${RTL_ZXN_CORE_ASM} ${RTL_ZXN_ASM}"
   local zxn_test_define=""
+  local allocator_stats_define=""
+  local pool_fast_define=""
+  local generated_source="${exe_abs}.c"
+
+  # The complete graphical RTL is useful to developers but too large to fit
+  # together with a safe stack and application data in the ZXN's flat 64 KiB
+  # address space. Generated C names every runtime call, so link only the
+  # components a ZXN program actually calls. `--rtl=all` remains available
+  # for hand-written embedded C that cannot be found by this scan.
+  if [ "$target" = "zxn" ] && [ "$RTL_MODE" = "auto" ]; then
+    LIB_SRCS="${RTL_CORE_SRCS}"
+    ZXN_ASM_SRCS="$RTL_ZXN_CORE_ASM"
+    if grep -Eq '(^|[^[:alnum:]_])(scan_keyboard|key_pressed)[[:space:]]*\(' "$generated_source"; then
+      LIB_SRCS="$LIB_SRCS $RT/lib/keyboard.c"
+      ZXN_ASM_SRCS="$ZXN_ASM_SRCS $RT/lib/zxn/keyboard.asm"
+    fi
+    if grep -Eq '(^|[^[:alnum:]_])(border|border_get)[[:space:]]*\(' "$generated_source"; then
+      LIB_SRCS="$LIB_SRCS $RT/lib/border.c"
+    fi
+    if grep -Eq '(^|[^[:alnum:]_])(ink|paper|bright|flash|inverse|over)[[:space:]]*\(' "$generated_source"; then
+      LIB_SRCS="$LIB_SRCS $RT/lib/ink_paper.c"
+    fi
+    if grep -Eq '(^|[^[:alnum:]_])cls[[:space:]]*\(' "$generated_source"; then
+      LIB_SRCS="$LIB_SRCS $RT/lib/cls.c"
+    fi
+    if grep -Eq '(^|[^[:alnum:]_])rock_sleep[[:space:]]*\(' "$generated_source"; then
+      LIB_SRCS="$LIB_SRCS $RT/lib/time.c"
+    fi
+    if grep -Eq '(^|[^[:alnum:]_])beep[[:space:]]*\(' "$generated_source"; then
+      LIB_SRCS="$LIB_SRCS $RT/lib/sound.c"
+    fi
+    if grep -Eq '(^|[^[:alnum:]_])(inkey|keypress)[[:space:]]*\(' "$generated_source"; then
+      LIB_SRCS="$LIB_SRCS $RT/lib/input.c"
+    fi
+    if grep -Eq '(^|[^[:alnum:]_])print_at[[:space:]]*\(' "$generated_source"; then
+      LIB_SRCS="$LIB_SRCS $RT/lib/print_at.c"
+    fi
+    if grep -Eq '(^|[^[:alnum:]_])(plot|point|draw|polyline|circle|fill|triangle|trianglefill)[[:space:]]*\(' "$generated_source"; then
+      LIB_SRCS="$LIB_SRCS $RT/lib/plot.c"
+    fi
+    if grep -Eq '(^|[^[:alnum:]_])(draw|polyline|fill|triangle|trianglefill)[[:space:]]*\(' "$generated_source"; then
+      LIB_SRCS="$LIB_SRCS $RT/lib/draw.c"
+    fi
+    if grep -Eq '(^|[^[:alnum:]_])polyline[[:space:]]*\(' "$generated_source"; then
+      LIB_SRCS="$LIB_SRCS $RT/lib/polyline.c"
+    fi
+    if grep -Eq '(^|[^[:alnum:]_])circle[[:space:]]*\(' "$generated_source"; then
+      LIB_SRCS="$LIB_SRCS $RT/lib/circle.c"
+    fi
+    if grep -Eq '(^|[^[:alnum:]_])fill[[:space:]]*\(' "$generated_source"; then
+      LIB_SRCS="$LIB_SRCS $RT/lib/fill.c"
+    fi
+    if grep -Eq '(^|[^[:alnum:]_])(triangle|trianglefill)[[:space:]]*\(' "$generated_source"; then
+      LIB_SRCS="$LIB_SRCS $RT/lib/triangle.c"
+    fi
+    if grep -Eq '(^|[^[:alnum:]_])(randomize|random_byte|random_word)[[:space:]]*\(' "$generated_source"; then
+      LIB_SRCS="$LIB_SRCS $RT/lib/random.c"
+    fi
+    if grep -Eq '(^|[^[:alnum:]_])(next_reg_set|next_reg_get|cpu_speed_set|cpu_speed_get|mmu_set)[[:space:]]*\(' "$generated_source"; then
+      LIB_SRCS="$LIB_SRCS $RT/lib/nextreg.c"
+    fi
+    if grep -Eq '(^|[^[:alnum:]_])(odd|even|hi|lo|swap|upcase|locase|abs_int|abs_word)[[:space:]]*\(' "$generated_source"; then
+      LIB_SRCS="$LIB_SRCS $RT/lib/helpers.c"
+    fi
+    if grep -Eq '(^|[^[:alnum:]_])(fsin|fcos|fsqrt|fabs_float|fpi)[[:space:]]*\(' "$generated_source"; then
+      LIB_SRCS="$LIB_SRCS $RT/lib/fmath.c"
+    fi
+    echo "ZXN RTL: selected components from generated program"
+  fi
   echo "compile $sourcefile -> $exe_abs"
 
   if [ "$target" = "gcc" ]; then
@@ -92,13 +172,42 @@ build() {
   else
     nex_file="${exe_abs%%.*}.nex"
     [ "$ZXN_TEST" = "1" ] && zxn_test_define="-DROCK_ZXN_TEST"
-    zcc +zxn -vn -subtype=nex -startup=1 -clib=$CLIB -create-app \
+    if [ "$ALLOCATOR_STATS" = "1" ]; then
+      allocator_stats_define="-DROCK_ALLOCATOR_STATS"
+      ZXN_ASM_SRCS="${ZXN_ASM_SRCS/$RTL_ZXN_CORE_ASM/}"
+    else
+      pool_fast_define="-DROCK_POOL_ASM_FAST"
+    fi
+    zcc +zxn -m -vn -subtype=nex -startup=1 -clib=$CLIB -create-app \
       $zxn_test_define \
+      $allocator_stats_define \
+      $pool_fast_define \
       -pragma-include:"${RT}/lib/zxn/zpragma_zxn.inc" \
       -I"${RT}/lib" \
       -lm \
       -o "${exe_abs}" \
-      "${exe_abs}.c" ${LIB_SRCS} ${RTL_ZXN_ASM}
+      "${exe_abs}.c" ${LIB_SRCS} ${ZXN_ASM_SRCS}
+    local map_file="${exe_abs%.*}.map"
+    if [ ! -f "$map_file" ]; then
+      echo "build failed: z88dk did not produce a link map"
+      exit 1
+    fi
+    local bss_end_hex
+    bss_end_hex=$(awk '$1 == "__BSS_END_head" { print $3; exit }' "$map_file")
+    if [ -z "$bss_end_hex" ]; then
+      echo "build failed: link map has no __BSS_END_head"
+      exit 1
+    fi
+    local bss_end=$((16#${bss_end_hex#\$}))
+    local stack_floor=$((ZXN_STACK_TOP - ZXN_STACK_RESERVE))
+    if [ "$bss_end" -ge "$stack_floor" ]; then
+      printf 'build failed: ZXN BSS ends at 0x%04X, entering the reserved 0x%04X-0x%04X stack range\n' \
+        "$bss_end" "$stack_floor" "$ZXN_STACK_TOP"
+      exit 1
+    fi
+    printf 'ZXN layout: BSS ends at 0x%04X; reserved stack is 0x%04X-0x%04X\n' \
+      "$bss_end" "$stack_floor" "$ZXN_STACK_TOP"
+    [ "$DEBUG" -eq 1 ] || rm -f "$map_file"
   fi
   if [ $? -eq 0 ]; then
     if [ "$target" = "gcc" ]; then
@@ -137,6 +246,18 @@ while [ $# -gt 0 ]; do
     --zxn-test)
       ZXN_TEST=1; shift;;
 
+    --allocator-stats)
+      ALLOCATOR_STATS=1; shift;;
+
+    --memory-profile=zxn)
+      MEMORY_PROFILE="zxn"; shift;;
+
+    --rtl=auto)
+      RTL_MODE="auto"; shift;;
+
+    --rtl=all)
+      RTL_MODE="all"; shift;;
+
     --debug)
       DEBUG=1; shift;;
 
@@ -164,7 +285,7 @@ if [ "$ZXN_TEST" = "1" ] && [ "$target" != "zxn" ]; then
 fi
 
 [ $DEBUG -eq 1 ] && echo "target=$target exe=$exe_abs auto_cast=$AUTO_CAST"
-transpile "$target" "$exe_abs" "$source_abs" "$AUTO_CAST" "$ZXN_TEST"
+transpile "$target" "$exe_abs" "$source_abs" "$AUTO_CAST" "$ZXN_TEST" "$MEMORY_PROFILE"
 build "$target" "$exe_abs" "$sourcefile"
 
 if [ $DEBUG -eq 0 ]; then

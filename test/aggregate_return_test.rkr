@@ -37,14 +37,14 @@ sub main() {
 
   // Union return — Ok variant
   Result r1 := makeOk(42);
-  case r1 {
+  match r1 {
     Ok  : as.AssertEQ("union Ok branch", 1, 1);
     Err : as.AssertEQ("union Ok branch", 1, 0);
   }
 
   // Union return — Err variant carrying a string
   Result r2 := makeErr("bad input");
-  case r2 {
+  match r2 {
     Ok  : as.AssertEQ("union Err branch", 1, 0);
     Err : as.AssertEQ("union Err branch", 1, 1);
   }

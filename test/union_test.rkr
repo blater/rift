@@ -9,28 +9,28 @@ sub main() {
   a.AssertEQ("value constructor sets key", opt.key, value);
   int result;
   result := 0;
-  case opt {
+  match opt {
     value : result := 1;
     empty : result := 2;
   }
-  a.AssertEQ("case value key", result, 1);
+  a.AssertEQ("match value key", result, 1);
 
-  // Case with default
+  // Match with default
   result := 0;
-  case opt {
+  match opt {
     empty : result := 1;
     default: result := 99;
   }
-  a.AssertEQ("case default on union", result, 99);
+  a.AssertEQ("match default on union", result, 99);
 
 
   Optional optEmpty := empty();
   a.AssertEQ("optEmpty constructor sets key", optEmpty.key, empty);
   result := 0;
-  case optEmpty {
+  match optEmpty {
     value : result := 1;
     empty : result := 2;
   }
-  a.AssertEQ("case empty key", result, 2);
+  a.AssertEQ("match empty key", result, 2);
 
 }

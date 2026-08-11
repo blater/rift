@@ -10,7 +10,7 @@ static string_view lexemes[TOK_COUNT] = {
     SV_Static("->"),      SV_Static("=>"),     SV_Static("{"),
     SV_Static("}"),       SV_Static("("),      SV_Static(")"),
     SV_Static("if"),      SV_Static("then"),   SV_Static("else"),
-    SV_Static("record"),  SV_Static(""),        SV_Static("case"),
+    SV_Static("record"),  SV_Static(""),        SV_Static("match"),
     SV_Static("return"),  SV_Static("*"),      SV_Static("-"),
     SV_Static("+"),       SV_Static("/"),      SV_Static("%"),
     SV_Static("||"),      SV_Static("&&"),     SV_Static("|"),

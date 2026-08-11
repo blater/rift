@@ -1,0 +1,7 @@
+sub main() {
+  int value := 1;
+
+  case value {
+    1: print("old keyword");
+  }
+}

@@ -16,7 +16,7 @@ Rock provides:
 - Scalar types: `int`, `byte`, `word`, `dword`, `float`, `boolean`, `char`, and `string`
 - Dynamic and fixed-size arrays
 - Records, enums, unions, and modules
-- Functions, methods, loops, and `case`
+- Functions, methods, loops, and `match`
 - C and Z80 assembly embed blocks
 - A runtime library for strings, arrays, input, graphics, sound, and ZX Spectrum Next access
 
@@ -79,7 +79,7 @@ sub main() {
   }
 ```
 
-#### Tagged Unions & Case selector
+#### Tagged unions and match
 ```rock
   union Token {
     // a Token instance is allowed to be *one* of these:
@@ -91,7 +91,7 @@ sub main() {
 
   Token token := Number(42);
 
-  case token {
+  match token {
     Number: print("a number");
     Name: print("a name");
     Operator: print("an operator");

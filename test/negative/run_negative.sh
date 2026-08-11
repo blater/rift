@@ -83,6 +83,11 @@ run_compile_neg test/negative/recursive_record_direct.rkr \
                 "recursive type definition 'Loop' forbidden"
 run_compile_neg test/negative/mutual_recursion.rkr \
                 "recursive type definition 'A' forbidden"
+# case is no longer a selector keyword.
+run_compile_neg test/negative/legacy_case_selector.rkr \
+                "After identifier 'case', expected '(' for function call"
+run_compile_neg test/negative/match_keyword.rkr \
+                "Expected ':=' in assignment, got match"
 
 # Runtime-halt tests (program compiles but halts at runtime).
 run_runtime_neg test/negative/setcharat_on_literal.rkr \

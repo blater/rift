@@ -1,0 +1,223 @@
+#!/usr/bin/env python3
+"""Run and inspect Rock target artifacts through emulator adapters."""
+
+import argparse
+import json
+import os
+import re
+import shutil
+import signal
+import socket
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+
+class LauncherError(Exception):
+  pass
+
+
+def reserve_port():
+  listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+  listener.bind(("127.0.0.1", 0))
+  port = listener.getsockname()[1]
+  listener.close()
+  return port
+
+
+def write_text(path, value):
+  path.write_text(value, encoding="utf-8")
+
+
+def zrcp_command(port, command, timeout=1.0):
+  with socket.create_connection(("127.0.0.1", port), timeout=timeout) as conn:
+    conn.settimeout(0.15)
+    try:
+      conn.recv(4096)
+    except socket.timeout:
+      pass
+    conn.sendall((command + "\n").encode("ascii"))
+    chunks = []
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+      try:
+        data = conn.recv(4096)
+      except socket.timeout:
+        break
+      if not data:
+        break
+      chunks.append(data)
+    return b"".join(chunks).decode("utf-8", errors="replace")
+
+
+class ZesaruxAdapter:
+  name = "zesarux"
+  artifact_suffix = ".nex"
+
+  def __init__(self, args, artifacts):
+    self.args = args
+    self.artifacts = artifacts
+    self.port = reserve_port()
+    self.binary = self.find_binary()
+
+  def find_binary(self):
+    configured = self.args.emulator_bin or os.environ.get("ZESARUX_BIN")
+    binary = configured or shutil.which("zesarux")
+    if not binary:
+      raise LauncherError("ZEsarUX is unavailable; set ZESARUX_BIN or use --emulator-bin")
+    path = Path(binary).expanduser().resolve()
+    if not path.is_file() or not os.access(path, os.X_OK):
+      raise LauncherError("ZEsarUX binary is not executable: %s" % path)
+    return path
+
+  def verify_loopback_option(self):
+    if b"--remoteprotocol-host" not in self.binary.read_bytes():
+      raise LauncherError(
+          "ZEsarUX lacks --remoteprotocol-host; refusing unauthenticated ZRCP on a non-loopback listener")
+
+  def command(self, artifact):
+    return [
+        str(self.binary), "--noconfigfile", "--machine", "tbblue", "--vo", "null", "--nosplash",
+        "--nowelcomemessage", "--fastautoload", "--quickexit",
+        "--enable-remoteprotocol", "--remoteprotocol-host", "127.0.0.1",
+        "--remoteprotocol-port", str(self.port), "--hardware-debug-ports",
+    ]
+
+  def capture(self, artifact):
+    entry_address = int.from_bytes(artifact.read_bytes()[12:14], "little")
+    commands = {
+        "screen.bmp": "save-screen %s" % (self.artifacts / "screen.bmp"),
+        "screen.ocr.txt": "get-ocr",
+        "registers.txt": "get-registers",
+        "stack.txt": "get-stack-backtrace",
+        "tstates.txt": "get-tstates",
+        "memory-pages.txt": "get-memory-pages verbose",
+        "nex-entry-memory.txt": "read-memory %d 128" % entry_address,
+        "snapshot.zsf.txt": "snapshot-save %s" % (self.artifacts / "snapshot.zsf"),
+    }
+    for name, command in commands.items():
+      try:
+        output = zrcp_command(self.port, command)
+      except OSError as exc:
+        write_text(self.artifacts / (name + ".error"), str(exc) + "\n")
+      else:
+        if name != "screen.bmp":
+          write_text(self.artifacts / name, output)
+        if name == "registers.txt":
+          pc = re.search(r"\bPC=([0-9a-fA-F]+)", output)
+          if pc:
+            try:
+              memory = zrcp_command(self.port, "read-memory %d 128" % int(pc.group(1), 16))
+            except OSError as exc:
+              write_text(self.artifacts / "pc-memory.txt.error", str(exc) + "\n")
+            else:
+              write_text(self.artifacts / "pc-memory.txt", memory)
+
+  def load(self, artifact):
+    deadline = time.monotonic() + 5
+    while True:
+      try:
+        return zrcp_command(self.port, "snapshot-load %s" % artifact, timeout=1)
+      except OSError:
+        if time.monotonic() >= deadline:
+          raise LauncherError("ZRCP did not become ready")
+        time.sleep(0.1)
+
+  def stop(self):
+    try:
+      zrcp_command(self.port, "exit-emulator")
+    except OSError:
+      pass
+
+
+ADAPTERS = {
+    ("zxn", "zesarux"): ZesaruxAdapter,
+}
+
+
+def parse_args():
+  parser = argparse.ArgumentParser(description=__doc__)
+  parser.add_argument("mode", choices=("run", "inspect", "test"))
+  parser.add_argument("artifact", type=Path, help="built target artifact (.nex for ZXN)")
+  parser.add_argument("--target", required=True)
+  parser.add_argument("--emulator", default="zesarux")
+  parser.add_argument("--emulator-bin")
+  parser.add_argument("--timeout-seconds", type=float, default=10.0)
+  parser.add_argument("--artifacts", type=Path)
+  parser.add_argument("--keep-all", action="store_true")
+  parser.add_argument("--require-emulator", action="store_true")
+  return parser.parse_args()
+
+
+def main():
+  args = parse_args()
+  started = time.monotonic()
+  result = {"target": args.target, "emulator": args.emulator, "mode": args.mode}
+  adapter_class = ADAPTERS.get((args.target, args.emulator))
+  if not adapter_class:
+    result.update(status="unsupported", error="adapter is not installed")
+    print(json.dumps(result, sort_keys=True))
+    return 2 if args.require_emulator else 0
+  artifact = args.artifact.expanduser().resolve()
+  if not artifact.is_file():
+    result.update(status="launch_error", error="artifact does not exist: %s" % artifact)
+    print(json.dumps(result, sort_keys=True))
+    return 2
+  if artifact.suffix.lower() != adapter_class.artifact_suffix or artifact.stat().st_size < 14:
+    result.update(status="launch_error", error="adapter requires a valid %s artifact" % adapter_class.artifact_suffix)
+    print(json.dumps(result, sort_keys=True))
+    return 2
+  artifact_root = args.artifacts or Path("test-artifacts") / "zxn"
+  artifacts = artifact_root.expanduser().resolve() / (artifact.stem + "-" + str(int(time.time() * 1000)))
+  artifacts.mkdir(parents=True, exist_ok=False)
+  result["artifacts"] = str(artifacts)
+  result["artifact"] = str(artifact)
+  if args.keep_all:
+    shutil.copy2(artifact, artifacts / artifact.name)
+  try:
+    adapter = adapter_class(args, artifacts)
+    adapter.verify_loopback_option()
+    command = adapter.command(artifact)
+    result["command"] = command
+    write_text(artifacts / "command.txt", " ".join(command) + "\n")
+    with (artifacts / "emulator.stdout.log").open("w", encoding="utf-8") as stdout, \
+         (artifacts / "emulator.stderr.log").open("w", encoding="utf-8") as stderr:
+      process = subprocess.Popen(command, stdout=stdout, stderr=stderr, start_new_session=True)
+      write_text(artifacts / "load.txt", adapter.load(artifact))
+      try:
+        process.wait(timeout=args.timeout_seconds)
+      except subprocess.TimeoutExpired:
+        result["status"] = "timeout"
+        adapter.capture(artifact)
+        adapter.stop()
+        try:
+          process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+          os.killpg(process.pid, signal.SIGTERM)
+          process.wait(timeout=2)
+      else:
+        result["exit_code"] = process.returncode
+        if args.mode == "inspect" or process.returncode != 0:
+          adapter.capture(artifact)
+        output = (artifacts / "emulator.stdout.log").read_text(encoding="utf-8", errors="replace")
+        if args.mode == "test":
+          finish = re.search(r"ROCKTEST:FINISH:(\d+):(\d+)", output)
+          if output.count("ROCKTEST:BEGIN") != 1 or not finish or int(finish.group(2)) != 0 or "ROCKTEST:FAIL:" in output:
+            result["status"] = "failed"
+          elif process.returncode == 0:
+            result["status"] = "passed"
+          else:
+            result["status"] = "failed"
+        else:
+          result["status"] = "completed" if process.returncode == 0 else "failed"
+  except (LauncherError, OSError, subprocess.SubprocessError) as exc:
+    result.update(status="unsupported", error=str(exc))
+  result["elapsed_seconds"] = round(time.monotonic() - started, 3)
+  write_text(artifacts / "result.json", json.dumps(result, indent=2, sort_keys=True) + "\n")
+  print(json.dumps(result, sort_keys=True))
+  return 0 if result["status"] in ("completed", "passed", "unsupported") and not args.require_emulator else 1
+
+
+if __name__ == "__main__":
+  sys.exit(main())

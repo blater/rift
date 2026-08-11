@@ -1,9 +1,0 @@
-{
-  "id": "asm-as-text",
-  "name": "ASM as Text",
-  "version": "1.0.0",
-  "minAppVersion": "1.0.0",
-  "description": "Open .asm files in Obsidian's normal text editor.",
-  "author": "Rock",
-  "isDesktopOnly": false
-}

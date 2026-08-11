@@ -2,7 +2,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef __SDCC
+#define INIT_CAP_ALLOC_STACK 64
+#else
 #define INIT_CAP_ALLOC_STACK 1024
+#endif
 void init_stack(alloc_stack_t* alloc) {
   alloc->capacity = INIT_CAP_ALLOC_STACK;
   alloc->capacity_p = INIT_CAP_ALLOC_STACK;

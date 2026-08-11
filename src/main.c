@@ -18,6 +18,7 @@ void usage(char *name) {
   printf("Options:\n");
   printf("\t--target=zxn\t\tCompile for ZX Spectrum Next\n");
   printf("\t--auto-cast\t\tWrap int args with (byte)/(word)/(dword) when callee param is narrower\n");
+  printf("\t--zxn-test\t\tEmit ZXN emulator test result markers\n");
   // printf("\t%s [flags] <input file> [output file] [flags]\n", name);
   // printf("Possible flags:\n");
   // printf("\t-t:\t\tPrints the ast\n");
@@ -36,6 +37,7 @@ int main(int argc, char *argv[]) {
   int print_lexer = 0;
   int target_zxn = 0;
   int auto_cast = 0;
+  int zxn_test = 0;
 
   for (int i = 1; i < argc; i++) {
     char *arg = argv[i];
@@ -57,6 +59,9 @@ int main(int argc, char *argv[]) {
       }
       else if (strcmp(arg, "--auto-cast") == 0) {
         auto_cast = 1;
+      }
+      else if (strcmp(arg, "--zxn-test") == 0) {
+        zxn_test = 1;
       }
       //  else if (*(arg + 1) == 't' && !print_tree)
       //   print_tree = 1;
@@ -110,6 +115,12 @@ int main(int argc, char *argv[]) {
   sprintf(cout, "%s.c", output);
   generator_t g = new_generator(cout);
   if (target_zxn) g.target = TARGET_ZXN;
+  if (zxn_test && !target_zxn) {
+    printf("--zxn-test requires --target=zxn\n");
+    kill_compiler_stack();
+    return 1;
+  }
+  g.zxn_test = zxn_test;
   g.auto_cast = auto_cast;
   transpile(&g, p.prog);
   kill_generator(g);

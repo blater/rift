@@ -493,6 +493,7 @@ generator_t new_generator(char *filename) {
   res.program = NULL;
   res.scope = NULL;
   res.auto_cast = 0;
+  res.zxn_test = 0;
   res.lit_counter = 0;
   res.current_fundef = NULL;
 
@@ -532,6 +533,10 @@ generator_t new_generator(char *filename) {
   register_builtin(&res.table, "putchar",              "void");
   register_builtin(&res.table, "allocate_compiler_persistent", "void");
   register_builtin(&res.table, "fill_cmd_args",        "void");
+  register_builtin(&res.table, "zxn_test_begin",       "void");
+  register_builtin(&res.table, "zxn_test_pass",        "void");
+  register_builtin(&res.table, "zxn_test_fail",        "void");
+  register_builtin(&res.table, "zxn_test_finish",      "void");
   // Memory operations
   register_builtin(&res.table, "poke",                 "void");
   register_builtin(&res.table, "peek",                 "byte");
@@ -2360,6 +2365,8 @@ void generate_fundef(generator_t *g, ast_t fun) {
     fprintf(f, "\n\n");
   } else {
     fprintf(f, "int main(int argc, char **argv) {\n");
+    if (g->zxn_test)
+      fprintf(f, "zxn_test_begin();\n");
     /* ADR-0003 §4: pool runtime init. Pool sizes are placeholders pending
      * Phase A.1 measurement; ZXN target gets smaller defaults than host. */
     if (g->target == TARGET_ZXN) {
@@ -2385,6 +2392,8 @@ void generate_fundef(generator_t *g, ast_t fun) {
     g->in_global_scope = 0;
     generate_compound(g, fundef.body);
     g->in_global_scope = saved_global;
+    if (g->zxn_test)
+      fprintf(f, "zxn_test_finish();\n");
     fprintf(f, "rock_rtl_shutdown();\n");
     fprintf(f, "kill_compiler_stack();\n");
     fprintf(f, "rock_pools_deinit();\n");
@@ -2667,10 +2676,8 @@ void transpile(generator_t *g, ast_t program) {
   fprintf(f, "#include \"random.h\"\n");
   fprintf(f, "#include \"nextreg.h\"\n");
   fprintf(f, "#include \"helpers.h\"\n");
-  fprintf(f, "#include \"fmath.h\"\n\n");
-
-  if (g->target == TARGET_ZXN)
-    fprintf(f, "#define INIT_CAP_ALLOC_STACK 64\n\n");
+  fprintf(f, "#include \"fmath.h\"\n");
+  fprintf(f, "#include \"zxn_test.h\"\n\n");
 
   generate_forward_defs(g, program);
 

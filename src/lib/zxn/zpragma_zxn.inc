@@ -1,11 +1,8 @@
-// change program org
-#pragma output CRT_ORG_CODE = 24500   // an alternative to -zorg on the compile line
-
-// move the stack to available memory
-// Stack below UDGs, safe conventional location in segment 3
-// The -1 value is going to leave it where it is, which will be set by the basic loader. 
-// Since we setup org code to 24500, the stack will be below that address.
-#pragma output REGISTER_SP = 24481      // must be placed somewhere in the 16k ram
+// Keep code above the ULA and the hardware stack below UDG memory.  The old
+// 24500/24481 layout was only valid while code stayed below the stack; a larger
+// NEX could boot with its stack on top of its own CRT entry code.
+#pragma output CRT_ORG_CODE = 32768
+#pragma output REGISTER_SP = 65368
 
 // halt program on exit, no need to play well with basic
 #pragma output CRT_ON_EXIT = 0x10001
@@ -19,4 +16,3 @@
 // eliminate unused printf converters
 // placed used converters here, empty string if none (e.g. "%c %s %u %d")
 #pragma printf = "%c %s %u %d"    
-

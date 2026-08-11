@@ -1,0 +1,60 @@
+--- a/src/settings.h
++++ b/src/settings.h
+@@ -47,7 +47,8 @@
+ extern int verbose_level;
+ 
+ extern z80_bit remote_protocol_enabled;
+ extern int remote_protocol_port;
++extern char remote_protocol_host[];
+ #define REMOTE_MAX_PROMPT_LENGTH 100
+ extern char remote_prompt_command_string[];
+ extern z80_bit remote_protocol_char_mode;
+--- a/src/settings.c
++++ b/src/settings.c
+@@ -150,6 +150,7 @@
+ int remote_protocol_port=DEFAULT_REMOTE_PROTOCOL_PORT;
+ z80_bit remote_protocol_enabled={0};
++char remote_protocol_host[64]="127.0.0.1";
+ char remote_prompt_command_string[REMOTE_MAX_PROMPT_LENGTH]="command";
+ z80_bit remote_protocol_char_mode={0};
+--- a/src/start.c
++++ b/src/start.c
+@@ -976,6 +976,7 @@
+ #ifdef USE_PTHREADS
+         "--enable-remoteprotocol             Enable ZRCP remote protocol\n"
+         "--remoteprotocol-port n             Set remote protocol port (default: 10000)\n"
++        "--remoteprotocol-host h             Set remote protocol bind host (default: 127.0.0.1)\n"
+         "--remoteprotocol-prompt p           Change the command prompt shown on remote protocol\n"
+@@ -6269,6 +6270,12 @@
+             remote_protocol_port=valor;
+          }
++
++         else if (!strcmp(argv[puntero_parametro],"--remoteprotocol-host")) {
++            siguiente_parametro_argumento();
++            strncpy(remote_protocol_host, argv[puntero_parametro], 63);
++            remote_protocol_host[63]=0;
++         }
+ 
+          else if (!strcmp(argv[puntero_parametro],"--remoteprotocol-prompt")) {
+--- a/src/utils.c
++++ b/src/utils.c
+@@ -4669,6 +4669,7 @@
+   if (remote_protocol_enabled.v)                ADD_STRING_CONFIG,"--enable-remoteprotocol");
+                                                 ADD_STRING_CONFIG,"--remoteprotocol-port %d",remote_protocol_port);
++                                                ADD_STRING_CONFIG,"--remoteprotocol-host %s",remote_protocol_host);
+                                                 ADD_STRING_CONFIG,"--remoteprotocol-prompt \"%s\"",remote_prompt_command_string);
+--- a/src/zrcp/remote.c
++++ b/src/zrcp/remote.c
+@@ -6412,7 +6412,7 @@
+ 
+-	int result=assignar_adr_internet(sock_listen,NULL,remote_protocol_port);
++	int result=assignar_adr_internet(sock_listen,remote_protocol_host,remote_protocol_port);
+*** Add File: tools/emulators/zxn/zesarux/README.md
+# ZEsarUX adapter prerequisite
+
+ZRCP is unauthenticated. Before using `tools/rock-emu` with a ZEsarUX source
+checkout, apply `0001-zrcp-loopback-bind.patch` from that checkout with
+`patch -p1 < /path/to/0001-zrcp-loopback-bind.patch`, then rebuild ZEsarUX.
+
+The patch adds `--remoteprotocol-host`, defaulting to `127.0.0.1`. The launcher
+refuses ZEsarUX binaries that do not expose this option.

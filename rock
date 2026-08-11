@@ -11,9 +11,10 @@ nex_file=""
 
 DEBUG=0
 RUN=0
+ZXN_TEST=0
 
 usage() {
-  echo "usage: rock [run] [-t zxn|gcc] [--target=zxn|gcc] [--debug] filename"
+  echo "usage: rock [run] [-t zxn|gcc] [--target=zxn|gcc] [--zxn-test] [--debug] filename"
 }
 
 if [ $# -eq 0 ]; then 
@@ -37,7 +38,8 @@ RTL_CORE_SRCS="\
   $RT/lib/fundefs.c \
   $RT/lib/fundefs_internal.c \
   $RT/lib/asm_interop.c \
-  $RT/lib/host_caps.c"
+  $RT/lib/host_caps.c \
+  $RT/lib/zxn_test.c"
 
 # RTL component C shims — one line per component.
 RTL_C_SRCS="\
@@ -70,15 +72,17 @@ RTL_ZXN_ASM="\
 
 
 transpile() {
-  local target="$1" exe_abs="$2" source_abs="$3" auto_cast="$4"
+  local target="$1" exe_abs="$2" source_abs="$3" auto_cast="$4" zxn_test="$5"
   local extra=""
   [ -n "$auto_cast" ] && extra="--auto-cast"
+  [ "$zxn_test" = "1" ] && extra="$extra --zxn-test"
   "$ROCK_ROOT/rockc" "${source_abs}" "${exe_abs}" "--target=${target}" $extra
 }
 
 build() {
   local target="$1" exe_abs="$2" sourcefile="$3"
   local LIB_SRCS="${RTL_CORE_SRCS} ${RTL_C_SRCS}"
+  local zxn_test_define=""
   echo "compile $sourcefile -> $exe_abs"
 
   if [ "$target" = "gcc" ]; then
@@ -87,7 +91,9 @@ build() {
       -o "${exe_abs}" "${exe_abs}.c" ${LIB_SRCS} ${RTL_HOST_SRCS} -lm
   else
     nex_file="${exe_abs%%.*}.nex"
+    [ "$ZXN_TEST" = "1" ] && zxn_test_define="-DROCK_ZXN_TEST"
     zcc +zxn -vn -subtype=nex -startup=1 -clib=$CLIB -create-app \
+      $zxn_test_define \
       -pragma-include:"${RT}/lib/zxn/zpragma_zxn.inc" \
       -I"${RT}/lib" \
       -lm \
@@ -128,6 +134,9 @@ while [ $# -gt 0 ]; do
     --auto-cast)
       AUTO_CAST=1; shift;;
 
+    --zxn-test)
+      ZXN_TEST=1; shift;;
+
     --debug)
       DEBUG=1; shift;;
 
@@ -149,8 +158,13 @@ if [ "$sourcefile" = "" ]; then
   usage; exit 1
 fi
 
+if [ "$ZXN_TEST" = "1" ] && [ "$target" != "zxn" ]; then
+  echo "--zxn-test requires --target=zxn"
+  exit 1
+fi
+
 [ $DEBUG -eq 1 ] && echo "target=$target exe=$exe_abs auto_cast=$AUTO_CAST"
-transpile "$target" "$exe_abs" "$source_abs" "$AUTO_CAST"
+transpile "$target" "$exe_abs" "$source_abs" "$AUTO_CAST" "$ZXN_TEST"
 build "$target" "$exe_abs" "$sourcefile"
 
 if [ $DEBUG -eq 0 ]; then
@@ -168,4 +182,3 @@ if [ $RUN -ne 0 ]; then
     fi
   fi
 fi
-

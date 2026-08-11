@@ -4,6 +4,7 @@
 build/
 tmp/
 x/
+test-artifacts/
 
 # Compiler binary and scratch output
 rockc
@@ -36,3 +37,4 @@ CLAUDE.md
 AGENTS.md
 
 wikiroot/.obsidian/
+plans/

@@ -31,10 +31,9 @@ RELATIVE_PATH_FIX_PLAN.md
 .DS_Store
 
 # Local Claude session state; committed project memory lives under .claude/projects/
-.claude/settings.local.json
-.claude/worktrees/
+.claude/
 CLAUDE.md
-AGENTS.md
 
 wikiroot/.obsidian/
 plans/
+wikiroot/

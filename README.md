@@ -8,6 +8,72 @@ so that a Rock program can be directly run on a host, or built and run on emulat
 
 The compiler is written in C. Rock programs use the `.rkr` extension.
 
+
+## Language at a glance
+
+Rock provides:
+
+- Scalar types: `int`, `byte`, `word`, `dword`, `float`, `boolean`, `char`, and `string`
+- Dynamic and fixed-size arrays
+- Records, enums, unions, and modules
+- Functions, methods, loops, and `case`
+- C and Z80 assembly embed blocks
+- A runtime library for strings, arrays, input, graphics, sound, and ZX Spectrum Next access
+
+For example:
+
+```rock
+sub main() {
+  int[] numbers;
+
+  for i := 1 to 3 {
+    append(numbers, i);
+  }
+
+  print(toString(length(numbers)));
+}
+```
+
+### Embed and call C and Assembly code directly inside rock code
+```rock
+  @embed c
+  int square(int x) { return x * x; }
+  @end c
+
+  sub main() {
+    print(toString(square(7)));
+  }
+```
+
+### Records can be given methods
+```rock
+  record Point { 
+    int x, 
+    int y 
+  }
+  sub Point.move(int dx, int dy) returns Point {
+    return { x := this.x + dx, y := this.y + dy };
+  }
+
+
+  sub main() {
+    Point start := { x := 2, y := 3 };
+    Point end := start.move(1, -1);
+  }
+
+```
+
+### Organise code into modules
+
+```rock
+  module Scoreboard;
+  int score;
+
+  sub Scoreboard.add(int points) {
+    this.score := this.score + points;
+  }
+```
+
 ## Requirements
 
 I'll be reducing the pre-requisite requirements in the future (hopefully to nothing!), but for now to compile rock lang code
@@ -78,30 +144,6 @@ Build a `.nex` program with Z88DK:
 
 Rock uses Z88DK’s SDCC backend for this target. The generated C and the runtime library are compiled into the `.nex` file.
 
-## Language at a glance
-
-Rock provides:
-
-- Scalar types: `int`, `byte`, `word`, `dword`, `float`, `boolean`, `char`, and `string`
-- Dynamic and fixed-size arrays
-- Records, enums, unions, and modules
-- Functions, methods, loops, and `case`
-- C and Z80 assembly embed blocks
-- A runtime library for strings, arrays, input, graphics, sound, and ZX Spectrum Next access
-
-For example:
-
-```rock
-sub main() {
-  int[] numbers;
-
-  for i := 1 to 3 {
-    append(numbers, i);
-  }
-
-  print(toString(length(numbers)));
-}
-```
 
 ## Test
 

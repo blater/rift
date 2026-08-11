@@ -15,6 +15,13 @@ All C sources use two-space indentation and brace-on-same-line style (see `src/p
 ## Testing Guidelines
 Tests live in `test/` with descriptive names such as `array_test.rkr` or `module_decl_test.rkr` so `run_tests.sh` can auto-discover them. Each file should import `test/Assert.rkr` helpers and emit `PASS`/`FAIL` strings that the harness parses. Run the suite after touching parsing, code generation, or runtime code. Runtime additions in `src/lib/` usually need a new `.rkr` plus, when relevant, a ZX Next check via `./rock --target=zxn`.
 
+### ZX Next emulator
+Use the project-patched ZEsarUX binary at
+`/Users/blater/retro/retro1/zesarux/src/zesarux` for automated ZX Next tests.
+It provides the loopback-only ZRCP and measurement behavior expected by
+`tools/test-zxn` and `tools/rock-emu`; do not substitute the older
+`/Users/blater/bin/zesa/MacOS/zesarux` build for test evidence.
+
 ## Commit & Pull Request Guidelines
 Existing commits are short and imperative (e.g., “Fix relative path resolution”), so follow that voice and keep unrelated work split. Before opening a PR, verify `make`, `./run_tests.sh`, and representative `./rock` invocations for each target you touched. PR descriptions should summarize behavioral impact, mention docs/tests updates, link issues, and attach logs or ZX screenshots when they illustrate new output.
 

@@ -6,6 +6,7 @@
 #include <stdio.h>
 
 void print(string s);
+void rock_print_bytes(const char *data, size_t length);
 char *string_to_cstr(string s);
 void cstr_to_string(string *out, char *cstr);
 char charAt(string s, int n);
@@ -60,9 +61,13 @@ void  __handle_release(void *payload);
 /* Return materialisation for aggregate handles. Behaviourally identical
  * to __handle_retain — kept as a distinct symbol so ADR-0003 §16.3
  * structural greps can pick out return sites from generic retains. */
+#if defined(__SDCC) && defined(ROCK_ZXN_TINY_CORE)
+#define __return_handle(payload) (payload)
+#else
 static inline void *__return_handle(void *payload) {
   return __handle_retain(payload);
 }
+#endif
 
 // Configurable string index base (0 = zero-indexed, 1 = one-indexed)
 extern int __rock_substr_index_base;

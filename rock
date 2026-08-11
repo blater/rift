@@ -17,9 +17,12 @@ MEMORY_PROFILE=""
 RTL_MODE="auto"
 ZXN_STACK_TOP=65368
 ZXN_STACK_RESERVE=2048
+ZXN_BUMP_POOL_CAPACITY=1024
+ZXN_LONGLIVED_POOL_CAPACITY=6144
+ZXN_POOL_OPTIONS_SET=0
 
 usage() {
-  echo "usage: rock [run] [-t zxn|gcc] [--target=zxn|gcc] [--memory-profile=zxn] [--zxn-test] [--allocator-stats] [--rtl=auto|all] [--debug] filename"
+  echo "usage: rock [run] [-t zxn|gcc] [--target=zxn|gcc] [--memory-profile=zxn] [--zxn-test] [--allocator-stats] [--rtl=auto|all] [--zxn-bump-pool=bytes] [--zxn-longlived-pool=bytes] [--debug] filename"
 }
 
 if [ $# -eq 0 ]; then 
@@ -39,6 +42,7 @@ fi
 # Core runtime — always linked on both host and ZXN targets.
 RTL_CORE_SRCS="\
   $RT/lib/pools.c \
+  $RT/lib/print_bytes.c \
   $RT/lib/fundefs.c \
   $RT/lib/fundefs_internal.c \
   $RT/lib/asm_interop.c \
@@ -96,7 +100,31 @@ build() {
   local zxn_test_define=""
   local allocator_stats_define=""
   local pool_fast_define=""
+  local pool_capacity_defines=""
+  local tiny_core_define=""
+  local zxn_startup=1
+  local zxn_tiny_core=0
   local generated_source="${exe_abs}.c"
+  local generated_profile=""
+
+  IFS= read -r generated_profile < "$generated_source" || true
+  if [ "$target" = "zxn" ] && [ "$RTL_MODE" = "auto" ]; then
+    case "$generated_profile" in
+      '/* ROCK_PROFILE:ZXN_TINY_CORE:STARTUP=31 */')
+        zxn_tiny_core=1
+        zxn_startup=31
+        ;;
+      '/* ROCK_PROFILE:ZXN_TINY_CORE:STARTUP=0 */')
+        zxn_tiny_core=1
+        zxn_startup=0
+        ;;
+      '/* ROCK_PROFILE:ZXN_TINY_CORE:STARTUP=1 */')
+        zxn_tiny_core=1
+        zxn_startup=1
+        ;;
+    esac
+    [ "$zxn_tiny_core" = "1" ] && tiny_core_define="-DROCK_ZXN_TINY_CORE"
+  fi
 
   # The complete graphical RTL is useful to developers but too large to fit
   # together with a safe stack and application data in the ZXN's flat 64 KiB
@@ -104,7 +132,17 @@ build() {
   # components a ZXN program actually calls. `--rtl=all` remains available
   # for hand-written embedded C that cannot be found by this scan.
   if [ "$target" = "zxn" ] && [ "$RTL_MODE" = "auto" ]; then
-    LIB_SRCS="${RTL_CORE_SRCS}"
+    if [ "$zxn_tiny_core" = "1" ]; then
+      LIB_SRCS=""
+      if grep -Eq '(^|[^[:alnum:]_])rock_print_bytes[[:space:]]*\(' "$generated_source"; then
+        LIB_SRCS="$RT/lib/print_bytes.c"
+      fi
+      if grep -Eq '(^|[^[:alnum:]_])zxn_test_[[:alnum:]_]*[[:space:]]*\(' "$generated_source"; then
+        LIB_SRCS="$LIB_SRCS $RT/lib/zxn_test.c"
+      fi
+    else
+      LIB_SRCS="${RTL_CORE_SRCS}"
+    fi
     ZXN_ASM_SRCS="$RTL_ZXN_CORE_ASM"
     if grep -Eq '(^|[^[:alnum:]_])(scan_keyboard|key_pressed)[[:space:]]*\(' "$generated_source"; then
       LIB_SRCS="$LIB_SRCS $RT/lib/keyboard.c"
@@ -173,10 +211,14 @@ build() {
     nex_file="${exe_abs%%.*}.nex"
     [ "$ZXN_TEST" = "1" ] && zxn_test_define="-DROCK_ZXN_TEST"
     [ "$ALLOCATOR_STATS" = "1" ] && allocator_stats_define="-DROCK_ALLOCATOR_STATS"
-    zcc +zxn -m -vn -subtype=nex -startup=1 -clib=$CLIB -create-app \
+    pool_capacity_defines="-DROCK_ZXN_BUMP_POOL_CAPACITY=$ZXN_BUMP_POOL_CAPACITY -DROCK_ZXN_LONGLIVED_POOL_CAPACITY=$ZXN_LONGLIVED_POOL_CAPACITY"
+    echo "ZXN profile: startup=$zxn_startup, bump-pool=$ZXN_BUMP_POOL_CAPACITY, longlived-pool=$ZXN_LONGLIVED_POOL_CAPACITY, tiny-core=$zxn_tiny_core"
+    zcc +zxn -m -vn -subtype=nex -startup="$zxn_startup" -clib=$CLIB --opt-code-size -create-app \
       $zxn_test_define \
       $allocator_stats_define \
       $pool_fast_define \
+      $pool_capacity_defines \
+      $tiny_core_define \
       -pragma-include:"${RT}/lib/zxn/zpragma_zxn.inc" \
       -I"${RT}/lib" \
       -lm \
@@ -247,6 +289,16 @@ while [ $# -gt 0 ]; do
     --memory-profile=zxn)
       MEMORY_PROFILE="zxn"; shift;;
 
+    --zxn-bump-pool=*)
+      ZXN_BUMP_POOL_CAPACITY="${1#--zxn-bump-pool=}"
+      ZXN_POOL_OPTIONS_SET=1
+      shift;;
+
+    --zxn-longlived-pool=*)
+      ZXN_LONGLIVED_POOL_CAPACITY="${1#--zxn-longlived-pool=}"
+      ZXN_POOL_OPTIONS_SET=1
+      shift;;
+
     --rtl=auto)
       RTL_MODE="auto"; shift;;
 
@@ -276,6 +328,55 @@ fi
 
 if [ "$ZXN_TEST" = "1" ] && [ "$target" != "zxn" ]; then
   echo "--zxn-test requires --target=zxn"
+  exit 1
+fi
+if [ "$ZXN_POOL_OPTIONS_SET" = "1" ] && [ "$target" != "zxn" ]; then
+  echo "ZXN pool capacity options require --target=zxn"
+  exit 1
+fi
+
+case "$ZXN_BUMP_POOL_CAPACITY" in
+  ''|*[!0-9]*)
+    echo "--zxn-bump-pool requires a decimal byte count"
+    exit 1
+    ;;
+esac
+case "$ZXN_LONGLIVED_POOL_CAPACITY" in
+  ''|*[!0-9]*)
+    echo "--zxn-longlived-pool requires a decimal byte count"
+    exit 1
+    ;;
+esac
+if { [ "$ZXN_BUMP_POOL_CAPACITY" != "0" ] && \
+     [ "${ZXN_BUMP_POOL_CAPACITY#0}" != "$ZXN_BUMP_POOL_CAPACITY" ]; } || \
+   { [ "$ZXN_LONGLIVED_POOL_CAPACITY" != "0" ] && \
+     [ "${ZXN_LONGLIVED_POOL_CAPACITY#0}" != "$ZXN_LONGLIVED_POOL_CAPACITY" ]; }; then
+  echo "ZXN pool capacities must be canonical decimal values without leading zeros"
+  exit 1
+fi
+if [ "${#ZXN_BUMP_POOL_CAPACITY}" -gt 5 ] || \
+   [ "${#ZXN_LONGLIVED_POOL_CAPACITY}" -gt 5 ]; then
+  echo "ZXN pool capacities must fit the target's 16-bit pool offsets (0..65534)"
+  exit 1
+fi
+if [ "$ZXN_BUMP_POOL_CAPACITY" -gt 65534 ] || [ "$ZXN_LONGLIVED_POOL_CAPACITY" -gt 65534 ]; then
+  echo "ZXN pool capacities must fit the target's 16-bit pool offsets (0..65534)"
+  exit 1
+fi
+if [ "$ZXN_LONGLIVED_POOL_CAPACITY" -lt 16 ] || \
+   [ $((ZXN_LONGLIVED_POOL_CAPACITY % 16)) -ne 0 ] || \
+   [ "$ZXN_LONGLIVED_POOL_CAPACITY" -gt 6144 ]; then
+  echo "--zxn-longlived-pool must be a multiple of 16 in the range 16..6144"
+  exit 1
+fi
+zxn_pool_units=$((ZXN_LONGLIVED_POOL_CAPACITY / 16))
+zxn_pool_roots=0
+while [ "$zxn_pool_units" -gt 0 ]; do
+  zxn_pool_roots=$((zxn_pool_roots + (zxn_pool_units & 1)))
+  zxn_pool_units=$((zxn_pool_units >> 1))
+done
+if [ "$zxn_pool_roots" -gt 2 ]; then
+  echo "--zxn-longlived-pool must decompose into at most two power-of-two buddy roots"
   exit 1
 fi
 

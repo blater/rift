@@ -10,7 +10,7 @@ OBJECTS = $(BUILD)alloc.o $(BUILD)ast.o $(BUILD)lexer.o $(BUILD)token.o \
           $(BUILD)main.o
 DEPS = $(OBJECTS:.o=.d)
 
-.PHONY: all clean test-pools test-negative test-refcount test-zxn test-autolink test-memory-profile
+.PHONY: all clean test-pools test-negative test-refcount test-zxn test-autolink test-memory-profile test-zxn-size
 
 all: $(BUILD) rockc
 
@@ -56,9 +56,12 @@ $(BUILD)fundefs_for_test.o: $(LIB)fundefs.c $(LIB)fundefs.h $(LIB)pools.h | $(BU
 	$(CC) $(RUNTIME_CFLAGS) -c $< -o $@
 $(BUILD)fundefs_internal_for_test.o: $(LIB)fundefs_internal.c $(LIB)fundefs_internal.h | $(BUILD)
 	$(CC) $(RUNTIME_CFLAGS) -c $< -o $@
+$(BUILD)print_bytes_for_test.o: $(LIB)print_bytes.c $(LIB)fundefs.h | $(BUILD)
+	$(CC) $(RUNTIME_CFLAGS) -c $< -o $@
 $(BUILD)string_refcount_test: test/string_refcount_test.c $(BUILD)pools.o \
                               $(BUILD)fundefs_for_test.o \
-                              $(BUILD)fundefs_internal_for_test.o | $(BUILD)
+                              $(BUILD)fundefs_internal_for_test.o \
+                              $(BUILD)print_bytes_for_test.o | $(BUILD)
 	$(CC) $(RUNTIME_CFLAGS) -o $@ $^
 
 test-refcount: $(BUILD)string_refcount_test
@@ -79,6 +82,11 @@ test-autolink: rockc
 # target. Ownership loops must complete without pool exhaustion or UAF.
 test-memory-profile: rockc
 	sh test/test_memory_profile.sh
+
+# Verify literal-print lowering, conservative CRT/tiny-core selection, and
+# configurable target pool capacities without requiring an emulator.
+test-zxn-size: rockc
+	sh test/test_zxn_size_profile.sh
 
 clean:
 	rm -rf $(BUILD)

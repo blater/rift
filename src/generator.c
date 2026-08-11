@@ -1444,6 +1444,17 @@ void generate_funcall(generator_t *g, ast_t fun) {
     }
     fprintf(f, ")");
   } else if (svcmp(funcall.name.lexeme, sv_from_cstr("print")) == 0 &&
+             funcall.args.length == 1 &&
+             funcall.args.data[0]->tag == literal &&
+             funcall.args.data[0]->data.literal.lit.type == TOK_STR_LIT) {
+    /* A literal does not need a Rock string descriptor, static allocation
+     * header, refcount assignment, or scope cleanup.  Keep the byte length
+     * explicit so this remains equivalent to print(string), including for
+     * literals that are not safely represented by a C `%s` conversion. */
+    token_t tok = funcall.args.data[0]->data.literal.lit;
+    fprintf(g->f, "rock_print_bytes(" SV_Fmt ", %d)",
+            SV_Arg(tok.lexeme), get_literal_string_length(tok) - 1);
+  } else if (svcmp(funcall.name.lexeme, sv_from_cstr("print")) == 0 &&
              funcall.args.length == 3) {
     // Overloaded print(x, y, text) — routes to the C print_at entry point
     // defined in src/lib/print_at.c. 1-arg print(text) falls through to the
@@ -2737,7 +2748,8 @@ void generate_fundef(generator_t *g, ast_t fun) {
     if (g->target == TARGET_ZXN || g->zxn_memory_profile) {
       if (g->zxn_test)
         fprintf(f, "zxn_test_stage(\"pools\");\n");
-      fprintf(f, "rock_pools_init(1024, 6144);\n");
+      fprintf(f, "rock_pools_init(ROCK_ZXN_BUMP_POOL_CAPACITY, "
+                 "ROCK_ZXN_LONGLIVED_POOL_CAPACITY);\n");
       fprintf(f, "__internal_set_dynamic_array_initial_capacity(8);\n");
     } else {
       fprintf(f, "rock_pools_init(4u * 1024u * 1024u, 4u * 1024u * 1024u);\n");
@@ -3053,10 +3065,137 @@ void generate_tdef(generator_t *g, ast_t tdef_ast) {
   return;
 }
 
+typedef struct zxn_tiny_analysis {
+  int eligible;
+  int uses_stdout;
+  int simple_stdout;
+} zxn_tiny_analysis;
+
+static int zxn_tiny_stdout_literal_is_simple(token_t tok) {
+  string_view text = tok.lexeme;
+  if (text.length < 2) return 0;
+  for (size_t i = 1; i + 1 < text.length; i++) {
+    unsigned char c = (unsigned char)text.data[i];
+    if (c == '\\' || c < 32 || c > 126) return 0;
+  }
+  return 1;
+}
+
+static void analyse_zxn_tiny_node(ast_t node, zxn_tiny_analysis *analysis) {
+  if (!node || !analysis->eligible) return;
+
+  switch (node->tag) {
+    case program: {
+      ast_array_t nodes = node->data.program.prog;
+      for (int i = 0; i < nodes.length; i++)
+        analyse_zxn_tiny_node(nodes.data[i], analysis);
+      return;
+    }
+    case fundef:
+      if (svcmp(node->data.fundef.name.lexeme, sv_from_cstr("main")) != 0) {
+        analysis->eligible = 0;
+        return;
+      }
+      analyse_zxn_tiny_node(node->data.fundef.body, analysis);
+      return;
+    case compound: {
+      ast_array_t nodes = node->data.compound.stmts;
+      for (int i = 0; i < nodes.length; i++)
+        analyse_zxn_tiny_node(nodes.data[i], analysis);
+      return;
+    }
+    case funcall: {
+      ast_funcall call = node->data.funcall;
+      if (svcmp(call.name.lexeme, sv_from_cstr("print")) != 0 ||
+          call.args.length != 1 || call.args.data[0]->tag != literal ||
+          call.args.data[0]->data.literal.lit.type != TOK_STR_LIT) {
+        analysis->eligible = 0;
+        return;
+      }
+      analysis->uses_stdout = 1;
+      if (!zxn_tiny_stdout_literal_is_simple(
+              call.args.data[0]->data.literal.lit))
+        analysis->simple_stdout = 0;
+      return;
+    }
+    case op:
+      analyse_zxn_tiny_node(node->data.op.left, analysis);
+      analyse_zxn_tiny_node(node->data.op.right, analysis);
+      return;
+    case unary_op:
+      analyse_zxn_tiny_node(node->data.unary_op.operand, analysis);
+      return;
+    case literal:
+      if (node->data.literal.lit.type == TOK_STR_LIT ||
+          node->data.literal.lit.type == TOK_ARR_DECL)
+        analysis->eligible = 0;
+      return;
+    case identifier:
+      return;
+    case vardef: {
+      ast_vardef var = node->data.vardef;
+      if (var.is_rec || var.type->data.type.is_array ||
+          svcmp(var.type->data.type.name.lexeme, SV_STRING) == 0) {
+        analysis->eligible = 0;
+        return;
+      }
+      analyse_zxn_tiny_node(var.expr, analysis);
+      return;
+    }
+    case assign:
+      analyse_zxn_tiny_node(node->data.assign.target, analysis);
+      analyse_zxn_tiny_node(node->data.assign.expr, analysis);
+      return;
+    case ifstmt:
+      analyse_zxn_tiny_node(node->data.ifstmt.expression, analysis);
+      analyse_zxn_tiny_node(node->data.ifstmt.body, analysis);
+      analyse_zxn_tiny_node(node->data.ifstmt.elsestmt, analysis);
+      return;
+    case loop:
+      analyse_zxn_tiny_node(node->data.loop.start, analysis);
+      analyse_zxn_tiny_node(node->data.loop.end, analysis);
+      analyse_zxn_tiny_node(node->data.loop.statement, analysis);
+      return;
+    case while_loop:
+      analyse_zxn_tiny_node(node->data.while_loop.condition, analysis);
+      analyse_zxn_tiny_node(node->data.while_loop.statement, analysis);
+      return;
+    case ret:
+      analyse_zxn_tiny_node(node->data.ret.expr, analysis);
+      return;
+    default:
+      /* Aggregates, arrays, matches, methods, embedded code, collect, and
+       * every other construct keep the existing full runtime. */
+      analysis->eligible = 0;
+      return;
+  }
+}
+
+static zxn_tiny_analysis analyse_zxn_tiny_program(generator_t *g,
+                                                   ast_t program_node) {
+  zxn_tiny_analysis analysis = {1, 0, 1};
+  if (g->target != TARGET_ZXN) {
+    analysis.eligible = 0;
+    return analysis;
+  }
+  analyse_zxn_tiny_node(program_node, &analysis);
+  return analysis;
+}
+
 void transpile(generator_t *g, ast_t program) {
   FILE *f = g->f;
   g->program = program;
   ast_array_t stmts = program->data.program.prog;
+
+  zxn_tiny_analysis tiny = analyse_zxn_tiny_program(g, program);
+  if (tiny.eligible) {
+    if (!tiny.uses_stdout)
+      fprintf(f, "/* ROCK_PROFILE:ZXN_TINY_CORE:STARTUP=31 */\n");
+    else if (tiny.simple_stdout)
+      fprintf(f, "/* ROCK_PROFILE:ZXN_TINY_CORE:STARTUP=0 */\n");
+    else
+      fprintf(f, "/* ROCK_PROFILE:ZXN_TINY_CORE:STARTUP=1 */\n");
+  }
 
   fprintf(f, "#include <stdlib.h>\n");
   fprintf(f, "#include \"pools.h\"\n");

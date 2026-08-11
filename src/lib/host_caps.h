@@ -30,8 +30,13 @@ typedef struct rock_host_caps {
 
 extern rock_host_caps host_caps;
 
+#if defined(__SDCC) && defined(ROCK_ZXN_TINY_CORE)
+#define rock_rtl_init() ((void)0)
+#define rock_rtl_shutdown() ((void)0)
+#else
 void rock_rtl_init(void);
 void rock_rtl_shutdown(void);
+#endif
 void graphics_on(void);
 void graphics_off(void);
 

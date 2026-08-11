@@ -1,0 +1,4 @@
+sub main() {
+  string message := "hello world";
+  print(message);
+}

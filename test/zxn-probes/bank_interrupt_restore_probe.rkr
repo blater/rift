@@ -1,0 +1,58 @@
+include "../Assert.rkr"
+
+Assert a;
+
+// Candidate leaf for Gate B2.  It performs a harmless MMU6 save/rewrite and
+// restores interrupts only when LD A,I recorded IFF2 as set on entry.
+sub probe_interrupt_restore() returns int {
+  @embed asm
+    di
+    call rock_probe_bank_leaf
+    ld a, i
+    jp pe, rock_probe_iff_fail
+
+    ei
+    nop
+    call rock_probe_bank_leaf
+    ld a, i
+    jp po, rock_probe_iff_fail
+
+    ld hl, 1
+    ret
+
+rock_probe_iff_fail:
+    ld hl, 0
+    ei
+    ret
+
+rock_probe_bank_leaf:
+    ld a, i
+    push af
+    di
+
+    ld a, 86
+    ld bc, 9275
+    out (c), a
+    ld bc, 9531
+    in a, (c)
+    ld d, a
+
+    ld a, 86
+    ld bc, 9275
+    out (c), a
+    ld a, d
+    ld bc, 9531
+    out (c), a
+
+    pop af
+    jp po, rock_probe_leave_disabled
+    ei
+rock_probe_leave_disabled:
+    ret
+  @end asm
+}
+
+sub main() {
+  a.AssertEQ("bank leaf restores entry IFF2 after DI and EI",
+             1, probe_interrupt_restore());
+}

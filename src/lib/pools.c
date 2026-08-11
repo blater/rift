@@ -27,8 +27,6 @@
 #define ROCK_MAGAZINE_COUNT 3
 
 #ifdef __SDCC
-#define ROCK_ZXN_BUMP_POOL_CAPACITY 1024
-#define ROCK_ZXN_LONGLIVED_POOL_CAPACITY 6144
 #define ROCK_BUDDY_MAX_ORDERS 9
 #define ROCK_BUDDY_MAX_ROOTS 2
 /* Z88DK does not guarantee that a global union is placed at its member's

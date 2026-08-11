@@ -11,6 +11,14 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifndef ROCK_ZXN_BUMP_POOL_CAPACITY
+#define ROCK_ZXN_BUMP_POOL_CAPACITY 1024
+#endif
+
+#ifndef ROCK_ZXN_LONGLIVED_POOL_CAPACITY
+#define ROCK_ZXN_LONGLIVED_POOL_CAPACITY 6144
+#endif
+
 /* Universal block header for refcount-managed allocations.
  *
  * `next_free` is an offset from the start of the long-lived pool. It is used
@@ -35,10 +43,15 @@ typedef struct rock_block_header {
 
 /* Initialise the pools. Must be called before any other pool API.
  * On allocation failure to obtain backing memory, prints diagnostic and exits. */
+#if defined(__SDCC) && defined(ROCK_ZXN_TINY_CORE)
+#define rock_pools_init(bump_capacity, longlived_capacity) ((void)0)
+#define rock_pools_deinit() ((void)0)
+#else
 void rock_pools_init(size_t bump_capacity, size_t longlived_capacity);
 
 /* Tear down the pools. Frees backing memory. */
 void rock_pools_deinit(void);
+#endif
 
 /* ---- Bump pool ---- */
 
@@ -49,8 +62,13 @@ void *rock_bump_alloc(size_t bytes);
 /* Bump save/restore for stack-disciplined region scopes. */
 typedef size_t rock_bump_mark;
 
+#if defined(__SDCC) && defined(ROCK_ZXN_TINY_CORE)
+#define rock_bump_save() ((rock_bump_mark)0)
+#define rock_bump_restore(mark) ((void)(mark))
+#else
 rock_bump_mark rock_bump_save(void);
 void rock_bump_restore(rock_bump_mark mark);
+#endif
 
 /* ---- Longlived pool ---- */
 

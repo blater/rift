@@ -56,9 +56,7 @@ void print(string s) {
     fflush(stdout);
     return;
   }
-  for (int i = 0; i < s.length; i++)
-    putchar(s.data[i]);
-  fflush(stdout);
+  rock_print_bytes(s.data, s.length);
 }
 
 void cstr_to_string(string *out, char *cstr) {

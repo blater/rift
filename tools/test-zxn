@@ -1,0 +1,140 @@
+#!/usr/bin/env python3
+"""Compile and execute the curated Rock ZX Spectrum Next test suite.
+
+Each case is built in the explicit ZXN test profile and is accepted only when
+the emulator launcher observes a complete, zero-failure ROCKTEST stream.
+"""
+
+import argparse
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+
+
+ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_SUITE = ROOT / "tools" / "zxn-test-suite.txt"
+DEFAULT_ARTIFACTS = ROOT / "test-artifacts" / "zxn"
+
+
+def read_suite(suite_path):
+  cases = []
+  for line_number, raw_line in enumerate(suite_path.read_text().splitlines(), 1):
+    line = raw_line.split("#", 1)[0].strip()
+    if not line:
+      continue
+    source = Path(line)
+    if source.is_absolute() or ".." in source.parts:
+      raise ValueError(f"{suite_path}:{line_number}: expected a repository-relative path")
+    cases.append(source)
+  if not cases:
+    raise ValueError(f"{suite_path}: no test cases")
+  return cases
+
+
+def parse_launcher_result(stdout):
+  for line in reversed(stdout.splitlines()):
+    try:
+      return json.loads(line)
+    except json.JSONDecodeError:
+      pass
+  return None
+
+
+def write_log(path, output):
+  path.parent.mkdir(parents=True, exist_ok=True)
+  path.write_text(output)
+
+
+def main():
+  parser = argparse.ArgumentParser(
+      description="Build and execute curated Rock ZXN semantic tests through ZEsarUX.")
+  parser.add_argument("tests", nargs="*", metavar="TEST",
+                      help="repository-relative .rkr test(s); defaults to the curated suite")
+  parser.add_argument("--suite", type=Path, default=DEFAULT_SUITE,
+                      help="suite manifest used when TEST is omitted")
+  parser.add_argument("--emulator-bin", help="path to a ZEsarUX binary (or use ZESARUX_BIN)")
+  parser.add_argument("--timeout-seconds", type=float, default=4.0)
+  parser.add_argument("--artifacts", type=Path, default=DEFAULT_ARTIFACTS)
+  parser.add_argument("--keep-builds", action="store_true",
+                      help="retain intermediate .exe/.nex files after the suite")
+  args = parser.parse_args()
+
+  if not (ROOT / "rockc").is_file():
+    parser.error("rockc is missing; run make first")
+
+  try:
+    cases = [Path(case) for case in args.tests] if args.tests else read_suite(args.suite)
+  except (OSError, ValueError) as error:
+    parser.error(str(error))
+
+  for case in cases:
+    source = ROOT / case
+    if not source.is_file() or source.suffix != ".rkr":
+      parser.error(f"test is not a .rkr source file: {case}")
+
+  args.artifacts.mkdir(parents=True, exist_ok=True)
+  build_root = Path(tempfile.mkdtemp(prefix="rock-zxn-tests-"))
+  results = []
+  try:
+    for index, case in enumerate(cases, 1):
+      source = ROOT / case
+      case_name = f"{index:02d}-{case.stem}"
+      case_artifacts = args.artifacts / case_name
+      exe = build_root / f"{case_name}.exe"
+      build_command = [str(ROOT / "rock"), "--target=zxn", "--zxn-test",
+                       str(source), str(exe)]
+      build = subprocess.run(build_command, cwd=ROOT, text=True,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+      write_log(case_artifacts / "build.log", build.stdout)
+      if build.returncode:
+        results.append({"test": str(case), "status": "build-failed",
+                        "returncode": build.returncode,
+                        "build_log": str(case_artifacts / "build.log")})
+        print(f"FAIL {case} (build; {case_artifacts / 'build.log'})")
+        continue
+
+      nex = exe.with_suffix(".nex")
+      launch_command = [str(ROOT / "tools" / "rock-emu"), "--target", "zxn",
+                        "--timeout-seconds", str(args.timeout_seconds),
+                        "--artifacts", str(case_artifacts), "--keep-all",
+                        "--require-emulator"]
+      if args.emulator_bin:
+        launch_command.extend(["--emulator-bin", args.emulator_bin])
+      launch_command.extend(["test", str(nex)])
+      launch = subprocess.run(launch_command, cwd=ROOT, text=True,
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+      write_log(case_artifacts / "launcher.log", launch.stdout)
+      launcher_result = parse_launcher_result(launch.stdout)
+      status = "passed" if launch.returncode == 0 else "failed"
+      record = {"test": str(case), "status": status,
+                "returncode": launch.returncode,
+                "artifacts": str(case_artifacts),
+                "launcher": launcher_result}
+      results.append(record)
+      if status == "passed":
+        markers = launcher_result.get("markers", {}) if launcher_result else {}
+        print(f"PASS {case} ({markers.get('passes', '?')} assertions)")
+      else:
+        print(f"FAIL {case} ({case_artifacts / 'launcher.log'})")
+  finally:
+    if args.keep_builds:
+      retained = args.artifacts / "builds"
+      if retained.exists():
+        shutil.rmtree(retained)
+      shutil.move(str(build_root), retained)
+    else:
+      shutil.rmtree(build_root, ignore_errors=True)
+
+  passed = sum(result["status"] == "passed" for result in results)
+  summary = {"total": len(results), "passed": passed,
+             "failed": len(results) - passed, "results": results}
+  print(json.dumps(summary, sort_keys=True))
+  return 0 if passed == len(results) else 1
+
+
+if __name__ == "__main__":
+  sys.exit(main())

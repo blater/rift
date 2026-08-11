@@ -44,3 +44,23 @@ Normal Rock programs do not emit emulator debug-port traffic.
 `BEGIN`/`FINISH`, non-zero reported failure count, or non-zero emulator exit
 is a failure. This distinguishes “a NEX was built” from “the generated program
 booted and completed.”
+
+## Curated ZXN execution suite
+
+`tools/test-zxn` provides reproducible broader target coverage without changing
+the host-only `run_tests.sh` harness. It builds every entry in
+[`zxn-test-suite.txt`](zxn-test-suite.txt) using `--target=zxn --zxn-test`, then
+requires ZEsarUX to observe the complete test protocol for every artifact.
+
+```sh
+export ZESARUX_BIN=/path/to/zesarux
+tools/test-zxn
+tools/test-zxn test/array_test.rkr
+```
+
+Pass `--emulator-bin /path/to/zesarux` instead of setting the environment
+variable, `--timeout-seconds N` for slower debugging sessions, and
+`--keep-builds` to retain the intermediate NEX files. Per-case compiler logs,
+launcher logs, retained NEX copies, and failure diagnostics are stored under
+`test-artifacts/zxn/` (ignored by Git). The suite requires a real emulator; it
+will not report success merely because ZEsarUX is unavailable.

@@ -31,6 +31,12 @@ void zxn_test_begin(void) {
   emit_text("ROCKTEST:BEGIN\n");
 }
 
+void zxn_test_stage(const char *stage) {
+  emit_text("ROCKTEST:STAGE:");
+  emit_text(stage);
+  emit_char('\n');
+}
+
 void zxn_test_pass(void) {
   pass_count++;
   emit_text("ROCKTEST:PASS\n");
@@ -54,6 +60,7 @@ void zxn_test_finish(void) {
 #else
 
 void zxn_test_begin(void) {}
+void zxn_test_stage(const char *stage) { (void)stage; }
 void zxn_test_pass(void) {}
 void zxn_test_fail(void) {}
 void zxn_test_finish(void) {}

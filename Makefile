@@ -10,7 +10,7 @@ OBJECTS = $(BUILD)alloc.o $(BUILD)ast.o $(BUILD)lexer.o $(BUILD)token.o \
           $(BUILD)main.o
 DEPS = $(OBJECTS:.o=.d)
 
-.PHONY: all clean test-pools test-negative test-refcount
+.PHONY: all clean test-pools test-negative test-refcount test-zxn
 
 all: $(BUILD) rockc
 
@@ -66,6 +66,11 @@ $(BUILD)string_refcount_test: test/string_refcount_test.c $(BUILD)pools.o \
 
 test-refcount: $(BUILD)string_refcount_test
 	$(BUILD)string_refcount_test
+
+# Requires a ZEsarUX path through ZESARUX_BIN or
+# `tools/test-zxn --emulator-bin ...`.
+test-zxn: rockc
+	tools/test-zxn
 
 clean:
 	rm -rf $(BUILD)

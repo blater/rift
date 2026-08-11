@@ -1,0 +1,14 @@
+# Curated Rock programs that must execute to completion in the ZXN test
+# profile.  `tools/test-zxn` compiles each through `rock --target=zxn
+# --zxn-test` and validates its debug-port result stream through ZEsarUX.
+#
+# Keep this focused on portable semantic coverage.  Hardware interaction is
+# smoke-tested (keyboard and plot), not asserted against a user-controlled
+# physical device state.
+test/simple_test.rkr       # baseline compiler/runtime path
+test/byte_test.rkr         # conversions, arithmetic, dynamic byte arrays
+test/concat_test.rkr       # string concatenation and char conversion
+test/array_test.rkr        # dynamic/fixed arrays, records and returns
+test/format_test.rkr       # function arguments and formatted strings
+test/keyboard_test.rkr     # keyboard builtin/link path and bounds handling
+test/plot_test.rkr         # ULA pixel drawing and clipping smoke

@@ -1,12 +1,10 @@
 # Rock
 
-Rock is a statically typed language which borrows established ideas rather than inventing new syntax. 
-It liberally takes inspiration from C, Rust, Zig, Java, Modula/Pascal, and old school Basics.
+Rock is a statically typed language written in C and targeted at the ZX Next retro system.  
+It liberally takes inspiration from C, Rust, Zig, Java, and Modula/Pascal.  
 
-Native programs are built with GCC and retro targets (initially ZX Spectrum Next `.nex`) with Z88DK
-so that a Rock program can be directly run on a host, or built and run on emulators (Z80-based machines are the initial target).
-
-The compiler is written in C. Rock programs use the `.rkr` extension.
+Its designed so that you develop on your pc/laptop and deploy to an emulator or real hardware.
+A Rock program can also be directly run locally.
 
 
 ## Language at a glance
@@ -108,7 +106,8 @@ you need:
 - `gcc`
 - `bash`
 
-Additionally, for ZX Spectrum Next builds, also install [Z88DK](https://z88dk.org/) and make `zcc` available on your `PATH`.
+Native programs are built with GCC and retro targets (initially ZX Spectrum Next `.nex`) are built with Z88DK, so 
+for ZX Spectrum Next builds, also install [Z88DK](https://z88dk.org/) and make `zcc` available on your `PATH`.
 
 ## Build the compiler
 

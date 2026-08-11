@@ -1,7 +1,7 @@
-// Keep code above the ULA and the hardware stack below UDG memory.  The old
-// 24500/24481 layout was only valid while code stayed below the stack; a larger
-// NEX could boot with its stack on top of its own CRT entry code.
-#pragma output CRT_ORG_CODE = 32768
+// Keep code above the ULA and the hardware stack below UDG memory. Code begins
+// at 0x6000 so the full RTL and its ZXN BSS pools fit below the 0xff58 stack.
+// The previous 24500/24481 layout placed the stack inside a larger NEX image.
+#pragma output CRT_ORG_CODE = 24576
 #pragma output REGISTER_SP = 65368
 
 // halt program on exit, no need to play well with basic

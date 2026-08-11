@@ -4,31 +4,47 @@
 #include <string.h>
 #ifdef __SDCC
 #define INIT_CAP_ALLOC_STACK 64
+static alloc_elem_t zxn_alloc_data[INIT_CAP_ALLOC_STACK];
+static void *zxn_alloc_persistents[INIT_CAP_ALLOC_STACK];
 #else
 #define INIT_CAP_ALLOC_STACK 1024
 #endif
 void init_stack(alloc_stack_t* alloc) {
   alloc->capacity = INIT_CAP_ALLOC_STACK;
   alloc->capacity_p = INIT_CAP_ALLOC_STACK;
+#ifdef __SDCC
+  alloc->data = zxn_alloc_data;
+  alloc->persistents = zxn_alloc_persistents;
+#else
   alloc->data = malloc(sizeof(alloc_elem_t) * INIT_CAP_ALLOC_STACK);
   alloc->persistents = malloc(sizeof(void*) * INIT_CAP_ALLOC_STACK);
+#endif
   alloc->length = 0;
   alloc->length_p = 0;
 }
 
 void kill_stack(alloc_stack_t alloc) {
+#ifndef __SDCC
   for (int i = 0; i < alloc.length; i++)
     free(alloc.data[i].ptr);
   for (int i = 0; i < alloc.length_p; i++)
     free(alloc.persistents[i]);
   free(alloc.data);
   free(alloc.persistents);
+#else
+  (void)alloc;
+#endif
 }
 
 void push_stack(alloc_stack_t* alloc, void* ptr) {
   if (alloc->length >= (int)alloc->capacity) {
+#ifdef __SDCC
+    printf("Compiler allocation stack exhausted\n");
+    exit(1);
+#else
     alloc->capacity = alloc->capacity * 2;
     alloc->data = realloc(alloc->data, alloc->capacity * sizeof(alloc_elem_t));
+#endif
   }
   alloc_elem_t pushed;
   pushed.ptr = ptr;
@@ -38,9 +54,14 @@ void push_stack(alloc_stack_t* alloc, void* ptr) {
 
 void push_persistent(alloc_stack_t* alloc, void* ptr) {
   if (alloc->length_p >= (int)alloc->capacity_p) {
+#ifdef __SDCC
+    printf("Compiler persistent allocation stack exhausted\n");
+    exit(1);
+#else
     alloc->capacity_p = alloc->capacity_p * 2;
     alloc->persistents =
         realloc(alloc->persistents, alloc->capacity_p * sizeof(void*));
+#endif
   }
   alloc->persistents[alloc->length_p++] = ptr;
 }

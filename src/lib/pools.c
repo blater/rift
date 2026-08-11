@@ -17,6 +17,15 @@ static const size_t ROCK_CLASS_SIZES[] = {
 };
 #define ROCK_NUM_CLASSES (sizeof(ROCK_CLASS_SIZES) / sizeof(ROCK_CLASS_SIZES[0]))
 
+#ifdef __SDCC
+/* The flat ZXN NEX image leaves no general-purpose z88dk malloc heap after
+ * linking the full RTL. Keep the bounded Rock pools in BSS instead. */
+#define ROCK_ZXN_BUMP_POOL_CAPACITY 2048
+#define ROCK_ZXN_LONGLIVED_POOL_CAPACITY 2048
+static char zxn_bump_pool[ROCK_ZXN_BUMP_POOL_CAPACITY];
+static char zxn_longlived_pool[ROCK_ZXN_LONGLIVED_POOL_CAPACITY];
+#endif
+
 /* Bump pool. */
 static char  *bump_base = NULL;
 static size_t bump_top  = 0;
@@ -52,6 +61,14 @@ void rock_set_oom_handler(rock_oom_handler_fn h) {
 /* ---- Init / deinit ---- */
 
 void rock_pools_init(size_t bump_capacity, size_t longlived_capacity) {
+#ifdef __SDCC
+  if (bump_capacity > sizeof(zxn_bump_pool) || longlived_capacity > sizeof(zxn_longlived_pool)) {
+    fprintf(stderr, "rock_pools: requested ZXN pool capacity exceeds static budget\n");
+    exit(1);
+  }
+  bump_base = zxn_bump_pool;
+  ll_base = zxn_longlived_pool;
+#else
   bump_base = (char *)malloc(bump_capacity);
   if (!bump_base) {
     fprintf(stderr, "rock_pools: failed to allocate %zu-byte bump pool\n",
@@ -68,6 +85,9 @@ void rock_pools_init(size_t bump_capacity, size_t longlived_capacity) {
     free(bump_base);
     exit(1);
   }
+#endif
+  bump_top = 0;
+  bump_cap = bump_capacity;
   ll_high_water = 0;
   ll_cap = longlived_capacity;
 
@@ -78,12 +98,16 @@ void rock_pools_init(size_t bump_capacity, size_t longlived_capacity) {
 }
 
 void rock_pools_deinit(void) {
+#ifndef __SDCC
   free(bump_base);
+#endif
   bump_base = NULL;
   bump_top = 0;
   bump_cap = 0;
 
+#ifndef __SDCC
   free(ll_base);
+#endif
   ll_base = NULL;
   ll_high_water = 0;
   ll_cap = 0;

@@ -534,6 +534,7 @@ generator_t new_generator(char *filename) {
   register_builtin(&res.table, "allocate_compiler_persistent", "void");
   register_builtin(&res.table, "fill_cmd_args",        "void");
   register_builtin(&res.table, "zxn_test_begin",       "void");
+  register_builtin(&res.table, "zxn_test_stage",       "void");
   register_builtin(&res.table, "zxn_test_pass",        "void");
   register_builtin(&res.table, "zxn_test_fail",        "void");
   register_builtin(&res.table, "zxn_test_finish",      "void");
@@ -2370,12 +2371,20 @@ void generate_fundef(generator_t *g, ast_t fun) {
     /* ADR-0003 §4: pool runtime init. Pool sizes are placeholders pending
      * Phase A.1 measurement; ZXN target gets smaller defaults than host. */
     if (g->target == TARGET_ZXN) {
-      fprintf(f, "rock_pools_init(7168, 3072);\n");
+      if (g->zxn_test)
+        fprintf(f, "zxn_test_stage(\"pools\");\n");
+      fprintf(f, "rock_pools_init(2048, 2048);\n");
     } else {
       fprintf(f, "rock_pools_init(4u * 1024u * 1024u, 4u * 1024u * 1024u);\n");
     }
+    if (g->zxn_test)
+      fprintf(f, "zxn_test_stage(\"compiler-stack\");\n");
     fprintf(f, "init_compiler_stack();\n");
+    if (g->zxn_test)
+      fprintf(f, "zxn_test_stage(\"arguments\");\n");
     fprintf(f, "fill_cmd_args(argc, argv);\n");
+    if (g->zxn_test)
+      fprintf(f, "zxn_test_stage(\"rtl\");\n");
     fprintf(f, "rock_rtl_init();\n");
     // Initialize any global module vars that were deferred from global scope
     for (int i = 0; i < g->deferred_module_inits.length; i++) {

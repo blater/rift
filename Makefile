@@ -6,11 +6,11 @@ LIB    = src/lib/
 BUILD  = build/
 OBJECTS = $(BUILD)alloc.o $(BUILD)ast.o $(BUILD)lexer.o $(BUILD)token.o \
           $(BUILD)parser.o $(BUILD)generator.o $(BUILD)name_table.o \
-          $(BUILD)stringview.o $(BUILD)error.o $(BUILD)typechecker.o \
+          $(BUILD)stringview.o $(BUILD)error.o $(BUILD)component_manifest.o $(BUILD)typechecker.o \
           $(BUILD)main.o
 DEPS = $(OBJECTS:.o=.d)
 
-.PHONY: all clean test-pools test-negative test-refcount test-zxn test-autolink test-memory-profile test-zxn-size
+.PHONY: all clean test-pools test-name-table test-type-method-autocast test-component-manifest test-negative test-refcount test-zxn test-autolink test-memory-profile test-zxn-size
 
 all: $(BUILD) rockc
 
@@ -36,6 +36,20 @@ $(BUILD)pools_test: test/pools_test.c $(BUILD)pools.o | $(BUILD)
 
 test-pools: $(BUILD)pools_test
 	$(BUILD)pools_test
+
+$(BUILD)name_table_test: test/name_table_test.c $(BUILD)name_table.o \
+                         $(BUILD)ast.o $(BUILD)alloc.o $(BUILD)stringview.o | $(BUILD)
+	$(CC) $(CFLAGS) -o $@ test/name_table_test.c $(BUILD)name_table.o \
+		$(BUILD)ast.o $(BUILD)alloc.o $(BUILD)stringview.o
+
+test-name-table: $(BUILD)name_table_test
+	$(BUILD)name_table_test
+
+test-type-method-autocast: rockc
+	sh test/test_type_method_autocast.sh
+
+test-component-manifest: rockc
+	bash test/test_component_manifest.sh
 
 # Phase B — negative tests for the typechecker's acyclicity rule (ADR §9.4).
 # Each test is a Rock program that MUST fail compilation with a specific

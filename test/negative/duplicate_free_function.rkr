@@ -1,0 +1,9 @@
+sub value(int first) returns int {
+  return first;
+}
+
+sub value(int second) returns int {
+  return second;
+}
+
+sub main() {}

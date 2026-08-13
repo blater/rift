@@ -1,0 +1,195 @@
+module Counter;
+
+int stored := 0;
+
+sub Counter.kind() returns int {
+  return 1;
+}
+
+sub Counter.bump(int value) returns int {
+  return value + 1;
+}
+
+int global_base := 10;
+
+record Arithmetic {
+  int unused,
+}
+
+record Owner {
+  int value,
+  int Some,
+}
+
+record Other {
+  int value,
+}
+
+record Inner {
+  int value,
+}
+
+record Outer {
+  Inner inner,
+}
+
+union Choice {
+  int Some,
+  None,
+}
+
+module lower;
+
+module FieldTool;
+
+module ParamTool;
+
+module Holder;
+FieldTool ParamTool;
+
+sub check(string description, int expected, int actual) {
+  if expected = actual then {
+    printf("PASS: ");
+    printf(description);
+    printf("\n");
+  } else {
+    printf("FAIL: ");
+    printf(description);
+    printf("\n");
+  }
+}
+
+sub main() {
+  Counter counter;
+
+  check("type and instance methods can share a name", 2, Counter.kind());
+  check("instance ABI remains distinct", 1, counter.kind());
+  check("zero-arity overload", 0, Counter.sum());
+  check("one-arity overload", 4, Counter.sum(4));
+  check("two-arity overload", 7, Counter.sum(3, 4));
+  check("record-owned type method", 15, Arithmetic.add(7, 8));
+  check("union-owned type method", 5, Choice.answer());
+  check("lowercase owner", 42, lower.answer());
+  check("visible global", 15, Counter.add_base(5));
+  check("explicit instance receiver", 10, Counter.bump_value(counter, 9));
+  check("type result chains to instance method", 1, Counter.make().kind());
+  check("recursive type method", 4, Counter.countdown(4));
+  check("type method named main", 7, Counter.main());
+  check("instance method named main", 8, counter.main());
+
+  Other other := { value := 17 };
+  check("qualified field in type method", 17, Owner.read(other));
+  Other[] others;
+  append(others, other);
+  check("qualified array field in type method", 17,
+        Owner.read_first(others));
+
+  Choice choice := Some(3);
+  check("union selector is not an implicit field", 1, Owner.classify(choice));
+
+  Inner inner := { value := 0 };
+  Outer outer := { inner := inner };
+  Outer Outer := { inner := inner };
+  check("value spelling does not mask chained field type", 0,
+        outer.inner.read());
+
+  Holder holder;
+  ParamTool param_tool;
+  check("implicit module field shadows equal-spelled type", 11,
+        holder.field_kind());
+  check("parameter shadows equal-spelled module field", 22,
+        holder.parameter_kind(param_tool));
+}
+
+static sub Counter.kind() returns int {
+  return 2;
+}
+
+static sub Counter.sum() returns int {
+  return 0;
+}
+
+static sub Counter.sum(int a) returns int {
+  return a;
+}
+
+static sub Counter.sum(int a, int b) returns int {
+  return a + b;
+}
+
+static sub Arithmetic.add(int a, int b) returns int {
+  return a + b;
+}
+
+static sub Choice.answer() returns int {
+  return 5;
+}
+
+static sub lower.answer() returns int {
+  return 42;
+}
+
+static sub Counter.add_base(int value) returns int {
+  return global_base + value;
+}
+
+static sub Counter.bump_value(Counter counter, int value) returns int {
+  return counter.bump(value);
+}
+
+static sub Counter.make() returns Counter {
+  Counter result;
+  return result;
+}
+
+static sub Counter.countdown(int value) returns int {
+  if value = 0 then return 0;
+  return 1 + Counter.countdown(value - 1);
+}
+
+static sub Counter.main() returns int {
+  return 7;
+}
+
+sub Counter.main() returns int {
+  return 8;
+}
+
+static sub Owner.read(Other other) returns int {
+  return other.value;
+}
+
+static sub Owner.read_first(Other[] others) returns int {
+  return others[0].value;
+}
+
+static sub Owner.classify(Choice choice) returns int {
+  match choice {
+    Some: return 1;
+    default: return 0;
+  }
+}
+
+sub Inner.read() returns int {
+  return this.value;
+}
+
+sub FieldTool.kind() returns int {
+  return 11;
+}
+
+sub ParamTool.kind() returns int {
+  return 22;
+}
+
+static sub ParamTool.kind() returns int {
+  return 33;
+}
+
+sub Holder.field_kind() returns int {
+  return ParamTool.kind();
+}
+
+sub Holder.parameter_kind(ParamTool ParamTool) returns int {
+  return ParamTool.kind();
+}

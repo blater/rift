@@ -15,6 +15,7 @@ RUN=0
 ZXN_TEST=0
 MEMORY_PROFILE=""
 RTL_MODE="auto"
+COMPONENT_MANIFEST="${ROCK_ROOT:-}/src/lib/components.manifest"
 ZXN_STACK_TOP=65368
 ZXN_STACK_RESERVE=2048
 ZXN_BUMP_POOL_CAPACITY=1024
@@ -29,59 +30,7 @@ if [ $# -eq 0 ]; then
   usage; exit 1
 fi
 
-# ---------------------------------------------------------------------------
-# Rock RTL manifest
-# ---------------------------------------------------------------------------
-# To add a new RTL component:
-#   1. Append its .c file to RTL_C_SRCS.
-#   2. If it has Z80 assembly, append its .asm file to RTL_ZXN_ASM.
-#   3. Register builtins and emit the #include in src/generator.c.
-# See wikiroot/pages/rtl/rtl-overview.md for full conventions.
-# ---------------------------------------------------------------------------
-
-# Core runtime — always linked on both host and ZXN targets.
-RTL_CORE_SRCS="\
-  $RT/lib/pools.c \
-  $RT/lib/print_bytes.c \
-  $RT/lib/fundefs.c \
-  $RT/lib/fundefs_internal.c \
-  $RT/lib/asm_interop.c \
-  $RT/lib/host_caps.c \
-  $RT/lib/zxn_test.c"
-
-# RTL component C shims — one line per component.
-RTL_C_SRCS="\
-  $RT/lib/keyboard.c \
-  $RT/lib/border.c \
-  $RT/lib/ink_paper.c \
-  $RT/lib/cls.c \
-  $RT/lib/time.c \
-  $RT/lib/sound.c \
-  $RT/lib/input.c \
-  $RT/lib/print_at.c \
-  $RT/lib/plot.c \
-  $RT/lib/draw.c \
-  $RT/lib/polyline.c \
-  $RT/lib/circle.c \
-  $RT/lib/fill.c \
-  $RT/lib/triangle.c \
-  $RT/lib/random.c \
-  $RT/lib/nextreg.c \
-  $RT/lib/helpers.c \
-  $RT/lib/fmath.c"
-
-# Host-only (gcc) extra sources — e.g. third-party single-header impl TUs.
-RTL_HOST_SRCS="\
-  $RT/lib/host/termbox2_impl.c"
-
-# RTL component Z80 assembly — one line per component, ZXN target only.
-RTL_ZXN_ASM="\
-  $RT/lib/zxn/keyboard.asm"
-
-# The allocator's assembly experiment remains version-controlled but is not
-# linked while its target timing/correctness work is under review.  The C
-# magazine implementation is the supported ZX Next allocator path.
-RTL_ZXN_CORE_ASM=""
+COMPONENT_MANIFEST="$RT/lib/components.manifest"
 
 
 transpile() {
@@ -90,13 +39,61 @@ transpile() {
   [ -n "$auto_cast" ] && extra="--auto-cast"
   [ "$zxn_test" = "1" ] && extra="$extra --zxn-test"
   [ -n "$memory_profile" ] && extra="$extra --memory-profile=$memory_profile"
-  "$ROCK_ROOT/rockc" "${source_abs}" "${exe_abs}" "--target=${target}" $extra
+  [ "$RTL_MODE" = "all" ] && extra="$extra --components=all"
+  "$ROCK_ROOT/rockc" "${source_abs}" "${exe_abs}" "--target=${target}" \
+    "--component-manifest=${COMPONENT_MANIFEST}" $extra
+}
+
+append_manifest_paths() {
+  local current="$1" paths="$2" item
+  [ -z "$paths" ] && { printf '%s' "$current"; return; }
+  local old_ifs="$IFS"
+  IFS=','
+  for item in $paths; do
+    case "$item" in
+      ''|/*|*..*|*[!A-Za-z0-9_./-]*)
+        echo "invalid component source path '$item'" >&2
+        exit 1
+        ;;
+    esac
+    case " $current " in
+      *" $RT/lib/$item "*) ;;
+      *) current="$current $RT/lib/$item" ;;
+    esac
+  done
+  IFS="$old_ifs"
+  printf '%s' "$current"
+}
+
+manifest_component_field() {
+  local id="$1" column="$2"
+  awk -F'|' -v id="$id" -v column="$column" \
+    '$1 == "component" && $2 == id { print $column; found=1; exit }
+     END { if (!found) exit 1 }' "$COMPONENT_MANIFEST"
+}
+
+selected_component_ids() {
+  local sidecar="$1"
+  if [ "$RTL_MODE" = "all" ]; then
+    awk -F'|' '$1 == "component" { print $2 }' "$COMPONENT_MANIFEST"
+    return
+  fi
+  if [ ! -f "$sidecar" ] || [ "$(sed -n '1p' "$sidecar")" != "ROCK_COMPONENTS_V1" ]; then
+    echo "build failed: missing or invalid compiler component output $sidecar" >&2
+    exit 1
+  fi
+  sed -n '2,$p' "$sidecar" | sed '/^@/d'
+}
+
+selected_profile() {
+  local sidecar="$1"
+  sed -n 's/^@profile=//p' "$sidecar"
 }
 
 build() {
   local target="$1" exe_abs="$2" sourcefile="$3"
-  local LIB_SRCS="${RTL_CORE_SRCS} ${RTL_C_SRCS}"
-  local ZXN_ASM_SRCS="${RTL_ZXN_CORE_ASM} ${RTL_ZXN_ASM}"
+  local LIB_SRCS=""
+  local ZXN_ASM_SRCS=""
   local zxn_test_define=""
   local allocator_stats_define=""
   local pool_fast_define=""
@@ -105,108 +102,66 @@ build() {
   local zxn_startup=1
   local zxn_tiny_core=0
   local generated_source="${exe_abs}.c"
+  local component_output="${exe_abs}.components"
   local generated_profile=""
+  local selected_ids=""
 
-  IFS= read -r generated_profile < "$generated_source" || true
+  selected_ids="$(selected_component_ids "$component_output")"
+
+  generated_profile="$(selected_profile "$component_output")"
   if [ "$target" = "zxn" ] && [ "$RTL_MODE" = "auto" ]; then
     case "$generated_profile" in
-      '/* ROCK_PROFILE:ZXN_TINY_CORE:STARTUP=31 */')
+      tiny-31)
         zxn_tiny_core=1
         zxn_startup=31
         ;;
-      '/* ROCK_PROFILE:ZXN_TINY_CORE:STARTUP=0 */')
+      tiny-0)
         zxn_tiny_core=1
         zxn_startup=0
         ;;
-      '/* ROCK_PROFILE:ZXN_TINY_CORE:STARTUP=1 */')
+      tiny-1)
         zxn_tiny_core=1
         zxn_startup=1
         ;;
     esac
+    if [ "$(printf '%s\n' "$selected_ids" | sed '/^core$/d;/^tiny_print$/d;/^tiny_test$/d;/^$/d' | wc -l | tr -d ' ')" -gt 0 ]; then
+      zxn_tiny_core=0
+      zxn_startup=1
+    fi
     [ "$zxn_tiny_core" = "1" ] && tiny_core_define="-DROCK_ZXN_TINY_CORE"
   fi
 
-  # The complete graphical RTL is useful to developers but too large to fit
-  # together with a safe stack and application data in the ZXN's flat 64 KiB
-  # address space. Generated C names every runtime call, so link only the
-  # components a ZXN program actually calls. `--rtl=all` remains available
-  # for hand-written embedded C that cannot be found by this scan.
-  if [ "$target" = "zxn" ] && [ "$RTL_MODE" = "auto" ]; then
-    if [ "$zxn_tiny_core" = "1" ]; then
-      LIB_SRCS=""
-      if grep -Eq '(^|[^[:alnum:]_])rock_print_bytes[[:space:]]*\(' "$generated_source"; then
-        LIB_SRCS="$RT/lib/print_bytes.c"
-      fi
-      if grep -Eq '(^|[^[:alnum:]_])zxn_test_[[:alnum:]_]*[[:space:]]*\(' "$generated_source"; then
-        LIB_SRCS="$LIB_SRCS $RT/lib/zxn_test.c"
-      fi
-    else
-      LIB_SRCS="${RTL_CORE_SRCS}"
-    fi
-    ZXN_ASM_SRCS="$RTL_ZXN_CORE_ASM"
-    if grep -Eq '(^|[^[:alnum:]_])(scan_keyboard|key_pressed)[[:space:]]*\(' "$generated_source"; then
-      LIB_SRCS="$LIB_SRCS $RT/lib/keyboard.c"
-      ZXN_ASM_SRCS="$ZXN_ASM_SRCS $RT/lib/zxn/keyboard.asm"
-    fi
-    if grep -Eq '(^|[^[:alnum:]_])(border|border_get)[[:space:]]*\(' "$generated_source"; then
-      LIB_SRCS="$LIB_SRCS $RT/lib/border.c"
-    fi
-    if grep -Eq '(^|[^[:alnum:]_])(ink|paper|bright|flash|inverse|over)[[:space:]]*\(' "$generated_source"; then
-      LIB_SRCS="$LIB_SRCS $RT/lib/ink_paper.c"
-    fi
-    if grep -Eq '(^|[^[:alnum:]_])cls[[:space:]]*\(' "$generated_source"; then
-      LIB_SRCS="$LIB_SRCS $RT/lib/cls.c"
-    fi
-    if grep -Eq '(^|[^[:alnum:]_])rock_sleep[[:space:]]*\(' "$generated_source"; then
-      LIB_SRCS="$LIB_SRCS $RT/lib/time.c"
-    fi
-    if grep -Eq '(^|[^[:alnum:]_])beep[[:space:]]*\(' "$generated_source"; then
-      LIB_SRCS="$LIB_SRCS $RT/lib/sound.c"
-    fi
-    if grep -Eq '(^|[^[:alnum:]_])(inkey|keypress)[[:space:]]*\(' "$generated_source"; then
-      LIB_SRCS="$LIB_SRCS $RT/lib/input.c"
-    fi
-    if grep -Eq '(^|[^[:alnum:]_])print_at[[:space:]]*\(' "$generated_source"; then
-      LIB_SRCS="$LIB_SRCS $RT/lib/print_at.c"
-    fi
-    if grep -Eq '(^|[^[:alnum:]_])(plot|point|draw|polyline|circle|fill|triangle|trianglefill)[[:space:]]*\(' "$generated_source"; then
-      LIB_SRCS="$LIB_SRCS $RT/lib/plot.c"
-    fi
-    if grep -Eq '(^|[^[:alnum:]_])(draw|polyline|fill|triangle|trianglefill)[[:space:]]*\(' "$generated_source"; then
-      LIB_SRCS="$LIB_SRCS $RT/lib/draw.c"
-    fi
-    if grep -Eq '(^|[^[:alnum:]_])polyline[[:space:]]*\(' "$generated_source"; then
-      LIB_SRCS="$LIB_SRCS $RT/lib/polyline.c"
-    fi
-    if grep -Eq '(^|[^[:alnum:]_])circle[[:space:]]*\(' "$generated_source"; then
-      LIB_SRCS="$LIB_SRCS $RT/lib/circle.c"
-    fi
-    if grep -Eq '(^|[^[:alnum:]_])fill[[:space:]]*\(' "$generated_source"; then
-      LIB_SRCS="$LIB_SRCS $RT/lib/fill.c"
-    fi
-    if grep -Eq '(^|[^[:alnum:]_])(triangle|trianglefill)[[:space:]]*\(' "$generated_source"; then
-      LIB_SRCS="$LIB_SRCS $RT/lib/triangle.c"
-    fi
-    if grep -Eq '(^|[^[:alnum:]_])(randomize|random_byte|random_word)[[:space:]]*\(' "$generated_source"; then
-      LIB_SRCS="$LIB_SRCS $RT/lib/random.c"
-    fi
-    if grep -Eq '(^|[^[:alnum:]_])(next_reg_set|next_reg_get|cpu_speed_set|cpu_speed_get|mmu_set)[[:space:]]*\(' "$generated_source"; then
-      LIB_SRCS="$LIB_SRCS $RT/lib/nextreg.c"
-    fi
-    if grep -Eq '(^|[^[:alnum:]_])(odd|even|hi|lo|swap|upcase|locase|abs_int|abs_word)[[:space:]]*\(' "$generated_source"; then
-      LIB_SRCS="$LIB_SRCS $RT/lib/helpers.c"
-    fi
-    if grep -Eq '(^|[^[:alnum:]_])(fsin|fcos|fsqrt|fabs_float|fpi)[[:space:]]*\(' "$generated_source"; then
-      LIB_SRCS="$LIB_SRCS $RT/lib/fmath.c"
-    fi
-    echo "ZXN RTL: selected components from generated program"
+  if ! { [ "$target" = "zxn" ] && [ "$RTL_MODE" = "auto" ] &&
+         [ "$zxn_tiny_core" = "1" ]; }; then
+    local component_id c_sources asm_sources c_column asm_column
+    if [ "$target" = "gcc" ]; then c_column=5; asm_column=7; else c_column=6; asm_column=8; fi
+    while IFS= read -r component_id; do
+      case "$component_id" in
+        ''|*[!a-z0-9_]*) echo "invalid component ID '$component_id'" >&2; exit 1;;
+      esac
+      c_sources=$(manifest_component_field "$component_id" "$c_column") || {
+        echo "unknown selected component '$component_id'" >&2; exit 1; }
+      asm_sources=$(manifest_component_field "$component_id" "$asm_column") || exit 1
+      LIB_SRCS=$(append_manifest_paths "$LIB_SRCS" "$c_sources")
+      ZXN_ASM_SRCS=$(append_manifest_paths "$ZXN_ASM_SRCS" "$asm_sources")
+    done <<< "$selected_ids"
+  else
+    local component_id c_sources asm_sources
+    while IFS= read -r component_id; do
+      [ -z "$component_id" ] && continue
+      c_sources=$(manifest_component_field "$component_id" 6) || exit 1
+      asm_sources=$(manifest_component_field "$component_id" 8) || exit 1
+      LIB_SRCS=$(append_manifest_paths "$LIB_SRCS" "$c_sources")
+      ZXN_ASM_SRCS=$(append_manifest_paths "$ZXN_ASM_SRCS" "$asm_sources")
+    done <<< "$selected_ids"
   fi
+  echo "RTL components: $(printf '%s\n' "$selected_ids" | tr '\n' ' ')"
   echo "compile $sourcefile -> $exe_abs"
 
   if [ "$target" = "gcc" ]; then
     gcc -Wall -Wno-unused-variable \
       -I "${RT}/lib" -I "${RT}/ext/lib" \
-      -o "${exe_abs}" "${exe_abs}.c" ${LIB_SRCS} ${RTL_HOST_SRCS} -lm
+      -o "${exe_abs}" "${exe_abs}.c" ${LIB_SRCS} -lm
   else
     nex_file="${exe_abs%%.*}.nex"
     [ "$ZXN_TEST" = "1" ] && zxn_test_define="-DROCK_ZXN_TEST"
@@ -386,6 +341,7 @@ build "$target" "$exe_abs" "$sourcefile"
 
 if [ $DEBUG -eq 0 ]; then
   rm -f "${exe_abs}.c"
+  rm -f "${exe_abs}.components"
 else
   clang-format -i "${exe_abs}.c"
 fi

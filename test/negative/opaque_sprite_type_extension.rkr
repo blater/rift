@@ -1,0 +1,6 @@
+static sub Sprite.extra() returns byte {
+  return 0;
+}
+
+sub main() {
+}

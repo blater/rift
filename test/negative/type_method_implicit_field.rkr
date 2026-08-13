@@ -1,0 +1,10 @@
+module Tool;
+
+int value;
+
+static sub Tool.read() returns int {
+  return value;
+}
+
+sub main() {
+}

@@ -67,6 +67,7 @@ typedef enum token_type_t {
   TOK_ARR_DECL,
   TOK_OPEN_BRACKET,
   TOK_CLOSE_BRACKET,
+  TOK_STATIC,
   TOK_SUB,
   TOK_FOR,
   TOK_TO,

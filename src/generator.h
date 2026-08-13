@@ -8,6 +8,7 @@
 #define GENERATOR_H
 
 #include "ast.h"
+#include "component_manifest.h"
 #include "name_table.h"
 #include <stdio.h>
 
@@ -63,9 +64,24 @@ typedef struct generator_t {
   int lit_counter;            // ADR-0003 §7.1: unique id for each emitted static __string_block
   ast_t current_fundef;       // ADR-0003 §10.3: enclosing fundef during body emission (NULL otherwise)
   int bump_mark_counter;
+  component_manifest *components;
+  unsigned char direct_components[COMPONENT_MANIFEST_MAX_COMPONENTS];
+  unsigned char closed_components[COMPONENT_MANIFEST_MAX_COMPONENTS];
+  int component_order[COMPONENT_MANIFEST_MAX_COMPONENTS];
+  int component_order_count;
+  char *component_output_path;
+  int in_main_body;
+  int main_needs_epilogue;
+  int select_all_components;
+  unsigned char opaque_value_used[COMPONENT_MANIFEST_MAX_INTERFACES];
+  unsigned char opaque_array_used[COMPONENT_MANIFEST_MAX_INTERFACES];
+  int zxn_tiny_eligible;
+  int zxn_tiny_uses_stdout;
+  int zxn_tiny_simple_stdout;
 } generator_t;
 
-generator_t new_generator(char *filename);
+generator_t new_generator(char *filename, const char *output_base,
+                          component_manifest *components);
 void kill_generator(generator_t g);
 
 void transpile(generator_t *g, ast_t program);

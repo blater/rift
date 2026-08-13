@@ -1,0 +1,6 @@
+sub Sprite_index(Sprite sprite, byte index) returns byte {
+  return 0;
+}
+
+sub main() {
+}

@@ -1,0 +1,4 @@
+sub main() {
+  Sprite player;
+  byte slot := player._slot;
+}

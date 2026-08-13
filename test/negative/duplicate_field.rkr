@@ -1,0 +1,6 @@
+record Pair {
+  int value,
+  int value,
+}
+
+sub main() {}

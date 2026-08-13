@@ -1,0 +1,7 @@
+sub inspect(Sprite sprite) returns byte {
+  return 0;
+}
+
+sub main() {
+  printf("PASS: opaque type-only declaration\n");
+}

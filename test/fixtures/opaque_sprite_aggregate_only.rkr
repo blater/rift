@@ -1,0 +1,16 @@
+record Holder {
+  Sprite sprite
+}
+
+union MaybeSprite {
+  Sprite Some,
+  None
+}
+
+sub inspect(Holder holder, MaybeSprite maybe) returns byte {
+  return 0;
+}
+
+sub main() {
+  printf("PASS: opaque aggregate declarations\n");
+}

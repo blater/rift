@@ -1,0 +1,11 @@
+sub main() {
+  call_later();
+  return;
+}
+
+sub call_later() {
+  later_use();
+  string result := native_value(1);
+  Probe probe;
+  byte accepted := probe.accept(concat("native-", "string"));
+}

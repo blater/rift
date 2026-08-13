@@ -64,3 +64,14 @@ fi
 echo "PASS: RTL auto-linker resolved keyboard, nextreg, random, helpers, and draw/plot"
 echo "PASS: --rtl=auto code is $AUTO_CODE_BYTES bytes (BSS end 0x$AUTO_BSS_END)"
 echo "PASS: --rtl=all code is $ALL_CODE_BYTES bytes (BSS end 0x$ALL_BSS_END)"
+
+SPRITE_SOURCE="$ROOT/test/fixtures/opaque_sprite_method_only.rkr"
+if ! "$ROOT/rock" --target=zxn "$SPRITE_SOURCE" "$TMPDIR_AUDIT/sprite.exe" \
+    >"$TMPDIR_AUDIT/sprite.log" 2>&1; then
+  cat "$TMPDIR_AUDIT/sprite.log"
+  echo "FAIL: auto-selected Sprite did not link for ZXN" >&2
+  exit 1
+fi
+grep -q 'RTL components: .*core sprite' "$TMPDIR_AUDIT/sprite.log"
+grep -q '/lib/sprite.c' "$TMPDIR_AUDIT/sprite.log"
+echo "PASS: opaque Sprite auto-links on ZXN"

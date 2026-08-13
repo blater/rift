@@ -1,0 +1,5 @@
+static sub Missing.reset() {
+}
+
+sub main() {
+}

@@ -1,0 +1,47 @@
+include "Assert.rkr"
+
+Assert as;
+
+@embed c
+  word opaque_pool_used(void) { return (word)rock_longlived_used(); }
+@end c
+
+sub retain_sprite(Sprite sprite) returns Sprite {
+  return sprite;
+}
+
+sub make_sprite() returns Sprite {
+  Sprite result;
+  return result;
+}
+
+sub main() {
+  Sprite player;
+  as.AssertEQ("new sprite binds an index", 0, player.index(1));
+  as.AssertEQ("same index is idempotent", 0, player.index(1));
+  as.AssertEQ("rebind is rejected", 2, player.index(2));
+  as.AssertEQ("position stages both coordinates", 0, player.position(10, 20));
+  as.AssertEQ("pattern stages asset and frame", 0, player.pattern(1, 4));
+  as.AssertEQ("palette validates offset", 0, player.palette(14));
+  as.AssertEQ("mirror stages both axes", 0, player.mirror(1, 0));
+  as.AssertEQ("rotate stages quarter turns", 0, player.rotate(3));
+  as.AssertEQ("scale stages both factors", 0, player.scale(2, 4));
+  as.AssertEQ("show commits visibility", 0, player.show());
+  as.AssertEQ("hide commits invisibility", 0, player.hide());
+  as.AssertEQ("type transparency call", 0, Sprite.transparency(7));
+  as.AssertEQ("type hideall call", 0, Sprite.hideall());
+  as.AssertEQ("status is clear on read", 0, Sprite.status());
+
+  Sprite retained := retain_sprite(player);
+  Sprite[] sprites;
+  append(sprites, retained);
+  Sprite selected := get(sprites, 0);
+  as.AssertEQ("opaque array preserves handle", 0, selected.position(319, 255));
+  Sprite popped := pop(sprites);
+  as.AssertEQ("opaque array pop transfers handle", 0, popped.hide());
+
+  word before := opaque_pool_used();
+  as.AssertEQ("produced native receiver call", 0, make_sprite().index(3));
+  as.AssertEQ("produced native receiver is released", before,
+              opaque_pool_used());
+}

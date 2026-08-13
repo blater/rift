@@ -1,0 +1,18 @@
+sub show() returns int {
+  return 7;
+}
+
+sub border(byte value) returns int {
+  return value + 1;
+}
+
+sub sleep(word value) returns int {
+  return value + 2;
+}
+
+sub main() {
+  printf("PASS: native names can be shadowed\n");
+  show();
+  border(2);
+  sleep(3);
+}

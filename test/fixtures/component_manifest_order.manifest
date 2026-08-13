@@ -1,0 +1,10 @@
+# Minimal semantic manifest used to prove whole-program collection and order.
+component|alpha||pools.h,fundefs.h,fundefs_internal.h,typedefs.h,host_caps.h,zxn_test.h,component_lifecycle.h|||||alpha_init|alpha_shutdown|always
+component|beta|alpha||||||beta_init|beta_shutdown|
+component|gamma|alpha||||||gamma_init|gamma_shutdown|
+component|top|beta,gamma||||||top_init|top_shutdown|
+builtin|later_use|top|void||later_native|
+builtin|native_value|top|int||native_value_zero|
+builtin|native_value|top|string|int|native_value_one|
+opaque|Probe|alpha|Probe_new|Probe_new
+method|Probe|instance|accept|alpha|byte|string|Probe_accept|

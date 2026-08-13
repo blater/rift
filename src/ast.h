@@ -47,6 +47,13 @@ typedef struct ast_arr_index ast_arr_index;
 typedef struct ast_embed ast_embed;
 typedef struct ast_method_call ast_method_call;
 
+typedef enum method_kind_t {
+  METHOD_NONE,
+  METHOD_INSTANCE,
+  METHOD_ARRAY_INSTANCE,
+  METHOD_TYPE_LEVEL,
+} method_kind_t;
+
 struct ast_arr_index {
   ast_t array;              // array identifier expression
   ast_t index;              // index expression
@@ -83,23 +90,30 @@ struct ast_identifier {
 struct ast_fundef {
   token_t name;
   token_t type_name;   // receiver type for method declarations (e.g. "string")
-  int is_method;       // 1 when declared as "sub Type.method(...)"
-  int is_array_method; // 1 when declared as "sub Type[].method(...)"
+  method_kind_t method_kind;
   token_array_t args;
   ast_array_t types;
   ast_t body;
   ast_t ret_type;
+  char *component_id;       // manifest owner for native interfaces, else NULL
+  char *emitted_c_name;     // native symbol override, else NULL
 };
 
 struct ast_method_call {
   ast_t receiver;      // any expression — identifier, funcall, arr_index, etc.
   token_t method;      // method name token
   ast_array_t args;    // call args, NOT including receiver
+  int is_resolved;
+  method_kind_t resolved_kind;
+  string_view resolved_owner;
+  ast_t resolved_target;
+  char *resolved_c_name;
 };
 
 struct ast_funcall {
   token_t name;
   ast_array_t args;
+  ast_t resolved_target;
 };
 
 struct ast_ret {

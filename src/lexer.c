@@ -1,4 +1,5 @@
 #include "lexer.h"
+#include "error.h"
 #include "lib/alloc.h"
 #include "stringview.h"
 #include "token.h"
@@ -455,6 +456,12 @@ token_t step_lexer(lexer_t *l) {
     res.embed_body = NULL;
     res.embed_lang = NULL;
     lexer_consume_n(l, length);
+  }
+  if (res.type == TOK_IDENTIFIER && res.lexeme.length >= 9 &&
+      strncmp(res.lexeme.data, "rock__tm_", 9) == 0) {
+    error(res.filename, res.line, res.col,
+          "identifiers beginning with 'rock__tm_' are reserved by the compiler");
+    exit(1);
   }
   return res;
 }

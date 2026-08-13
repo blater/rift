@@ -1,4 +1,5 @@
 #include "lib/alloc.h"
+#include "component_manifest.h"
 #include "error.h"
 #include "generator.h"
 #include "lexer.h"
@@ -9,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <limits.h>
 
 // #include "generator.h"
 
@@ -20,6 +22,7 @@ void usage(char *name) {
   printf("\t--auto-cast\t\tWrap int args with (byte)/(word)/(dword) when callee param is narrower\n");
   printf("\t--zxn-test\t\tEmit ZXN emulator test result markers\n");
   printf("\t--memory-profile=zxn\tUse ZXN's 1 KiB/6 KiB pools on a host build\n");
+  printf("\t--component-manifest=PATH\tRuntime component/interface manifest\n");
   // printf("\t%s [flags] <input file> [output file] [flags]\n", name);
   // printf("Possible flags:\n");
   // printf("\t-t:\t\tPrints the ast\n");
@@ -40,6 +43,8 @@ int main(int argc, char *argv[]) {
   int auto_cast = 0;
   int zxn_test = 0;
   int zxn_memory_profile = 0;
+  int select_all_components = 0;
+  char *manifest_path = NULL;
 
   for (int i = 1; i < argc; i++) {
     char *arg = argv[i];
@@ -67,6 +72,12 @@ int main(int argc, char *argv[]) {
       }
       else if (strcmp(arg, "--memory-profile=zxn") == 0) {
         zxn_memory_profile = 1;
+      }
+      else if (strncmp(arg, "--component-manifest=", 21) == 0) {
+        manifest_path = arg + 21;
+      }
+      else if (strcmp(arg, "--components=all") == 0) {
+        select_all_components = 1;
       }
       //  else if (*(arg + 1) == 't' && !print_tree)
       //   print_tree = 1;
@@ -96,6 +107,35 @@ int main(int argc, char *argv[]) {
   if (output == NULL)
     output = "out";
 
+  char default_manifest[PATH_MAX];
+  if (manifest_path == NULL) {
+    char executable[PATH_MAX];
+    if (realpath(argv[0], executable) == NULL) {
+      fprintf(stderr, "error: cannot resolve compiler executable '%s'\n", argv[0]);
+      return 1;
+    }
+    char *slash = strrchr(executable, '/');
+    if (slash == NULL) {
+      fprintf(stderr, "error: compiler executable has no directory\n");
+      return 1;
+    }
+    *slash = '\0';
+    int written = snprintf(default_manifest, sizeof(default_manifest),
+                           "%s/src/lib/components.manifest", executable);
+    if (written < 0 || written >= (int)sizeof(default_manifest)) {
+      fprintf(stderr, "error: default component manifest path is too long\n");
+      return 1;
+    }
+    manifest_path = default_manifest;
+  }
+  component_manifest *components = load_component_manifest(manifest_path);
+  parser_reset_standard_types();
+  for (int i = 0; i < components->interface_count; i++) {
+    component_interface_spec *entry = &components->interfaces[i];
+    if (entry->kind == COMPONENT_OPAQUE)
+      parser_register_standard_module_type(entry->owner);
+  }
+
   input = get_abs_path(input, NULL);
 
   lexer_t l = new_lexer(input);
@@ -118,7 +158,7 @@ int main(int argc, char *argv[]) {
 
   char *cout = allocate_compiler_persistent(strlen(output) + 3);
   sprintf(cout, "%s.c", output);
-  generator_t g = new_generator(cout);
+  generator_t g = new_generator(cout, output, components);
   if (target_zxn) g.target = TARGET_ZXN;
   if (zxn_test && !target_zxn) {
     printf("--zxn-test requires --target=zxn\n");
@@ -128,6 +168,7 @@ int main(int argc, char *argv[]) {
   g.zxn_test = zxn_test;
   g.zxn_memory_profile = zxn_memory_profile;
   g.auto_cast = auto_cast;
+  g.select_all_components = select_all_components;
   transpile(&g, p.prog);
   kill_generator(g);
 

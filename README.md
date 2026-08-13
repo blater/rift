@@ -78,6 +78,39 @@ sub main() {
   }
 ```
 
+#### Type-level methods
+
+Use `static sub Type.method(...)` for behaviour owned by a type rather than an
+instance. The declaration receives no implicit `this`; callers use the type
+name directly.
+
+```rock
+  module Sprites;
+
+  static sub Sprites.hideall() {
+    // component-wide work
+  }
+
+  sub main() {
+    Sprites.hideall();
+  }
+```
+
+Standard opaque interfaces are preloaded by the compiler, so applications do
+not repeat a declaration. They expose methods but never their C layout:
+
+```rock
+Sprite player;
+player.index(1);
+player.position(10, 20);
+player.show();
+Sprite.hideall();
+```
+
+Runtime components are selected from resolved calls through
+`src/lib/components.manifest`; the same dependency closure drives host and ZX
+Next builds.
+
 #### Tagged unions and match
 ```rock
   union Token {

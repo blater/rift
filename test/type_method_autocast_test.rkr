@@ -1,0 +1,15 @@
+module Casts;
+
+static sub Casts.narrow(byte value) returns byte {
+  return value;
+}
+
+sub Casts.instance_narrow(byte value) returns byte {
+  return value;
+}
+
+sub main() {
+  Casts casts;
+  byte first := Casts.narrow(1 + 2);
+  byte second := casts.instance_narrow(3 + 4);
+}

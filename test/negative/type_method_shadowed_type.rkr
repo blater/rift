@@ -1,0 +1,9 @@
+module Tool;
+
+static sub Tool.reset() {
+}
+
+sub main() {
+  Tool Tool;
+  Tool.reset();
+}

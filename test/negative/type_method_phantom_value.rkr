@@ -1,0 +1,13 @@
+record Box {
+  int value,
+}
+
+sub Box.ping() returns int {
+  return this.value;
+}
+
+sub phantom(Box phantom) {}
+
+sub main() {
+  phantom.ping();
+}

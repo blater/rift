@@ -13,12 +13,21 @@
 #define INIT_NT_CAP 1024
 
 typedef enum nt_kind {
+  NT_NOT_FOUND,
   NT_FUN,
   NT_VAR,
   NT_BUILTIN_TYPE,
   NT_USER_TYPE,
+  NT_OPAQUE_TYPE,
   NT_ENUM_VARIANT,
 } nt_kind;
+
+typedef struct nt_lookup_t {
+  int found;
+  nt_kind kind;
+  ast_t ref;
+  int scope;
+} nt_lookup_t;
 
 typedef struct name_table_t {
   nt_kind *kinds;
@@ -31,7 +40,15 @@ typedef struct name_table_t {
 } name_table_t;
 
 ast_t get_ref(string_view name, name_table_t table);
+ast_t get_ref_by_kind(string_view name, nt_kind kind, name_table_t table);
 nt_kind get_nt_kind(string_view name, name_table_t table);
+nt_lookup_t lookup_nt(string_view name, name_table_t table);
+nt_lookup_t lookup_nt_by_kind(string_view name, nt_kind kind,
+                              name_table_t table);
+int has_nt_in_current_scope(string_view name, nt_kind kind,
+                            name_table_t table);
+int push_nt_unique(name_table_t *table, string_view name, nt_kind kind,
+                   ast_t ref);
 void new_nt_scope(name_table_t *table);
 void end_nt_scope(name_table_t *table);
 void reallocate_table(name_table_t *table);

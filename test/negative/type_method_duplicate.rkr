@@ -1,0 +1,10 @@
+module Tool;
+
+static sub Tool.reset(int value) {
+}
+
+static sub Tool.reset(byte value) {
+}
+
+sub main() {
+}

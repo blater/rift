@@ -1,0 +1,8 @@
+module Tool;
+
+sub Tool.reset() {
+}
+
+sub main() {
+  Tool.reset();
+}

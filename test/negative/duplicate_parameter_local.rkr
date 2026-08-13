@@ -1,0 +1,5 @@
+sub sample(int value) {
+  int value := 0;
+}
+
+sub main() {}

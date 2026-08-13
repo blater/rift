@@ -17,6 +17,16 @@ int includes_num = 0;
 // Registry of module type names (for synthesize_default)
 static char *module_type_names[256];
 static int module_type_count = 0;
+static void register_module_type(string_view name);
+
+void parser_reset_standard_types(void) { module_type_count = 0; }
+
+void parser_register_standard_module_type(const char *name) {
+  string_view view = sv_from_cstr((char *)name);
+  for (int i = 0; i < module_type_count; i++)
+    if (svcmp(view, sv_from_cstr(module_type_names[i])) == 0) return;
+  register_module_type(view);
+}
 
 static void register_module_type(string_view name) {
   if (module_type_count >= 256) {
@@ -36,6 +46,7 @@ static int is_module_typename(string_view name) {
 
 
 ast_t parse_expression(parser_t *p);
+ast_t parse_record_expression(parser_t *p);
 ast_t parse_type(parser_t *p);
 ast_t parse_fundef(parser_t *p);
 static int is_new_style_vardef(parser_t p);
@@ -175,7 +186,15 @@ ast_t parse_assign(parser_t *p) {
     exit(1);
   }
   consume_token(p);
-  ast_t expr = parse_expression(p);
+  ast_t expr;
+  if (peek_type(*p) == TOK_OPEN_BRACE) {
+    consume_token(p);
+    expr = parse_record_expression(p);
+    expect(*p, TOK_CLOSE_BRACE);
+    consume_token(p);
+  } else {
+    expr = parse_expression(p);
+  }
   expect(*p, TOK_SEMICOL);
   consume_token(p);
   return new_ast(
@@ -249,7 +268,10 @@ ast_t parse_literal(parser_t *p) {
 static ast_t inject_method_receiver(ast_t receiver, ast_t expr) {
   if (expr->tag == funcall) {
     ast_funcall call = expr->data.funcall;
-    return new_ast((node_t){method_call, {.method_call = {receiver, call.name, call.args}}});
+    return new_ast((node_t){method_call,
+                            {.method_call = {.receiver = receiver,
+                                             .method = call.name,
+                                             .args = call.args}}});
   }
   if (expr->tag == method_call) {
     ast_method_call mc = expr->data.method_call;
@@ -435,7 +457,7 @@ ast_t parse_statement(parser_t *p) {
     return parse_module(p);
   else if (a == TOK_WHILE)
     return parse_while_loop(p);
-  else if (a == TOK_SUB) {
+  else if (a == TOK_SUB || a == TOK_STATIC) {
     // Check sub before is_assign — is_assign scans ahead and could find := inside a function body
     return parse_fundef(p);
   }
@@ -532,7 +554,8 @@ static ast_t parse_graphics_statement(parser_t *p) {
   graphics_tok.type = TOK_IDENTIFIER;
   graphics_tok.lexeme = sv_from_cstr(fn);
   return new_ast((node_t){funcall,
-                          {.funcall = {graphics_tok, new_ast_array()}}});
+                          {.funcall = {.name = graphics_tok,
+                                       .args = new_ast_array()}}});
 }
 
 ast_t parse_matchcase(parser_t *p) {
@@ -724,7 +747,8 @@ static ast_t synthesize_default(ast_t type_node) {
     tok.type = TOK_IDENTIFIER;
     tok.lexeme = sv_from_cstr(fn);
     ast_array_t no_args = new_ast_array();
-    return new_ast((node_t){funcall, {.funcall = {tok, no_args}}});
+    return new_ast((node_t){funcall,
+                            {.funcall = {.name = tok, .args = no_args}}});
   }
 
   // User-defined types: no sensible default
@@ -876,11 +900,22 @@ ast_t parse_compound(parser_t *p) {
 }
 
 ast_t parse_fundef(parser_t *p) {
-  // Only accept 'sub' for function definitions
+  int is_static = 0;
   token_type_t t = peek_type(*p);
+  if (t == TOK_STATIC) {
+    if (p->scope_depth > 0) {
+      token_t tok = peek_token(*p);
+      error(tok.filename, tok.line, tok.col,
+            "type-level method declarations are only allowed at top level");
+      exit(1);
+    }
+    is_static = 1;
+    consume_token(p);
+    t = peek_type(*p);
+  }
   if (t != TOK_SUB) {
     print_error_prefix(*p);
-    printf("Expected 'sub' for function definition\n");
+    printf(" Expected 'sub' after 'static'\n");
     exit(1);
   }
   consume_token(p);
@@ -888,9 +923,8 @@ ast_t parse_fundef(parser_t *p) {
   token_t id = consume_token(p);
 
   // Method declaration: sub Type.method(...) or sub Type[].method(...)
-  int is_method = 0;
-  int is_array_method = 0;
-  token_t type_name_tok = id;  // safe default (overwritten below if is_method)
+  method_kind_t method_kind = METHOD_NONE;
+  token_t type_name_tok = id;  // safe default (overwritten below for methods)
   if (peek_type(*p) == TOK_ARR_DECL) {
     // Look ahead: expect [] (TOK_ARR_DECL) followed by .
     parser_t la = *p;
@@ -899,30 +933,41 @@ ast_t parse_fundef(parser_t *p) {
       // Confirmed: sub Type[].method(...)
       consume_token(p);  // consume []
       consume_token(p);  // consume .
-      is_method = 1;
-      is_array_method = 1;
+      method_kind = METHOD_ARRAY_INSTANCE;
       expect(*p, TOK_IDENTIFIER);
       id = consume_token(p);  // id is now the method name
     }
   } else if (peek_type(*p) == TOK_DOT) {
     consume_token(p);  // consume '.'
-    is_method = 1;
+    method_kind = is_static ? METHOD_TYPE_LEVEL : METHOD_INSTANCE;
     // type_name_tok already holds the type (e.g. "string")
     expect(*p, TOK_IDENTIFIER);
     id = consume_token(p);  // id is now the method name (e.g. "add")
   }
 
+  if (is_static && method_kind == METHOD_NONE) {
+    error(id.filename, id.line, id.col,
+          "type-level method declaration must be qualified as "
+          "'static sub Type.method(...)'");
+    exit(1);
+  }
+  if (is_static && method_kind == METHOD_ARRAY_INSTANCE) {
+    error(type_name_tok.filename, type_name_tok.line, type_name_tok.col,
+          "array type-level methods are not supported; remove 'static'");
+    exit(1);
+  }
   expect(*p, TOK_OPEN_PAREN);
   consume_token(p);
   token_array_t args = new_token_array();
   ast_array_t types = new_ast_array();
 
   // Prepend implicit "this" parameter for method declarations
-  if (is_method) {
+  if (method_kind == METHOD_INSTANCE ||
+      method_kind == METHOD_ARRAY_INSTANCE) {
     token_t this_tok = type_name_tok;
     this_tok.lexeme = sv_from_cstr("this");
     token_array_push(&args, this_tok);
-    int this_is_array = is_array_method ? 1 : 0;
+    int this_is_array = method_kind == METHOD_ARRAY_INSTANCE ? 1 : 0;
     ast_t this_type = new_ast((node_t){type, {.type = {type_name_tok, this_is_array, 0}}});
     push_ast_array(&types, this_type);
   }
@@ -957,8 +1002,7 @@ ast_t parse_fundef(parser_t *p) {
                                       .body = body,
                                       .name = id,
                                       .type_name = type_name_tok,
-                                      .is_method = is_method,
-                                      .is_array_method = is_array_method,
+                                      .method_kind = method_kind,
                                       .types = types,
                                       .ret_type = ret_type}}});
 }
@@ -989,7 +1033,8 @@ ast_t parse_funcall(parser_t *p) {
 
   expect(*p, TOK_CLOSE_PAREN);
   consume_token(p);
-  return new_ast((node_t){funcall, {.funcall = {id, args}}});
+  return new_ast((node_t){funcall,
+                          {.funcall = {.name = id, .args = args}}});
 }
 
 ast_t parse_leaf(parser_t *p) {
@@ -1052,7 +1097,9 @@ ast_t parse_subscript(parser_t *p) {
                     {.arr_index = {arr_id, index, 0, new_token_array(), NULL}}});
       ast_funcall call = result.field_expr->data.funcall;
       return new_ast((node_t){method_call,
-                      {.method_call = {base, call.name, call.args}}});
+                      {.method_call = {.receiver = base,
+                                       .method = call.name,
+                                       .args = call.args}}});
     }
   }
 
@@ -1138,7 +1185,10 @@ ast_t parse_expression_aux(parser_t *p, int min_precedence) {
         }
         expect(*p, TOK_CLOSE_PAREN);
         consume_token(p);
-        left = new_ast((node_t){method_call, {.method_call = {left, field, args}}});
+        left = new_ast((node_t){method_call,
+                                {.method_call = {.receiver = left,
+                                                 .method = field,
+                                                 .args = args}}});
         continue;
       }
 

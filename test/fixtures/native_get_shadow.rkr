@@ -1,0 +1,8 @@
+sub get() returns Sprite {
+  Sprite result;
+  return result;
+}
+
+sub main() {
+  get().index(1);
+}

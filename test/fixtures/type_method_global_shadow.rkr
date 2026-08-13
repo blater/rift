@@ -1,0 +1,21 @@
+module FieldTool;
+module ParamTool;
+
+module Holder;
+FieldTool ParamTool;
+
+sub FieldTool.kind() returns int {
+  return 11;
+}
+
+sub ParamTool.kind() returns int {
+  return 22;
+}
+
+sub Holder.field_kind() returns int {
+  return ParamTool.kind();
+}
+
+ParamTool ParamTool;
+
+sub main() {}

@@ -1,0 +1,5 @@
+Sprite player;
+
+sub main() {
+  player.index(1);
+}

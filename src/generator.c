@@ -40,6 +40,11 @@ int get_literal_string_length(token_t tok);
 static int is_heap_allocated_type(string_view type_name, name_table_t table);
 static char *capture_expression(generator_t *g, ast_t expr);
 static int expr_is_array(ast_t expr, name_table_t table, int *is_string);
+static string_view make_array_type_sv(string_view base);
+static void emit_component_init(generator_t *g);
+static void emit_component_shutdown(generator_t *g);
+static ast_t make_native_fundef(component_interface_spec *entry,
+                                method_kind_t method_kind);
 
 // Helper: Flush accumulated pre-statements to destination and reset pre_f
 static void flush_pre_f(generator_t *g, FILE *dest);
@@ -298,11 +303,756 @@ static char *mangle_method(string_view type_name, string_view method_name, int i
   return buf;
 }
 
+static char *mangle_type_method(string_view type_name, string_view method_name,
+                                int arity) {
+  int needed = snprintf(NULL, 0, "rock__tm_L%zu_%.*s_L%zu_%.*s_A%d",
+                        type_name.length, (int)type_name.length, type_name.data,
+                        method_name.length, (int)method_name.length,
+                        method_name.data, arity);
+  char *buf = allocate_compiler_persistent((size_t)needed + 1);
+  snprintf(buf, (size_t)needed + 1, "rock__tm_L%zu_%.*s_L%zu_%.*s_A%d",
+           type_name.length, (int)type_name.length, type_name.data,
+           method_name.length, (int)method_name.length, method_name.data,
+           arity);
+  return buf;
+}
+
+static int is_instance_method_kind(method_kind_t kind) {
+  return kind == METHOD_INSTANCE || kind == METHOD_ARRAY_INSTANCE;
+}
+
+static char *mangle_fundef_method(ast_fundef fundef) {
+  if (fundef.emitted_c_name) return fundef.emitted_c_name;
+  if (fundef.method_kind == METHOD_TYPE_LEVEL) {
+    return mangle_type_method(fundef.type_name.lexeme, fundef.name.lexeme,
+                              fundef.args.length);
+  }
+  return mangle_method(fundef.type_name.lexeme, fundef.name.lexeme,
+                       fundef.method_kind == METHOD_ARRAY_INSTANCE);
+}
+
+static component_interface_spec *opaque_for_sv(generator_t *g,
+                                               string_view name) {
+  char *owned = string_of_sv(name);
+  component_interface_spec *result =
+      find_opaque_interface(g->components, owned);
+  return result;
+}
+
+static int component_index(generator_t *g, const char *id) {
+  if (!g->components || !id) return -1;
+  for (int i = 0; i < g->components->component_count; i++)
+    if (strcmp(g->components->components[i].id, id) == 0) return i;
+  return -1;
+}
+
+static int is_opaque_type(string_view name, generator_t *g) {
+  return opaque_for_sv(g, name) != NULL;
+}
+
+static void record_component(generator_t *g, const char *id) {
+  int index = component_index(g, id);
+  if (index < 0) {
+    fprintf(stderr, "%s: error: required component '%s' is not declared\n",
+            g->components->path, id);
+    exit(1);
+  }
+  g->direct_components[index] = 1;
+}
+
+static void record_fundef_component(generator_t *g, ast_t ref) {
+  if (ref && ref->tag == fundef && ref->data.fundef.component_id)
+    record_component(g, ref->data.fundef.component_id);
+}
+
+static int type_method_name_exists(ast_t program, string_view owner,
+                                   string_view method) {
+  ast_array_t stmts = program->data.program.prog;
+  for (int i = 0; i < stmts.length; i++) {
+    ast_t stmt = stmts.data[i];
+    if (stmt->tag != fundef) continue;
+    ast_fundef fd = stmt->data.fundef;
+    if (fd.method_kind == METHOD_TYPE_LEVEL &&
+        svcmp(fd.type_name.lexeme, owner) == 0 &&
+        svcmp(fd.name.lexeme, method) == 0)
+      return 1;
+  }
+  return 0;
+}
+
+static int native_method_name_exists(generator_t *g, string_view owner,
+                                     string_view method, int type_level) {
+  char *owner_text = string_of_sv(owner);
+  char *method_text = string_of_sv(method);
+  int found = 0;
+  for (int i = 0; i < g->components->interface_count; i++) {
+    component_interface_spec *entry = &g->components->interfaces[i];
+    component_interface_kind wanted = type_level ? COMPONENT_TYPE_METHOD
+                                                  : COMPONENT_INSTANCE_METHOD;
+    if (entry->kind == wanted && strcmp(entry->owner, owner_text) == 0 &&
+        strcmp(entry->name, method_text) == 0) {
+      found = 1;
+      break;
+    }
+  }
+  return found;
+}
+
+static int native_symbol_reserved(generator_t *g, string_view name) {
+  char *text = string_of_sv(name);
+  int reserved = 0;
+  for (int i = 0; i < g->components->interface_count; i++) {
+    component_interface_spec *entry = &g->components->interfaces[i];
+    int sealed_symbol = entry->kind == COMPONENT_OPAQUE ||
+                        entry->kind == COMPONENT_INSTANCE_METHOD ||
+                        entry->kind == COMPONENT_TYPE_METHOD;
+    if (sealed_symbol &&
+        ((entry->c_symbol && strcmp(entry->c_symbol, text) == 0) ||
+         (entry->constructor && strcmp(entry->constructor, text) == 0))) {
+      reserved = 1;
+      break;
+    }
+  }
+  return reserved;
+}
+
+static token_t nominal_definition_name(ast_t stmt) {
+  if (stmt->tag == tdef) return stmt->data.tdef.name;
+  if (stmt->tag == enum_tdef) return stmt->data.enum_tdef.name;
+  return (token_t){0};
+}
+
+static void validate_unique_member_names(ast_t stmt) {
+  token_array_t names = new_token_array();
+  if (stmt->tag == enum_tdef) {
+    names = stmt->data.enum_tdef.items;
+  } else if (stmt->tag == tdef) {
+    ast_tdef td = stmt->data.tdef;
+    ast_array_t members = td.t == TDEF_MODULE ? td.module_fields
+                                              : td.constructors;
+    for (int i = 0; i < members.length; i++) {
+      ast_t member = members.data[i];
+      token_t name = member->tag == vardef ? member->data.vardef.name
+                                           : member->data.cons.name;
+      token_array_push(&names, name);
+    }
+  } else {
+    return;
+  }
+
+  for (int i = 0; i < names.length; i++) {
+    for (int j = 0; j < i; j++) {
+      if (svcmp(names.data[i].lexeme, names.data[j].lexeme) == 0) {
+        error(names.data[i].filename, names.data[i].line, names.data[i].col,
+              "duplicate member '" SV_Fmt "' in this type",
+              SV_Arg(names.data[i].lexeme));
+        break;
+      }
+    }
+  }
+}
+
+static void register_program_symbols(generator_t *g, ast_t program_node) {
+  ast_array_t stmts = program_node->data.program.prog;
+
+  for (int i = 0; i < stmts.length; i++) {
+    ast_t stmt = stmts.data[i];
+    if (stmt->tag == tdef || stmt->tag == enum_tdef) {
+      token_t name = nominal_definition_name(stmt);
+      if (is_opaque_type(name.lexeme, g)) {
+        error(name.filename, name.line, name.col,
+              "standard opaque type '" SV_Fmt "' is sealed and cannot be redefined",
+              SV_Arg(name.lexeme));
+        continue;
+      }
+      int duplicate = 0;
+      for (int j = 0; j < i; j++) {
+        ast_t previous = stmts.data[j];
+        if (previous->tag != tdef && previous->tag != enum_tdef) continue;
+        if (svcmp(nominal_definition_name(previous).lexeme, name.lexeme) == 0) {
+          error(name.filename, name.line, name.col,
+                "duplicate type definition '" SV_Fmt "' in this scope",
+                SV_Arg(name.lexeme));
+          duplicate = 1;
+          break;
+        }
+      }
+      validate_unique_member_names(stmt);
+      if (!duplicate && stmt->tag == tdef &&
+          !push_nt_unique(&g->table, name.lexeme, NT_USER_TYPE, stmt))
+        error(name.filename, name.line, name.col,
+              "duplicate type definition '" SV_Fmt "' in this scope",
+              SV_Arg(name.lexeme));
+    }
+  }
+
+  for (int i = 0; i < stmts.length; i++) {
+    ast_t stmt = stmts.data[i];
+    if (stmt->tag != fundef) continue;
+    ast_fundef fd = stmt->data.fundef;
+    int user_owner =
+        lookup_nt_by_kind(fd.type_name.lexeme, NT_USER_TYPE, g->table).found;
+    int builtin_owner =
+        lookup_nt_by_kind(fd.type_name.lexeme, NT_BUILTIN_TYPE, g->table).found;
+    int opaque_owner =
+        lookup_nt_by_kind(fd.type_name.lexeme, NT_OPAQUE_TYPE, g->table).found;
+    if (fd.method_kind != METHOD_NONE && opaque_owner) {
+      error(fd.type_name.filename, fd.type_name.line, fd.type_name.col,
+            "standard opaque type '" SV_Fmt
+            "' is sealed; source methods cannot extend it",
+            SV_Arg(fd.type_name.lexeme));
+      continue;
+    }
+    if (fd.method_kind == METHOD_TYPE_LEVEL && !user_owner) {
+      error(fd.type_name.filename, fd.type_name.line, fd.type_name.col,
+            "type-level method owner '" SV_Fmt
+            "' must be a user-defined module, record, or union",
+            SV_Arg(fd.type_name.lexeme));
+      continue;
+    }
+    if (fd.method_kind != METHOD_NONE && !user_owner && !builtin_owner) {
+      error(fd.type_name.filename, fd.type_name.line, fd.type_name.col,
+            "method owner '" SV_Fmt "' is not a declared nominal type",
+            SV_Arg(fd.type_name.lexeme));
+      continue;
+    }
+
+    string_view key = fd.name.lexeme;
+    if (fd.method_kind != METHOD_NONE)
+      key = sv_from_cstr(mangle_fundef_method(fd));
+
+    if (fd.method_kind == METHOD_NONE) {
+      if (native_symbol_reserved(g, fd.name.lexeme)) {
+        error(fd.name.filename, fd.name.line, fd.name.col,
+              "function name '" SV_Fmt
+              "' is reserved by a standard opaque interface",
+              SV_Arg(fd.name.lexeme));
+        continue;
+      }
+      for (int j = 0; j < i; j++) {
+        ast_t previous = stmts.data[j];
+        if (previous->tag != fundef) continue;
+        ast_fundef other = previous->data.fundef;
+        if (other.method_kind == METHOD_NONE &&
+            svcmp(other.name.lexeme, fd.name.lexeme) == 0 &&
+            other.args.length == fd.args.length) {
+          error(fd.name.filename, fd.name.line, fd.name.col,
+                "duplicate function '" SV_Fmt
+                "' with %d argument(s) in this scope",
+                SV_Arg(fd.name.lexeme), fd.args.length);
+          break;
+        }
+      }
+    } else if (fd.method_kind == METHOD_INSTANCE ||
+        fd.method_kind == METHOD_ARRAY_INSTANCE ||
+        fd.method_kind == METHOD_TYPE_LEVEL) {
+      if (get_ref_by_kind(key, NT_FUN, g->table) != NULL) {
+        error(fd.name.filename, fd.name.line, fd.name.col,
+              "duplicate method '" SV_Fmt "." SV_Fmt "' for this receiver and arity",
+              SV_Arg(fd.type_name.lexeme), SV_Arg(fd.name.lexeme));
+        continue;
+      }
+    }
+    push_nt(&g->table, key, NT_FUN, stmt);
+  }
+
+  for (int i = 0; i < stmts.length; i++) {
+    ast_t stmt = stmts.data[i];
+    if (stmt->tag == vardef) {
+      token_t name = stmt->data.vardef.name;
+      if (!push_nt_unique(&g->table, name.lexeme, NT_VAR, stmt))
+        error(name.filename, name.line, name.col,
+              "duplicate variable '" SV_Fmt "' in this scope",
+              SV_Arg(name.lexeme));
+    }
+  }
+}
+
+static void resolve_method_calls(generator_t *g, ast_t node);
+
+static ast_t find_nominal_member_type(name_table_t table, string_view owner,
+                                      string_view member_name,
+                                      int module_only) {
+  ast_t owner_ref = get_ref_by_kind(owner, NT_USER_TYPE, table);
+  if (!owner_ref || owner_ref->tag != tdef) return NULL;
+  ast_tdef td = owner_ref->data.tdef;
+  if (module_only && td.t != TDEF_MODULE) return NULL;
+  ast_array_t members = td.t == TDEF_MODULE ? td.module_fields
+                                            : td.constructors;
+  for (int i = 0; i < members.length; i++) {
+    ast_t member = members.data[i];
+    token_t name = member->tag == vardef ? member->data.vardef.name
+                                         : member->data.cons.name;
+    if (svcmp(name.lexeme, member_name) != 0) continue;
+    return member->tag == vardef ? member->data.vardef.type
+                                 : member->data.cons.type;
+  }
+  return NULL;
+}
+
+static string_view declared_type_identity(ast_t type_node) {
+  if (!type_node || type_node->tag != type) return sv_from_cstr("");
+  ast_type declared = type_node->data.type;
+  return declared.is_array ? make_array_type_sv(declared.name.lexeme)
+                           : declared.name.lexeme;
+}
+
+static string_view value_ref_type(ast_t value_ref, string_view name) {
+  if (!value_ref) return sv_from_cstr("");
+  if (value_ref->tag == vardef)
+    return declared_type_identity(value_ref->data.vardef.type);
+  if (value_ref->tag == fundef) {
+    ast_fundef fd = value_ref->data.fundef;
+    for (int i = 0; i < fd.args.length; i++) {
+      if (svcmp(fd.args.data[i].lexeme, name) == 0)
+        return declared_type_identity(fd.types.data[i]);
+    }
+  }
+  return sv_from_cstr("");
+}
+
+static void resolve_method_call(generator_t *g, ast_t node) {
+  ast_method_call *mc = &node->data.method_call;
+  if (mc->receiver->tag != identifier)
+    resolve_method_calls(g, mc->receiver);
+  for (int i = 0; i < mc->args.length; i++)
+    resolve_method_calls(g, mc->args.data[i]);
+
+  int type_receiver = 0;
+  string_view owner = sv_from_cstr("");
+  if (mc->receiver->tag == identifier) {
+    string_view receiver_name = mc->receiver->data.identifier.id.lexeme;
+    nt_lookup_t value_lookup =
+        lookup_nt_by_kind(receiver_name, NT_VAR, g->table);
+    ast_t value_ref = value_lookup.ref;
+    ast_t type_ref = get_ref_by_kind(receiver_name, NT_USER_TYPE, g->table);
+    if (type_ref == NULL)
+      type_ref = get_ref_by_kind(receiver_name, NT_OPAQUE_TYPE, g->table);
+    ast_t implicit_field_type = NULL;
+    if ((!value_lookup.found || value_lookup.scope == 0) && g->current_fundef &&
+        is_instance_method_kind(g->current_fundef->data.fundef.method_kind)) {
+      implicit_field_type = find_nominal_member_type(
+          g->table, g->current_fundef->data.fundef.type_name.lexeme,
+          receiver_name, 1);
+    }
+    if ((!value_lookup.found || value_lookup.scope == 0) &&
+        implicit_field_type == NULL && type_ref != NULL) {
+      type_receiver = 1;
+      owner = receiver_name;
+    } else if (value_lookup.found && value_lookup.scope > 0) {
+      owner = value_ref_type(value_ref, receiver_name);
+    } else if (implicit_field_type != NULL) {
+      owner = declared_type_identity(implicit_field_type);
+    } else if (value_lookup.found) {
+      owner = value_ref_type(value_ref, receiver_name);
+    }
+  }
+
+  char *c_name = NULL;
+  ast_t target = NULL;
+  if (type_receiver) {
+    c_name = mangle_type_method(owner, mc->method.lexeme, mc->args.length);
+    target = get_ref_by_kind(sv_from_cstr(c_name), NT_FUN, g->table);
+    if (target == NULL) {
+      char *instance_name = mangle_method(owner, mc->method.lexeme, 0);
+      if (get_ref_by_kind(sv_from_cstr(instance_name), NT_FUN, g->table)) {
+        error(mc->method.filename, mc->method.line, mc->method.col,
+              "'" SV_Fmt "." SV_Fmt
+              "' is an instance method; call it through a value",
+              SV_Arg(owner), SV_Arg(mc->method.lexeme));
+      } else if (type_method_name_exists(g->program, owner, mc->method.lexeme) ||
+                 native_method_name_exists(g, owner, mc->method.lexeme, 1)) {
+        error(mc->method.filename, mc->method.line, mc->method.col,
+              "type-level method '" SV_Fmt "." SV_Fmt
+              "' has no overload taking %d argument(s)",
+              SV_Arg(owner), SV_Arg(mc->method.lexeme), mc->args.length);
+      } else {
+        error(mc->method.filename, mc->method.line, mc->method.col,
+              "undefined type-level method '" SV_Fmt "." SV_Fmt "'",
+              SV_Arg(owner), SV_Arg(mc->method.lexeme));
+      }
+      return;
+    }
+    mc->resolved_kind = METHOD_TYPE_LEVEL;
+  } else {
+    if (owner.length == 0 && mc->receiver->tag != identifier)
+      owner = infer_expr_type(mc->receiver, g->table);
+    if (owner.length == 0) {
+      if (mc->receiver->tag == identifier && g->current_fundef &&
+          g->current_fundef->data.fundef.method_kind == METHOD_TYPE_LEVEL) {
+        token_t receiver = mc->receiver->data.identifier.id;
+        string_view current_owner =
+            g->current_fundef->data.fundef.type_name.lexeme;
+        if (find_nominal_member_type(g->table, current_owner,
+                                     receiver.lexeme, 0)) {
+          error(receiver.filename, receiver.line, receiver.col,
+                "type-level method cannot access instance field '" SV_Fmt
+                "' without a value receiver",
+                SV_Arg(receiver.lexeme));
+          return;
+        }
+      }
+      error(mc->method.filename, mc->method.line, mc->method.col,
+            "cannot determine type of receiver for method call '" SV_Fmt "'",
+            SV_Arg(mc->method.lexeme));
+      return;
+    }
+    c_name = mangle_method(owner, mc->method.lexeme, 0);
+    target = get_ref_by_kind(sv_from_cstr(c_name), NT_FUN, g->table);
+    if (target == NULL) {
+      if (type_method_name_exists(g->program, owner, mc->method.lexeme) ||
+          native_method_name_exists(g, owner, mc->method.lexeme, 1)) {
+        error(mc->method.filename, mc->method.line, mc->method.col,
+              "'" SV_Fmt "." SV_Fmt
+              "' is a type-level method; call " SV_Fmt "." SV_Fmt "()",
+              SV_Arg(owner), SV_Arg(mc->method.lexeme), SV_Arg(owner),
+              SV_Arg(mc->method.lexeme));
+      } else {
+        error(mc->method.filename, mc->method.line, mc->method.col,
+              "undefined instance method '" SV_Fmt "." SV_Fmt "'",
+              SV_Arg(owner), SV_Arg(mc->method.lexeme));
+      }
+      return;
+    }
+    if (target->tag == fundef && target->data.fundef.body == NULL) {
+      int expected = target->data.fundef.types.length - 1;
+      if (expected != mc->args.length) {
+        error(mc->method.filename, mc->method.line, mc->method.col,
+              "instance method '" SV_Fmt "." SV_Fmt
+              "' expects %d argument(s), got %d",
+              SV_Arg(owner), SV_Arg(mc->method.lexeme), expected,
+              mc->args.length);
+        return;
+      }
+    }
+    mc->resolved_kind =
+        target->tag == fundef &&
+                target->data.fundef.method_kind == METHOD_ARRAY_INSTANCE
+            ? METHOD_ARRAY_INSTANCE
+            : METHOD_INSTANCE;
+  }
+
+  if (target && target->tag == fundef && target->data.fundef.emitted_c_name)
+    c_name = target->data.fundef.emitted_c_name;
+
+  mc->is_resolved = 1;
+  mc->resolved_owner = owner;
+  mc->resolved_target = target;
+  mc->resolved_c_name = c_name;
+  record_fundef_component(g, target);
+}
+
+static void resolve_method_calls(generator_t *g, ast_t node) {
+  if (!node) return;
+  switch (node->tag) {
+  case program: {
+    ast_array_t stmts = node->data.program.prog;
+    for (int i = 0; i < stmts.length; i++) resolve_method_calls(g, stmts.data[i]);
+    return;
+  }
+  case fundef: {
+    ast_fundef fd = node->data.fundef;
+    ast_t saved_fundef = g->current_fundef;
+    g->current_fundef = node;
+    new_nt_scope(&g->table);
+    for (int i = 0; i < fd.args.length; i++) {
+      token_t arg = fd.args.data[i];
+      if (!push_nt_unique(&g->table, arg.lexeme, NT_VAR, node))
+        error(arg.filename, arg.line, arg.col,
+              "duplicate parameter '" SV_Fmt "' in this scope",
+              SV_Arg(arg.lexeme));
+    }
+    /* Parameters and declarations in the function's outermost block occupy
+     * one C scope. Nested compound statements still open child scopes. */
+    ast_array_t stmts = fd.body->data.compound.stmts;
+    for (int i = 0; i < stmts.length; i++) {
+      ast_t stmt = stmts.data[i];
+      resolve_method_calls(g, stmt);
+      if (stmt->tag == vardef) {
+        token_t name = stmt->data.vardef.name;
+        if (!push_nt_unique(&g->table, name.lexeme, NT_VAR, stmt))
+          error(name.filename, name.line, name.col,
+                "duplicate variable '" SV_Fmt "' in this scope",
+                SV_Arg(name.lexeme));
+      }
+    }
+    end_nt_scope(&g->table);
+    g->current_fundef = saved_fundef;
+    return;
+  }
+  case compound: {
+    new_nt_scope(&g->table);
+    ast_array_t stmts = node->data.compound.stmts;
+    for (int i = 0; i < stmts.length; i++) {
+      ast_t stmt = stmts.data[i];
+      resolve_method_calls(g, stmt);
+      if (stmt->tag == vardef) {
+        token_t name = stmt->data.vardef.name;
+        if (!push_nt_unique(&g->table, name.lexeme, NT_VAR, stmt))
+          error(name.filename, name.line, name.col,
+                "duplicate variable '" SV_Fmt "' in this scope",
+                SV_Arg(name.lexeme));
+      }
+    }
+    end_nt_scope(&g->table);
+    return;
+  }
+  case method_call:
+    resolve_method_call(g, node);
+    return;
+  case funcall: {
+    for (int i = 0; i < node->data.funcall.args.length; i++)
+      resolve_method_calls(g, node->data.funcall.args.data[i]);
+    ast_funcall call = node->data.funcall;
+    char *name = string_of_sv(call.name.lexeme);
+    int native_name = 0;
+    for (int i = 0; i < g->components->interface_count; i++) {
+      component_interface_spec *entry = &g->components->interfaces[i];
+      int callable = entry->kind == COMPONENT_BUILTIN ||
+                     entry->kind == COMPONENT_LOWERED_BUILTIN ||
+                     entry->kind == COMPONENT_OPAQUE;
+      if (callable && strcmp(entry->name, name) == 0) {
+        native_name = 1;
+        break;
+      }
+    }
+    ast_t target = get_ref_by_kind(call.name.lexeme, NT_FUN, g->table);
+    int user_target = target && target->tag == fundef &&
+                      target->data.fundef.body != NULL;
+    component_interface_spec *exact =
+        find_builtin_interface(g->components, name, call.args.length);
+    if (!user_target && native_name && !exact)
+      error(call.name.filename, call.name.line, call.name.col,
+            "standard function '" SV_Fmt
+            "' has no overload taking %d argument(s)",
+            SV_Arg(call.name.lexeme), call.args.length);
+    if (!user_target && exact)
+      target = make_native_fundef(exact, METHOD_NONE);
+    node->data.funcall.resolved_target = target;
+    return;
+  }
+  case vardef:
+    if (is_opaque_type(node->data.vardef.type->data.type.name.lexeme, g) &&
+        node->data.vardef.expr && node->data.vardef.expr->tag == record_expr) {
+      token_t name = node->data.vardef.name;
+      error(name.filename, name.line, name.col,
+            "standard opaque type '" SV_Fmt
+            "' cannot be constructed with an aggregate literal",
+            SV_Arg(node->data.vardef.type->data.type.name.lexeme));
+      return;
+    }
+    resolve_method_calls(g, node->data.vardef.expr);
+    return;
+  case assign:
+    if (node->data.assign.expr && node->data.assign.expr->tag == record_expr &&
+        is_opaque_type(infer_expr_type(node->data.assign.target, g->table), g)) {
+      token_t target = token_for_expr(node->data.assign.target);
+      error(target.filename, target.line, target.col,
+            "standard opaque values cannot be assigned an aggregate literal");
+      return;
+    }
+    resolve_method_calls(g, node->data.assign.target);
+    resolve_method_calls(g, node->data.assign.expr);
+    return;
+  case op:
+    resolve_method_calls(g, node->data.op.left);
+    resolve_method_calls(g, node->data.op.right);
+    return;
+  case unary_op:
+    resolve_method_calls(g, node->data.unary_op.operand);
+    return;
+  case ret:
+    resolve_method_calls(g, node->data.ret.expr);
+    return;
+  case ifstmt:
+    resolve_method_calls(g, node->data.ifstmt.expression);
+    resolve_method_calls(g, node->data.ifstmt.body);
+    resolve_method_calls(g, node->data.ifstmt.elsestmt);
+    return;
+  case while_loop:
+    resolve_method_calls(g, node->data.while_loop.condition);
+    resolve_method_calls(g, node->data.while_loop.statement);
+    return;
+  case loop:
+    resolve_method_calls(g, node->data.loop.start);
+    resolve_method_calls(g, node->data.loop.end);
+    new_nt_scope(&g->table);
+    push_nt(&g->table, node->data.loop.variable.lexeme, NT_VAR, node);
+    resolve_method_calls(g, node->data.loop.statement);
+    end_nt_scope(&g->table);
+    return;
+  case iter_loop:
+    resolve_method_calls(g, node->data.iter_loop.iterable);
+    new_nt_scope(&g->table);
+    push_nt(&g->table, node->data.iter_loop.variable.lexeme, NT_VAR, node);
+    resolve_method_calls(g, node->data.iter_loop.statement);
+    end_nt_scope(&g->table);
+    return;
+  case sub:
+    resolve_method_calls(g, node->data.sub.receiver);
+    if (is_opaque_type(infer_expr_type(node->data.sub.receiver, g->table), g)) {
+      token_t field = node->data.sub.expr && node->data.sub.expr->tag == identifier
+                          ? node->data.sub.expr->data.identifier.id
+                          : token_for_expr(node->data.sub.receiver);
+      error(field.filename, field.line, field.col,
+            "fields of standard opaque type cannot be accessed");
+      return;
+    }
+    /* A terminal identifier is a qualified field label, not an unqualified
+     * value read in the current method body. More complex terminal
+     * expressions still need their calls/operands resolved. */
+    if (node->data.sub.expr && node->data.sub.expr->tag != identifier)
+      resolve_method_calls(g, node->data.sub.expr);
+    return;
+  case arr_index:
+    resolve_method_calls(g, node->data.arr_index.array);
+    resolve_method_calls(g, node->data.arr_index.index);
+    if (node->data.arr_index.has_field &&
+        is_opaque_type(get_array_element_type(node->data.arr_index.array,
+                                              g->table,
+                                              token_for_expr(node)), g)) {
+      token_t field = token_for_expr(node->data.arr_index.field_expr);
+      error(field.filename, field.line, field.col,
+            "fields of standard opaque type cannot be accessed");
+      return;
+    }
+    if (node->data.arr_index.field_expr &&
+        node->data.arr_index.field_expr->tag != identifier)
+      resolve_method_calls(g, node->data.arr_index.field_expr);
+    return;
+  case record_expr:
+    for (int i = 0; i < node->data.record_expr.exprs.length; i++)
+      resolve_method_calls(g, node->data.record_expr.exprs.data[i]);
+    return;
+  case match:
+    resolve_method_calls(g, node->data.match.expr);
+    for (int i = 0; i < node->data.match.cases.length; i++)
+      resolve_method_calls(g, node->data.match.cases.data[i]);
+    return;
+  case matchcase:
+    /* A bare match arm identifier names a union variant. It is not an
+     * implicit field read, even when it shares an owner's field spelling. */
+    if (node->data.matchcase.expr &&
+        node->data.matchcase.expr->tag != identifier)
+      resolve_method_calls(g, node->data.matchcase.expr);
+    resolve_method_calls(g, node->data.matchcase.body);
+    return;
+  case tdef:
+    for (int i = 0; i < node->data.tdef.module_fields.length; i++)
+      resolve_method_calls(g, node->data.tdef.module_fields.data[i]);
+    return;
+  case identifier:
+    if (g->current_fundef &&
+        g->current_fundef->data.fundef.method_kind == METHOD_TYPE_LEVEL) {
+      token_t id = node->data.identifier.id;
+      if (svcmp(id.lexeme, sv_from_cstr("this")) == 0) {
+        error(id.filename, id.line, id.col,
+              "type-level methods have no 'this' receiver");
+        return;
+      }
+      if (get_ref_by_kind(id.lexeme, NT_VAR, g->table) == NULL) {
+        string_view owner = g->current_fundef->data.fundef.type_name.lexeme;
+        if (find_nominal_member_type(g->table, owner, id.lexeme, 0)) {
+          error(id.filename, id.line, id.col,
+                "type-level method cannot access instance field '" SV_Fmt
+                "' without a value receiver",
+                SV_Arg(id.lexeme));
+          return;
+        }
+      }
+    }
+    return;
+  default:
+    return;
+  }
+}
+
 static ast_t make_type_node(const char *type_name) {
   node_t n = {0};
   n.tag = type;
   n.data.type.name.lexeme = sv_from_cstr((char*)type_name);
   return new_ast(n);
+}
+
+static ast_t make_manifest_type_node(const char *type_name) {
+  size_t length = strlen(type_name);
+  int is_array = length >= 2 && type_name[length - 2] == '[' &&
+                 type_name[length - 1] == ']';
+  char *base = allocate_compiler_persistent(length + 1);
+  memcpy(base, type_name, length + 1);
+  if (is_array) base[length - 2] = '\0';
+  ast_t result = make_type_node(base);
+  result->data.type.is_array = is_array;
+  return result;
+}
+
+static ast_t make_native_fundef(component_interface_spec *entry,
+                                method_kind_t method_kind) {
+  node_t node = {0};
+  node.tag = fundef;
+  node.data.fundef.name.lexeme = sv_from_cstr(entry->name);
+  node.data.fundef.type_name.lexeme =
+      sv_from_cstr(entry->owner ? entry->owner : "");
+  node.data.fundef.method_kind = method_kind;
+  node.data.fundef.ret_type = make_manifest_type_node(entry->return_type);
+  node.data.fundef.types = new_ast_array();
+  node.data.fundef.args = new_token_array();
+  node.data.fundef.component_id = entry->component_id;
+  node.data.fundef.emitted_c_name = entry->c_symbol;
+  if (method_kind == METHOD_INSTANCE) {
+    token_t receiver = {0};
+    receiver.lexeme = sv_from_cstr("this");
+    token_array_push(&node.data.fundef.args, receiver);
+    push_ast_array(&node.data.fundef.types,
+                   make_manifest_type_node(entry->owner));
+  }
+  int parameter_count = component_parameter_count(entry->parameters);
+  for (int i = 0; i < parameter_count; i++) {
+    char parameter[128];
+    if (!component_parameter_at(entry->parameters, i, parameter,
+                                sizeof(parameter)))
+      continue;
+    token_t argument = {0};
+    char *argument_name = allocate_compiler_persistent(24);
+    snprintf(argument_name, 24, "arg%d", i);
+    argument.lexeme = sv_from_cstr(argument_name);
+    token_array_push(&node.data.fundef.args, argument);
+    push_ast_array(&node.data.fundef.types,
+                   make_manifest_type_node(parameter));
+  }
+  return new_ast(node);
+}
+
+static void register_manifest_interfaces(generator_t *g) {
+  for (int i = 0; i < g->components->interface_count; i++) {
+    component_interface_spec *entry = &g->components->interfaces[i];
+    if (entry->kind == COMPONENT_OPAQUE) {
+      push_nt(&g->table, sv_from_cstr(entry->owner), NT_OPAQUE_TYPE,
+              make_manifest_type_node(entry->owner));
+      ast_t constructor = make_native_fundef(entry, METHOD_NONE);
+      push_nt(&g->table, sv_from_cstr(entry->constructor), NT_FUN,
+              constructor);
+    } else if (entry->kind == COMPONENT_BUILTIN) {
+      ast_t builtin = make_native_fundef(entry, METHOD_NONE);
+      push_nt(&g->table, sv_from_cstr(entry->name), NT_FUN, builtin);
+    } else if (entry->kind == COMPONENT_INSTANCE_METHOD) {
+      ast_t method = make_native_fundef(entry, METHOD_INSTANCE);
+      char *key = mangle_method(sv_from_cstr(entry->owner),
+                                sv_from_cstr(entry->name), 0);
+      push_nt(&g->table, sv_from_cstr(key), NT_FUN, method);
+    } else if (entry->kind == COMPONENT_TYPE_METHOD) {
+      ast_t method = make_native_fundef(entry, METHOD_TYPE_LEVEL);
+      char *key = mangle_type_method(
+          sv_from_cstr(entry->owner), sv_from_cstr(entry->name),
+          component_parameter_count(entry->parameters));
+      push_nt(&g->table, sv_from_cstr(key), NT_FUN, method);
+    }
+  }
+}
+
+static void register_builtin_type(name_table_t *table, const char *name) {
+  push_nt(table, sv_from_cstr((char *)name), NT_BUILTIN_TYPE,
+          make_type_node(name));
 }
 
 // Helper: Register a builtin function in the name table with its return type
@@ -361,7 +1111,7 @@ static int program_user_fundef_count(ast_t program, string_view name) {
   ast_array_t stmts = program->data.program.prog;
   for (int i = 0; i < stmts.length; i++) {
     ast_t s = stmts.data[i];
-    if (s->tag == fundef && !s->data.fundef.is_method &&
+    if (s->tag == fundef && s->data.fundef.method_kind == METHOD_NONE &&
         svcmp(s->data.fundef.name.lexeme, name) == 0)
       n++;
   }
@@ -542,8 +1292,9 @@ static void defer_global_init(generator_t *g, string_view var_name, const char *
   push_deferred_global_init(g, code);
 }
 
-generator_t new_generator(char *filename) {
-  generator_t res;
+generator_t new_generator(char *filename, const char *output_base,
+                          component_manifest *components) {
+  generator_t res = {0};
   res.f = fopen(filename, "wb");
   if (res.f == NULL)
     perror("Could not open file !");
@@ -564,6 +1315,23 @@ generator_t new_generator(char *filename) {
   res.lit_counter = 0;
   res.current_fundef = NULL;
   res.bump_mark_counter = 0;
+  res.components = components;
+  size_t component_path_size = strlen(output_base) + 12;
+  res.component_output_path =
+      allocate_compiler_persistent(component_path_size);
+  snprintf(res.component_output_path, component_path_size, "%s.components",
+           output_base);
+
+  register_builtin_type(&res.table, "int");
+  register_builtin_type(&res.table, "byte");
+  register_builtin_type(&res.table, "word");
+  register_builtin_type(&res.table, "dword");
+  register_builtin_type(&res.table, "char");
+  register_builtin_type(&res.table, "string");
+  register_builtin_type(&res.table, "bool");
+  register_builtin_type(&res.table, "boolean");
+  register_builtin_type(&res.table, "float");
+  register_builtin_type(&res.table, "void");
 
   // Register C library builtin functions with their return types
   // Stdlib / I/O
@@ -672,6 +1440,8 @@ generator_t new_generator(char *filename) {
    * via a fast-path branch in generate_funcall. Not registered as a
    * separate Rock name; the C symbol lives in src/lib/print_at.c. */
 
+  register_manifest_interfaces(&res);
+
   // Always initialize pre_f buffer for statement splitting
   res.pre_buf = NULL;
   res.pre_buf_size = 0;
@@ -691,18 +1461,6 @@ void kill_generator(generator_t g) {
     fflush(g.pre_f);
     fclose(g.pre_f);
   }
-}
-
-name_table_t new_name_table(void) {
-  name_table_t res;
-  res.length = 0;
-  res.capacity = INIT_NT_CAP;
-  res.scope = 0;
-  res.refs = new_ast_array();
-  res.kinds = allocate_compiler_persistent(sizeof(nt_kind) * res.capacity);
-  res.names = allocate_compiler_persistent(sizeof(char *) * res.capacity);
-  res.scopes = allocate_compiler_persistent(sizeof(int) * res.capacity);
-  return res;
 }
 
 void generate_type(FILE *f, ast_t a) {
@@ -795,8 +1553,11 @@ static int rhs_is_borrower(ast_t expr) {
   if (!expr) return 0;
   if (expr->tag == identifier || expr->tag == sub || expr->tag == arr_index)
     return 1;
-  return expr->tag == funcall &&
-      svcmp(expr->data.funcall.name.lexeme, sv_from_cstr("get")) == 0;
+  if (expr->tag != funcall ||
+      svcmp(expr->data.funcall.name.lexeme, sv_from_cstr("get")) != 0)
+    return 0;
+  ast_t target = expr->data.funcall.resolved_target;
+  return !target || target->tag != fundef || target->data.fundef.body == NULL;
 }
 
 static int expr_is_array(ast_t expr, name_table_t table, int *is_string) {
@@ -804,14 +1565,14 @@ static int expr_is_array(ast_t expr, name_table_t table, int *is_string) {
   ast_t ref = NULL;
   if (!expr) return 0;
   if (expr->tag == identifier) ref = get_ref(expr->data.identifier.id.lexeme, table);
-  else if (expr->tag == funcall) ref = get_ref(expr->data.funcall.name.lexeme, table);
+  else if (expr->tag == funcall) {
+    ast_funcall call = expr->data.funcall;
+    ref = call.resolved_target ? call.resolved_target
+                               : get_ref(call.name.lexeme, table);
+  }
   else if (expr->tag == method_call) {
     ast_method_call call = expr->data.method_call;
-    string_view receiver_type = infer_expr_type(call.receiver, table);
-    if (receiver_type.length > 0) {
-      ref = get_ref(sv_from_cstr(mangle_method(receiver_type, call.method.lexeme, 0)),
-                    table);
-    }
+    ref = call.is_resolved ? call.resolved_target : NULL;
   }
   if (!ref || (ref->tag != fundef && ref->tag != vardef)) return 0;
   if (ref->tag == vardef) type = ref->data.vardef.type->data.type;
@@ -844,7 +1605,8 @@ static void emit_borrowed_container_retain(generator_t *g, ast_t expr,
 // Returns 1 if the type is a pointer-allocated user type (module, record, or union).
 static int is_heap_allocated_type(string_view type_name, name_table_t table) {
   if (is_builtin_typename(string_of_sv(type_name))) return 0;
-  ast_t ref = get_ref(type_name, table);
+  if (lookup_nt_by_kind(type_name, NT_OPAQUE_TYPE, table).found) return 1;
+  ast_t ref = get_ref_by_kind(type_name, NT_USER_TYPE, table);
   return ref && ref->tag == tdef;
 }
 
@@ -885,7 +1647,7 @@ static string_view make_array_type_sv(string_view base) {
 // Returns empty string_view if the record or field is not found.
 string_view get_field_type(string_view base_type, string_view field_name,
                            name_table_t table) {
-  ast_t tdef_ref = get_ref(base_type, table);
+  ast_t tdef_ref = get_ref_by_kind(base_type, NT_USER_TYPE, table);
   if (!tdef_ref || tdef_ref->tag != tdef) return sv_from_cstr("");
   ast_tdef td = tdef_ref->data.tdef;
   if (td.t == TDEF_MODULE) {
@@ -919,7 +1681,7 @@ static int is_sub_target_scalar_string(ast_t sub_expr, name_table_t table) {
   }
   // Look up the terminal field's full type info (including is_array)
   string_view field_name = s.expr->data.identifier.id.lexeme;
-  ast_t tdef_ref = get_ref(current_type, table);
+  ast_t tdef_ref = get_ref_by_kind(current_type, NT_USER_TYPE, table);
   if (!tdef_ref || tdef_ref->tag != tdef) return 0;
   ast_tdef td = tdef_ref->data.tdef;
   for (int i = 0; i < td.constructors.length; i++) {
@@ -947,7 +1709,7 @@ static int is_sub_target_scalar_aggregate(ast_t sub_expr, name_table_t table) {
     if (current_type.length == 0) return 0;
   }
   string_view field_name = s.expr->data.identifier.id.lexeme;
-  ast_t tdef_ref = get_ref(current_type, table);
+  ast_t tdef_ref = get_ref_by_kind(current_type, NT_USER_TYPE, table);
   if (!tdef_ref || tdef_ref->tag != tdef) return 0;
   ast_tdef td = tdef_ref->data.tdef;
   for (int i = 0; i < td.constructors.length; i++) {
@@ -1015,12 +1777,16 @@ string_view infer_expr_type(ast_t expr, name_table_t table) {
     ast_funcall call = expr->data.funcall;
     // get(arr, idx) → element type of arr (same as get_var_type since Rock
     // stores element type directly in the vardef)
-    if (svcmp(call.name.lexeme, sv_from_cstr("get")) == 0 &&
+    int resolved_user = call.resolved_target &&
+                        call.resolved_target->tag == fundef &&
+                        call.resolved_target->data.fundef.body != NULL;
+    if (!resolved_user && svcmp(call.name.lexeme, sv_from_cstr("get")) == 0 &&
         call.args.length >= 1 && call.args.data[0]->tag == identifier) {
       return get_var_type(call.args.data[0]->data.identifier.id.lexeme, table);
     }
     // User-defined function → look up declared return type
-    ast_t ref = get_ref(call.name.lexeme, table);
+    ast_t ref = call.resolved_target ? call.resolved_target
+                                     : get_ref(call.name.lexeme, table);
     if (ref && ref->tag == fundef && ref->data.fundef.ret_type) {
       ast_type rt = ref->data.fundef.ret_type->data.type;
       return rt.is_array ? make_array_type_sv(rt.name.lexeme) : rt.name.lexeme;
@@ -1029,11 +1795,8 @@ string_view infer_expr_type(ast_t expr, name_table_t table) {
   }
 
   if (expr->tag == method_call) {
-    // Recursive: infer receiver type → form mangled name → look up return type
     ast_method_call mc = expr->data.method_call;
-    string_view recv_type = infer_expr_type(mc.receiver, table);
-    if (recv_type.length == 0) return sv_from_cstr("");
-    ast_t ref = get_ref(sv_from_cstr(mangle_method(recv_type, mc.method.lexeme, 0)), table);
+    ast_t ref = mc.is_resolved ? mc.resolved_target : NULL;
     if (ref && ref->tag == fundef && ref->data.fundef.ret_type) {
       ast_type rt = ref->data.fundef.ret_type->data.type;
       return rt.is_array ? make_array_type_sv(rt.name.lexeme) : rt.name.lexeme;
@@ -1118,7 +1881,7 @@ string_view try_get_field_array_type(string_view base_type,
   }
 
   // Try to look up user-defined struct types
-  ast_t tdef_ref = get_ref(base_type, table);
+  ast_t tdef_ref = get_ref_by_kind(base_type, NT_USER_TYPE, table);
   if (tdef_ref && tdef_ref->tag == tdef) {
     ast_tdef tdef = tdef_ref->data.tdef;
     if (tdef.t == TDEF_MODULE) {
@@ -1414,23 +2177,26 @@ void generate_to_string(generator_t *g, ast_funcall call) {
 void generate_funcall(generator_t *g, ast_t fun) {
   FILE *f = g->f;
   ast_funcall funcall = fun->data.funcall;
-  if (svcmp(funcall.name.lexeme, sv_from_cstr("append")) == 0) {
+  ast_t resolved = funcall.resolved_target;
+  int resolved_user = resolved && resolved->tag == fundef &&
+                      resolved->data.fundef.body != NULL;
+  if (!resolved_user && svcmp(funcall.name.lexeme, sv_from_cstr("append")) == 0) {
     generate_append(g, funcall);
-  } else if (svcmp(funcall.name.lexeme, sv_from_cstr("get")) == 0) {
+  } else if (!resolved_user && svcmp(funcall.name.lexeme, sv_from_cstr("get")) == 0) {
     generate_get(g, funcall);
-  } else if (svcmp(funcall.name.lexeme, sv_from_cstr("set")) == 0) {
+  } else if (!resolved_user && svcmp(funcall.name.lexeme, sv_from_cstr("set")) == 0) {
     generate_set(g, funcall);
-  } else if (svcmp(funcall.name.lexeme, sv_from_cstr("pop")) == 0) {
+  } else if (!resolved_user && svcmp(funcall.name.lexeme, sv_from_cstr("pop")) == 0) {
     generate_pop(g, funcall);
-  } else if (svcmp(funcall.name.lexeme, sv_from_cstr("insert")) == 0) {
+  } else if (!resolved_user && svcmp(funcall.name.lexeme, sv_from_cstr("insert")) == 0) {
     generate_insert(g, funcall);
-  } else if (svcmp(funcall.name.lexeme, sv_from_cstr("substring")) == 0) {
+  } else if (!resolved_user && svcmp(funcall.name.lexeme, sv_from_cstr("substring")) == 0) {
     generate_substring(g, funcall);
-  } else if (svcmp(funcall.name.lexeme, sv_from_cstr("concat")) == 0) {
+  } else if (!resolved_user && svcmp(funcall.name.lexeme, sv_from_cstr("concat")) == 0) {
     generate_concat(g, funcall);
-  } else if (svcmp(funcall.name.lexeme, sv_from_cstr("toString")) == 0) {
+  } else if (!resolved_user && svcmp(funcall.name.lexeme, sv_from_cstr("toString")) == 0) {
     generate_to_string(g, funcall);
-  } else if (svcmp(funcall.name.lexeme, sv_from_cstr("halt")) == 0) {
+  } else if (!resolved_user && svcmp(funcall.name.lexeme, sv_from_cstr("halt")) == 0) {
     /* halt is terminal just like return: release every active owned value and
      * restore bump marks before entering the runtime's non-returning exit. */
     FILE *saved_f = g->f;
@@ -1443,7 +2209,7 @@ void generate_funcall(generator_t *g, ast_t fun) {
       generate_expression(g, funcall.args.data[i]);
     }
     fprintf(f, ")");
-  } else if (svcmp(funcall.name.lexeme, sv_from_cstr("print")) == 0 &&
+  } else if (!resolved_user && svcmp(funcall.name.lexeme, sv_from_cstr("print")) == 0 &&
              funcall.args.length == 1 &&
              funcall.args.data[0]->tag == literal &&
              funcall.args.data[0]->data.literal.lit.type == TOK_STR_LIT) {
@@ -1454,7 +2220,7 @@ void generate_funcall(generator_t *g, ast_t fun) {
     token_t tok = funcall.args.data[0]->data.literal.lit;
     fprintf(g->f, "rock_print_bytes(" SV_Fmt ", %d)",
             SV_Arg(tok.lexeme), get_literal_string_length(tok) - 1);
-  } else if (svcmp(funcall.name.lexeme, sv_from_cstr("print")) == 0 &&
+  } else if (!resolved_user && svcmp(funcall.name.lexeme, sv_from_cstr("print")) == 0 &&
              funcall.args.length == 3) {
     // Overloaded print(x, y, text) — routes to the C print_at entry point
     // defined in src/lib/print_at.c. 1-arg print(text) falls through to the
@@ -1466,7 +2232,7 @@ void generate_funcall(generator_t *g, ast_t fun) {
       generate_expression(g, funcall.args.data[i]);
     }
     fprintf(f, ")");
-  } else if (svcmp(funcall.name.lexeme, sv_from_cstr("sleep")) == 0) {
+  } else if (!resolved_user && svcmp(funcall.name.lexeme, sv_from_cstr("sleep")) == 0) {
     // Rock `sleep` → C `rock_sleep` to avoid POSIX unistd.h collision.
     FILE *f = g->f;
     fprintf(f, "rock_sleep(");
@@ -1475,7 +2241,7 @@ void generate_funcall(generator_t *g, ast_t fun) {
       generate_expression(g, funcall.args.data[i]);
     }
     fprintf(f, ")");
-  } else if (svcmp(funcall.name.lexeme, sv_from_cstr("printf")) == 0) {
+  } else if (!resolved_user && svcmp(funcall.name.lexeme, sv_from_cstr("printf")) == 0) {
     // Rock printf takes one string argument.
     // ADR-0003 §13: route Rock string expressions through the length-aware
     // print() runtime helper. Substring views are not null-terminated, so
@@ -1497,7 +2263,7 @@ void generate_funcall(generator_t *g, ast_t fun) {
   } else {
     // Check if function is defined (either in name table or as a special builtin)
     string_view fname = funcall.name.lexeme;
-    ast_t func_ref = get_ref(fname, g->table);
+    ast_t func_ref = resolved ? resolved : get_ref(fname, g->table);
 
     // Function must be defined in name table
     if (func_ref == NULL) {
@@ -1556,7 +2322,10 @@ void generate_funcall(generator_t *g, ast_t fun) {
       fprintf(f, ")");
     } else {
       // Emit plain function call (mangled if the name is overloaded)
-      emit_fun_name(f, g, funcall.name.lexeme, funcall.args.length);
+      if (func_ref->tag == fundef && func_ref->data.fundef.emitted_c_name)
+        fprintf(f, "%s", func_ref->data.fundef.emitted_c_name);
+      else
+        emit_fun_name(f, g, funcall.name.lexeme, funcall.args.length);
       fprintf(f, "(");
       ast_array_t param_types = func_ref->data.fundef.types;
       int user_function = func_ref->data.fundef.body != NULL;
@@ -1753,17 +2522,67 @@ void generate_loop(generator_t *g, ast_t loop_ast) {
 void generate_method_call(generator_t *g, ast_t node) {
   FILE *f = g->f;
   ast_method_call mc = node->data.method_call;
-  string_view recv_type = infer_expr_type(mc.receiver, g->table);
-  if (recv_type.length == 0) {
+  if (!mc.is_resolved || mc.resolved_target == NULL || mc.resolved_c_name == NULL) {
     error(mc.method.filename, mc.method.line, mc.method.col,
-          "cannot determine type of receiver for method call '" SV_Fmt "'",
+          "unresolved method call '" SV_Fmt "'",
           SV_Arg(mc.method.lexeme));
+    return;
   }
-  char *method_name = mangle_method(recv_type, mc.method.lexeme, 0);
-  ast_t method_ref = get_ref(sv_from_cstr(method_name), g->table);
-  int receiver_is_array = recv_type.length > 6 &&
-      strncmp(recv_type.data + recv_type.length - 6, "_array", 6) == 0;
-  if (method_ref && method_ref->tag == fundef &&
+  string_view recv_type = mc.resolved_owner;
+  ast_t method_ref = mc.resolved_target;
+  int receiver_is_array = mc.resolved_kind == METHOD_ARRAY_INSTANCE;
+  int native_method = method_ref->tag == fundef &&
+                      method_ref->data.fundef.body == NULL;
+  char receiver_tmp[64] = {0};
+  char argument_tmps[COMPONENT_MANIFEST_MAX_PARAMS][64] = {{0}};
+  ast_type argument_tmp_types[COMPONENT_MANIFEST_MAX_PARAMS] = {{0}};
+  int cleanup_count = 0;
+  int cleanup_receiver = 0;
+  if (native_method && mc.resolved_kind != METHOD_TYPE_LEVEL &&
+      !rhs_is_borrower(mc.receiver) &&
+      (receiver_is_array || is_heap_allocated_type(recv_type, g->table))) {
+    snprintf(receiver_tmp, sizeof(receiver_tmp), "__native_recv_%d",
+             g->str_tmp_counter++);
+    char *receiver = capture_expression(g, mc.receiver);
+    if (receiver_is_array)
+      fprintf(g->pre_f, "__internal_dynamic_array_t %s = %s;\n",
+              receiver_tmp, receiver);
+    else
+      fprintf(g->pre_f, SV_Fmt " %s = %s;\n", SV_Arg(recv_type),
+              receiver_tmp, receiver);
+    free(receiver);
+    cleanup_receiver = 1;
+    cleanup_count++;
+  }
+  ast_array_t native_params = method_ref->data.fundef.types;
+  int native_offset = mc.resolved_kind == METHOD_TYPE_LEVEL ? 0 : 1;
+  if (native_method) {
+    for (int i = 0; i < mc.args.length && i < COMPONENT_MANIFEST_MAX_PARAMS;
+         i++) {
+      if (i + native_offset >= native_params.length ||
+          !native_params.data[i + native_offset] ||
+          native_params.data[i + native_offset]->tag != type ||
+          rhs_is_borrower(mc.args.data[i]))
+        continue;
+      ast_type param = native_params.data[i + native_offset]->data.type;
+      if (!param.is_array && svcmp(param.name.lexeme, SV_STRING) != 0 &&
+          !is_heap_allocated_type(param.name.lexeme, g->table))
+        continue;
+      snprintf(argument_tmps[i], sizeof(argument_tmps[i]), "__native_arg_%d",
+               g->str_tmp_counter++);
+      char *argument = capture_expression(g, mc.args.data[i]);
+      generate_type(g->pre_f, native_params.data[i + native_offset]);
+      fprintf(g->pre_f, " %s = %s;\n", argument_tmps[i], argument);
+      if (svcmp(param.name.lexeme, SV_STRING) == 0 &&
+          strncmp(argument, "__strtmp_", 9) == 0)
+        emit_nullify_tmp(g->pre_f, argument);
+      free(argument);
+      argument_tmp_types[i] = param;
+      cleanup_count++;
+    }
+  }
+  if (mc.resolved_kind != METHOD_TYPE_LEVEL &&
+      method_ref && method_ref->tag == fundef &&
       method_ref->data.fundef.body != NULL &&
       (receiver_is_array || is_heap_allocated_type(recv_type, g->table))) {
     ast_type receiver_type = {0};
@@ -1775,22 +2594,83 @@ void generate_method_call(generator_t *g, ast_t node) {
   if (method_ref && method_ref->tag == fundef &&
       method_ref->data.fundef.body != NULL) {
     ast_array_t params = method_ref->data.fundef.types;
-    /* Method type lists include the implicit `this` receiver first. */
-    for (int i = 0; i < mc.args.length && i + 1 < params.length; i++) {
-      if (params.data[i + 1] && params.data[i + 1]->tag == type) {
-        ast_type param = params.data[i + 1]->data.type;
+    int param_offset = mc.resolved_kind == METHOD_TYPE_LEVEL ? 0 : 1;
+    for (int i = 0; i < mc.args.length && i + param_offset < params.length; i++) {
+      if (params.data[i + param_offset] &&
+          params.data[i + param_offset]->tag == type) {
+        ast_type param = params.data[i + param_offset]->data.type;
         if (param.is_array || is_heap_allocated_type(param.name.lexeme, g->table))
           emit_borrowed_container_retain(g, mc.args.data[i], param);
       }
     }
   }
-  fprintf(f, "%s(", mangle_method(recv_type, mc.method.lexeme, 0));
-  generate_expression(g, mc.receiver);
+  ast_type native_return = method_ref->data.fundef.ret_type->data.type;
+  int native_returns_void = svcmp(native_return.name.lexeme,
+                                  sv_from_cstr("void")) == 0;
+  char result_tmp[64] = {0};
+  if (cleanup_count) {
+    fprintf(f, "(");
+    if (!native_returns_void) {
+      snprintf(result_tmp, sizeof(result_tmp), "__native_result_%d",
+               g->str_tmp_counter++);
+      generate_type(g->pre_f, method_ref->data.fundef.ret_type);
+      fprintf(g->pre_f, " %s;\n", result_tmp);
+      fprintf(f, "%s = ", result_tmp);
+    }
+  }
+  fprintf(f, "%s(", mc.resolved_c_name);
+  if (mc.resolved_kind != METHOD_TYPE_LEVEL) {
+    if (receiver_tmp[0]) fprintf(f, "%s", receiver_tmp);
+    else generate_expression(g, mc.receiver);
+  }
+  ast_array_t param_types = method_ref->data.fundef.types;
+  int param_offset = mc.resolved_kind == METHOD_TYPE_LEVEL ? 0 : 1;
   for (int i = 0; i < mc.args.length; i++) {
-    fprintf(f, ", ");
-    generate_expression(g, mc.args.data[i]);
+    if (i > 0 || mc.resolved_kind != METHOD_TYPE_LEVEL) fprintf(f, ", ");
+    if (g->auto_cast && i + param_offset < param_types.length &&
+        param_types.data[i + param_offset] &&
+        param_types.data[i + param_offset]->tag == type) {
+      string_view parameter_name =
+          param_types.data[i + param_offset]->data.type.name.lexeme;
+      if (svcmp(parameter_name, sv_from_cstr("byte")) == 0 ||
+          svcmp(parameter_name, sv_from_cstr("word")) == 0 ||
+          svcmp(parameter_name, sv_from_cstr("dword")) == 0)
+        fprintf(f, "(" SV_Fmt ")(", SV_Arg(parameter_name));
+      else
+        parameter_name = sv_from_cstr("");
+      if (argument_tmps[i][0]) fprintf(f, "%s", argument_tmps[i]);
+      else generate_expression(g, mc.args.data[i]);
+      if (parameter_name.length > 0) fprintf(f, ")");
+      continue;
+    }
+    if (argument_tmps[i][0]) fprintf(f, "%s", argument_tmps[i]);
+    else generate_expression(g, mc.args.data[i]);
   }
   fprintf(f, ")");
+  if (cleanup_count) {
+    if (cleanup_receiver) {
+      if (receiver_is_array)
+        fprintf(f, ", __internal_free_array(%s, 0)", receiver_tmp);
+      else
+        fprintf(f, ", __rock_release_" SV_Fmt "(%s)", SV_Arg(recv_type),
+                receiver_tmp);
+    }
+    for (int i = 0; i < mc.args.length && i < COMPONENT_MANIFEST_MAX_PARAMS;
+         i++) {
+      if (!argument_tmps[i][0]) continue;
+      ast_type param = argument_tmp_types[i];
+      if (param.is_array)
+        fprintf(f, ", __internal_free_array(%s, %d)", argument_tmps[i],
+                svcmp(param.name.lexeme, SV_STRING) == 0);
+      else if (svcmp(param.name.lexeme, SV_STRING) == 0)
+        fprintf(f, ", __string_release(%s)", argument_tmps[i]);
+      else
+        fprintf(f, ", __rock_release_" SV_Fmt "(%s)",
+                SV_Arg(param.name.lexeme), argument_tmps[i]);
+    }
+    if (!native_returns_void) fprintf(f, ", %s", result_tmp);
+    fprintf(f, ")");
+  }
 }
 
 void generate_sub_as_expression(generator_t *g, ast_t expr) {
@@ -1906,8 +2786,12 @@ void generate_expression(generator_t *g, ast_t expr) {
     string_view lexeme = expr->data.identifier.id.lexeme;
     // In a module method, rewrite module field names to this->field
     if (g->current_module_type.length > 0) {
-      ast_t mod_ref = get_ref(g->current_module_type, g->table);
-      if (mod_ref && mod_ref->tag == tdef && mod_ref->data.tdef.t == TDEF_MODULE) {
+      nt_lookup_t lexical_value =
+          lookup_nt_by_kind(lexeme, NT_VAR, g->table);
+      ast_t mod_ref = get_ref_by_kind(g->current_module_type, NT_USER_TYPE,
+                                      g->table);
+      if ((!lexical_value.found || lexical_value.scope == 0) && mod_ref &&
+          mod_ref->tag == tdef && mod_ref->data.tdef.t == TDEF_MODULE) {
         ast_array_t fields = mod_ref->data.tdef.module_fields;
         for (int i = 0; i < fields.length; i++) {
           ast_vardef vd = fields.data[i]->data.vardef;
@@ -2104,7 +2988,8 @@ void generate_assignement(generator_t *g, ast_t assignment) {
 
 // Returns 1 if type_name refers to a module type
 static int is_module_type(string_view type_name, name_table_t table) {
-  ast_t ref = get_ref(type_name, table);
+  if (lookup_nt_by_kind(type_name, NT_OPAQUE_TYPE, table).found) return 1;
+  ast_t ref = get_ref_by_kind(type_name, NT_USER_TYPE, table);
   return ref && ref->tag == tdef && ref->data.tdef.t == TDEF_MODULE;
 }
 
@@ -2224,7 +3109,7 @@ void generate_vardef(generator_t *g, ast_t var) {
     ast_record_expr rec = vardef.expr->data.record_expr;
 
     // Look up struct type to get field types
-    ast_t struct_ref = get_ref(type_name, g->table);
+    ast_t struct_ref = get_ref_by_kind(type_name, NT_USER_TYPE, g->table);
 
     if (vardef.is_rec) {
       // First, capture all field expressions (which fills pre_f with setup)
@@ -2390,7 +3275,7 @@ void generate_match(generator_t *g, ast_t match_ast) {
   // rather than the value as a whole.
   int is_union = 0;
   if (type.length > 0) {
-    ast_t type_ref = get_ref(type, g->table);
+    ast_t type_ref = get_ref_by_kind(type, NT_USER_TYPE, g->table);
     if (type_ref && type_ref->tag == tdef &&
         type_ref->data.tdef.t == TDEF_PRO) {
       is_union = 1;
@@ -2471,6 +3356,18 @@ void generate_match(generator_t *g, ast_t match_ast) {
 
 void generate_return(generator_t *g, ast_t ret_ast) {
   FILE *f = g->f;
+  if (g->in_main_body) {
+    g->main_needs_epilogue = 1;
+    if (ret_ast->data.ret.expr != NULL) {
+      char *discard = capture_expression(g, ret_ast->data.ret.expr);
+      flush_pre_f(g, f);
+      fprintf(f, "(void)(%s);\n", discard);
+      free(discard);
+    }
+    emit_return_cleanup(g, sv_from_cstr(""));
+    fprintf(f, "goto rock_main_epilogue;\n");
+    return;
+  }
   if (ret_ast->data.ret.expr != NULL) {
     char *expr_text = capture_expression(g, ret_ast->data.ret.expr);
     flush_pre_f(g, f);
@@ -2696,22 +3593,21 @@ void generate_function_body(generator_t *g, ast_t fun) {
 }
 
 void generate_fundef(generator_t *g, ast_t fun) {
-  // add to name table
   FILE *f = g->f;
   ast_fundef fundef = fun->data.fundef;
   new_nt_scope(&g->table);
 
   string_view emit_name;
-  if (fundef.is_method)
-    emit_name = sv_from_cstr(mangle_method(fundef.type_name.lexeme, fundef.name.lexeme, fundef.is_array_method));
+  if (fundef.method_kind != METHOD_NONE)
+    emit_name = sv_from_cstr(mangle_fundef_method(fundef));
   else
     emit_name = fundef.name.lexeme;
-  push_nt(&g->table, emit_name, NT_FUN, fun);
 
-  if (svcmp(fundef.name.lexeme, sv_from_cstr("main")) != 0) {
+  if (fundef.method_kind != METHOD_NONE ||
+      svcmp(fundef.name.lexeme, sv_from_cstr("main")) != 0) {
     generate_type(f, fundef.ret_type);
     fprintf(f, " ");
-    if (fundef.is_method)
+    if (fundef.method_kind != METHOD_NONE)
       fprintf(f, SV_Fmt, SV_Arg(emit_name));
     else
       emit_fun_name(f, g, fundef.name.lexeme, fundef.args.length);
@@ -2731,7 +3627,7 @@ void generate_fundef(generator_t *g, ast_t fun) {
     fprintf(f, ")\n");
     // For module methods, expose field names as implicit this-> references
     string_view saved_module_type = g->current_module_type;
-    if (fundef.is_method)
+    if (is_instance_method_kind(fundef.method_kind))
       g->current_module_type = fundef.type_name.lexeme;
     int saved_global = g->in_global_scope;
     g->in_global_scope = 0;
@@ -2759,7 +3655,7 @@ void generate_fundef(generator_t *g, ast_t fun) {
     fprintf(f, "fill_cmd_args(argc, argv);\n");
     if (g->zxn_test)
       fprintf(f, "zxn_test_stage(\"rtl\");\n");
-    fprintf(f, "rock_rtl_init();\n");
+    emit_component_init(g);
     // Initialize any global module vars that were deferred from global scope
     for (int i = 0; i < g->deferred_module_inits.length; i++) {
       ast_vardef vd = g->deferred_module_inits.data[i]->data.vardef;
@@ -2773,11 +3669,14 @@ void generate_fundef(generator_t *g, ast_t fun) {
     }
     int saved_global = g->in_global_scope;
     g->in_global_scope = 0;
+    g->in_main_body = 1;
     generate_compound(g, fundef.body);
+    g->in_main_body = 0;
     g->in_global_scope = saved_global;
+    if (g->main_needs_epilogue) fprintf(f, "rock_main_epilogue:\n");
     if (g->zxn_test)
       fprintf(f, "zxn_test_finish();\n");
-    fprintf(f, "rock_rtl_shutdown();\n");
+    emit_component_shutdown(g);
     fprintf(f, "rock_pools_deinit();\n");
     fprintf(f, "return 0;\n");
     fprintf(f, "}\n\n");
@@ -2816,10 +3715,6 @@ void generate_forward_defs(generator_t *g, ast_t program) {
      * but may legitimately call a later source function.  Register every
      * top-level function while producing its C prototype so those initializers
      * have the same lookup contract as normal expressions. */
-    if (stmt->tag == fundef) {
-      ast_fundef fd = stmt->data.fundef;
-      push_nt(&g->table, fd.name.lexeme, NT_FUN, stmt);
-    }
     if (stmt->tag == tdef) {
       struct ast_tdef tdef = stmt->data.tdef;
       string_view name = tdef.name.lexeme;
@@ -2897,11 +3792,12 @@ void generate_forward_defs(generator_t *g, ast_t program) {
     ast_t stmt = stmts.data[i];
     if (stmt->tag == fundef) {
       ast_fundef fundef = stmt->data.fundef;
-      if (svcmp(fundef.name.lexeme, sv_from_cstr("main")) != 0) {
+      if (fundef.method_kind != METHOD_NONE ||
+          svcmp(fundef.name.lexeme, sv_from_cstr("main")) != 0) {
         generate_type(f, fundef.ret_type);
 
-        if (fundef.is_method) {
-          fprintf(f, " %s(", mangle_method(fundef.type_name.lexeme, fundef.name.lexeme, fundef.is_array_method));
+        if (fundef.method_kind != METHOD_NONE) {
+          fprintf(f, " %s(", mangle_fundef_method(fundef));
         } else {
           fprintf(f, " ");
           emit_fun_name(f, g, fundef.name.lexeme, fundef.args.length);
@@ -2931,15 +3827,17 @@ void generate_forward_defs(generator_t *g, ast_t program) {
       generate_array_funcs(g, name);
     }
   }
+  for (int i = 0; i < g->components->interface_count; i++) {
+    component_interface_spec *entry = &g->components->interfaces[i];
+    if (entry->kind == COMPONENT_OPAQUE && g->opaque_array_used[i])
+      generate_array_funcs(g, entry->owner);
+  }
 }
 
 void generate_tdef(generator_t *g, ast_t tdef_ast) {
   FILE *f = g->f;
   struct ast_tdef tdef = tdef_ast->data.tdef;
   string_view name = tdef.name.lexeme;
-
-  // Register the type in the name table so it can be looked up later
-  push_nt(&g->table, name, NT_USER_TYPE, tdef_ast);
 
   if (tdef.t == TDEF_MODULE) {
     // Register TypeName_new in the name table
@@ -3092,7 +3990,8 @@ static void analyse_zxn_tiny_node(ast_t node, zxn_tiny_analysis *analysis) {
       return;
     }
     case fundef:
-      if (svcmp(node->data.fundef.name.lexeme, sv_from_cstr("main")) != 0) {
+      if (node->data.fundef.method_kind != METHOD_NONE ||
+          svcmp(node->data.fundef.name.lexeme, sv_from_cstr("main")) != 0) {
         analysis->eligible = 0;
         return;
       }
@@ -3182,12 +4081,236 @@ static zxn_tiny_analysis analyse_zxn_tiny_program(generator_t *g,
   return analysis;
 }
 
+static void mark_opaque_type_usage(generator_t *g, ast_t type_node) {
+  if (!type_node || type_node->tag != type) return;
+  ast_type declared = type_node->data.type;
+  char *name = string_of_sv(declared.name.lexeme);
+  for (int i = 0; i < g->components->interface_count; i++) {
+    component_interface_spec *entry = &g->components->interfaces[i];
+    if (entry->kind == COMPONENT_OPAQUE && strcmp(entry->owner, name) == 0) {
+      g->opaque_value_used[i] = 1;
+      if (declared.is_array) g->opaque_array_used[i] = 1;
+      return;
+    }
+  }
+}
+
+static void collect_component_uses(generator_t *g, ast_t node) {
+  if (!node) return;
+  switch (node->tag) {
+  case program:
+    for (int i = 0; i < node->data.program.prog.length; i++)
+      collect_component_uses(g, node->data.program.prog.data[i]);
+    return;
+  case fundef:
+    mark_opaque_type_usage(g, node->data.fundef.ret_type);
+    for (int i = 0; i < node->data.fundef.types.length; i++)
+      mark_opaque_type_usage(g, node->data.fundef.types.data[i]);
+    collect_component_uses(g, node->data.fundef.body);
+    return;
+  case compound:
+    for (int i = 0; i < node->data.compound.stmts.length; i++)
+      collect_component_uses(g, node->data.compound.stmts.data[i]);
+    return;
+  case funcall: {
+    ast_funcall call = node->data.funcall;
+    record_fundef_component(g, call.resolved_target);
+    for (int i = 0; i < call.args.length; i++)
+      collect_component_uses(g, call.args.data[i]);
+    return;
+  }
+  case method_call:
+    record_fundef_component(g, node->data.method_call.resolved_target);
+    collect_component_uses(g, node->data.method_call.receiver);
+    for (int i = 0; i < node->data.method_call.args.length; i++)
+      collect_component_uses(g, node->data.method_call.args.data[i]);
+    return;
+  case vardef:
+    mark_opaque_type_usage(g, node->data.vardef.type);
+    collect_component_uses(g, node->data.vardef.expr);
+    return;
+  case assign:
+    collect_component_uses(g, node->data.assign.target);
+    collect_component_uses(g, node->data.assign.expr);
+    return;
+  case op:
+    collect_component_uses(g, node->data.op.left);
+    collect_component_uses(g, node->data.op.right);
+    return;
+  case unary_op:
+    collect_component_uses(g, node->data.unary_op.operand);
+    return;
+  case ret:
+    collect_component_uses(g, node->data.ret.expr);
+    return;
+  case ifstmt:
+    collect_component_uses(g, node->data.ifstmt.expression);
+    collect_component_uses(g, node->data.ifstmt.body);
+    collect_component_uses(g, node->data.ifstmt.elsestmt);
+    return;
+  case while_loop:
+    collect_component_uses(g, node->data.while_loop.condition);
+    collect_component_uses(g, node->data.while_loop.statement);
+    return;
+  case loop:
+    collect_component_uses(g, node->data.loop.start);
+    collect_component_uses(g, node->data.loop.end);
+    collect_component_uses(g, node->data.loop.statement);
+    return;
+  case iter_loop:
+    collect_component_uses(g, node->data.iter_loop.iterable);
+    collect_component_uses(g, node->data.iter_loop.statement);
+    return;
+  case sub:
+    collect_component_uses(g, node->data.sub.receiver);
+    collect_component_uses(g, node->data.sub.expr);
+    return;
+  case arr_index:
+    collect_component_uses(g, node->data.arr_index.array);
+    collect_component_uses(g, node->data.arr_index.index);
+    collect_component_uses(g, node->data.arr_index.field_expr);
+    return;
+  case record_expr:
+    for (int i = 0; i < node->data.record_expr.exprs.length; i++)
+      collect_component_uses(g, node->data.record_expr.exprs.data[i]);
+    return;
+  case match:
+    collect_component_uses(g, node->data.match.expr);
+    for (int i = 0; i < node->data.match.cases.length; i++)
+      collect_component_uses(g, node->data.match.cases.data[i]);
+    return;
+  case matchcase:
+    collect_component_uses(g, node->data.matchcase.expr);
+    collect_component_uses(g, node->data.matchcase.body);
+    return;
+  case tdef:
+    for (int i = 0; i < node->data.tdef.module_fields.length; i++)
+      collect_component_uses(g, node->data.tdef.module_fields.data[i]);
+    for (int i = 0; i < node->data.tdef.constructors.length; i++) {
+      ast_t constructor = node->data.tdef.constructors.data[i];
+      if (constructor && constructor->tag == cons)
+        mark_opaque_type_usage(g, constructor->data.cons.type);
+    }
+    return;
+  default:
+    return;
+  }
+}
+
+static void close_component(generator_t *g, int index, unsigned char *visiting) {
+  if (g->closed_components[index]) return;
+  if (visiting[index]) {
+    fprintf(stderr, "%s: error: component dependency cycle includes '%s'\n",
+            g->components->path, g->components->components[index].id);
+    exit(1);
+  }
+  visiting[index] = 1;
+  component_spec *component = &g->components->components[index];
+  int dependency_count = component_parameter_count(component->dependencies);
+  for (int i = 0; i < dependency_count; i++) {
+    char dependency[128];
+    component_parameter_at(component->dependencies, i, dependency,
+                           sizeof(dependency));
+    int dependency_index = component_index(g, dependency);
+    if (dependency_index < 0) {
+      fprintf(stderr, "%s: error: unknown component dependency '%s'\n",
+              g->components->path, dependency);
+      exit(1);
+    }
+    close_component(g, dependency_index, visiting);
+  }
+  visiting[index] = 0;
+  g->closed_components[index] = 1;
+  g->component_order[g->component_order_count++] = index;
+}
+
+static void compute_component_closure(generator_t *g) {
+  unsigned char visiting[COMPONENT_MANIFEST_MAX_COMPONENTS] = {0};
+  for (int i = 0; i < g->components->component_count; i++) {
+    int always = g->components->components[i].always;
+    if (g->zxn_tiny_eligible &&
+        strcmp(g->components->components[i].id, "core") == 0)
+      always = 0;
+    if (g->select_all_components || always)
+      g->direct_components[i] = 1;
+  }
+  for (int i = 0; i < g->components->component_count; i++)
+    if (g->direct_components[i]) close_component(g, i, visiting);
+}
+
+static void write_component_output(generator_t *g) {
+  FILE *file = fopen(g->component_output_path, "wb");
+  if (!file) {
+    fprintf(stderr, "error: cannot write component output '%s'\n",
+            g->component_output_path);
+    exit(1);
+  }
+  fprintf(file, "ROCK_COMPONENTS_V1\n");
+  fprintf(file, "@profile=%s\n",
+          g->zxn_tiny_eligible
+              ? (g->zxn_tiny_uses_stdout
+                     ? (g->zxn_tiny_simple_stdout ? "tiny-0" : "tiny-1")
+                     : "tiny-31")
+              : "full");
+  for (int i = 0; i < g->component_order_count; i++)
+    fprintf(file, "%s\n",
+            g->components->components[g->component_order[i]].id);
+  fclose(file);
+}
+
+static void emit_manifest_headers(generator_t *g) {
+  FILE *f = g->f;
+  for (int i = 0; i < g->components->component_count; i++) {
+    component_spec *component = &g->components->components[i];
+    int header_count = component_parameter_count(component->headers);
+    for (int j = 0; j < header_count; j++) {
+      char header[256];
+      component_parameter_at(component->headers, j, header, sizeof(header));
+      fprintf(f, "#include \"%s\"\n", header);
+    }
+  }
+}
+
+static void emit_component_init(generator_t *g) {
+  for (int i = 0; i < g->component_order_count; i++) {
+    component_spec *component =
+        &g->components->components[g->component_order[i]];
+    if (component->init_hook[0] != '\0')
+      fprintf(g->f, "%s();\n", component->init_hook);
+  }
+}
+
+static void emit_component_shutdown(generator_t *g) {
+  for (int i = g->component_order_count - 1; i >= 0; i--) {
+    component_spec *component =
+        &g->components->components[g->component_order[i]];
+    if (component->shutdown_hook[0] != '\0')
+      fprintf(g->f, "%s();\n", component->shutdown_hook);
+  }
+}
+
 void transpile(generator_t *g, ast_t program) {
   FILE *f = g->f;
   g->program = program;
   ast_array_t stmts = program->data.program.prog;
 
+  register_program_symbols(g, program);
+  resolve_method_calls(g, program);
+  if (get_error_count() > 0) return;
   zxn_tiny_analysis tiny = analyse_zxn_tiny_program(g, program);
+  g->zxn_tiny_eligible = tiny.eligible;
+  g->zxn_tiny_uses_stdout = tiny.uses_stdout;
+  g->zxn_tiny_simple_stdout = tiny.simple_stdout;
+  collect_component_uses(g, program);
+  if (tiny.eligible) {
+    int core = component_index(g, "core");
+    if (core >= 0) g->direct_components[core] = 0;
+    if (tiny.uses_stdout) record_component(g, "tiny_print");
+    if (g->zxn_test) record_component(g, "tiny_test");
+  }
+  compute_component_closure(g);
+  write_component_output(g);
+
   if (tiny.eligible) {
     if (!tiny.uses_stdout)
       fprintf(f, "/* ROCK_PROFILE:ZXN_TINY_CORE:STARTUP=31 */\n");
@@ -3198,30 +4321,8 @@ void transpile(generator_t *g, ast_t program) {
   }
 
   fprintf(f, "#include <stdlib.h>\n");
-  fprintf(f, "#include \"pools.h\"\n");
-  fprintf(f, "#include \"fundefs.h\"\n");
-  fprintf(f, "#include \"fundefs_internal.h\"\n");
-  fprintf(f, "#include \"typedefs.h\"\n");
-  fprintf(f, "#include \"host_caps.h\"\n");
-  fprintf(f, "#include \"keyboard.h\"\n");
-  fprintf(f, "#include \"border.h\"\n");
-  fprintf(f, "#include \"ink_paper.h\"\n");
-  fprintf(f, "#include \"cls.h\"\n");
-  fprintf(f, "#include \"time.h\"\n");
-  fprintf(f, "#include \"sound.h\"\n");
-  fprintf(f, "#include \"input.h\"\n");
-  fprintf(f, "#include \"print_at.h\"\n");
-  fprintf(f, "#include \"plot.h\"\n");
-  fprintf(f, "#include \"draw.h\"\n");
-  fprintf(f, "#include \"polyline.h\"\n");
-  fprintf(f, "#include \"circle.h\"\n");
-  fprintf(f, "#include \"fill.h\"\n");
-  fprintf(f, "#include \"triangle.h\"\n");
-  fprintf(f, "#include \"random.h\"\n");
-  fprintf(f, "#include \"nextreg.h\"\n");
-  fprintf(f, "#include \"helpers.h\"\n");
-  fprintf(f, "#include \"fmath.h\"\n");
-  fprintf(f, "#include \"zxn_test.h\"\n\n");
+  emit_manifest_headers(g);
+  fprintf(f, "\n");
 
   /* Aggregate release functions take void* in their declarations so they can
    * be used by functions emitted before a later type definition. */
@@ -3231,6 +4332,12 @@ void transpile(generator_t *g, ast_t program) {
       fprintf(f, "static void __rock_release_" SV_Fmt "(void *);\n",
               SV_Arg(stmt->data.tdef.name.lexeme));
     }
+  }
+  for (int i = 0; i < g->components->interface_count; i++) {
+    component_interface_spec *entry = &g->components->interfaces[i];
+    if (entry->kind == COMPONENT_OPAQUE && g->opaque_value_used[i])
+      fprintf(f, "static void __rock_release_%s(void *value) { "
+                 "__handle_release(value); }\n", entry->owner);
   }
   fprintf(f, "\n");
 

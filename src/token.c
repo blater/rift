@@ -21,7 +21,8 @@ static string_view lexemes[TOK_COUNT] = {
     SV_Static(";"),       SV_Static("loop"),   SV_Static("while"),
     SV_Static("do"),      SV_Static(""),       SV_Static("include"),
     SV_Static("enum"),    SV_Static("[]"),     SV_Static("["),
-    SV_Static("]"),       SV_Static("sub"),    SV_Static("for"),
+    SV_Static("]"),       SV_Static("static"), SV_Static("sub"),
+    SV_Static("for"),
     SV_Static("to"),      SV_Static("in"),     SV_Static("@embed"),
     SV_Static("@end"),    SV_Static("<embed body>"), SV_Static("module"),
     SV_Static("default"), SV_Static("returns"), SV_Static("union"),
@@ -30,7 +31,7 @@ static string_view lexemes[TOK_COUNT] = {
 static token_type_t keywords[] = {
     TOK_MATCH,  TOK_REC,     TOK_WILDCARD, TOK_DEFAULT, TOK_RETURN,
     TOK_IF,     TOK_THEN,    TOK_ELSE,     TOK_LOOP,    TOK_WHILE,
-    TOK_DO,     TOK_INCLUDE, TOK_ENUM,     TOK_ARR_DECL, TOK_SUB,
+    TOK_DO,     TOK_INCLUDE, TOK_ENUM,     TOK_ARR_DECL, TOK_STATIC, TOK_SUB,
     TOK_FOR,    TOK_TO,      TOK_IN,       TOK_MODULE,  TOK_RETURNS,
     TOK_UNION,  TOK_GRAPHICS, TOK_COLLECT};
 

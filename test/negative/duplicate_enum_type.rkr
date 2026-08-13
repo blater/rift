@@ -1,0 +1,7 @@
+enum Pair {
+  First,
+}
+
+module Pair;
+
+sub main() {}

@@ -1,0 +1,4 @@
+module Sprite;
+
+sub main() {
+}

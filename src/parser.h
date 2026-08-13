@@ -20,6 +20,8 @@ typedef struct parser_t {
 } parser_t;
 
 parser_t new_parser(token_array_t l);
+void parser_reset_standard_types(void);
+void parser_register_standard_module_type(const char *name);
 token_type_t peek_type(parser_t p);
 token_t peek_token(parser_t p);
 void parse_program(parser_t* p);

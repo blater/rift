@@ -4,6 +4,7 @@
 #include "typedefs.h"
 #include "asm_interop.h"
 #include <stdio.h>
+#include "light_console.h"
 
 void print(string s);
 void rock_print_bytes(const char *data, size_t length);

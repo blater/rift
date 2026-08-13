@@ -10,6 +10,7 @@
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include "light_console.h"
 
 /* The normal ZXN build exports the public allocate/free symbols from the
  * small assembly shim.  It handles only a magazine hit and transfers every

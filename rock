@@ -99,8 +99,11 @@ build() {
   local pool_fast_define=""
   local pool_capacity_defines=""
   local tiny_core_define=""
+  local tiny_print_direct_define=""
+  local light_core_define=""
   local zxn_startup=1
   local zxn_tiny_core=0
+  local zxn_light_core=0
   local generated_source="${exe_abs}.c"
   local component_output="${exe_abs}.components"
   local generated_profile=""
@@ -114,19 +117,26 @@ build() {
       tiny-31)
         zxn_tiny_core=1
         zxn_startup=31
+        tiny_print_direct_define="-DROCK_ZXN_TINY_PRINT_DIRECT"
         ;;
-      tiny-0)
+      tiny-console-31)
         zxn_tiny_core=1
-        zxn_startup=0
+        zxn_startup=31
+        tiny_print_direct_define="-DROCK_ZXN_TINY_PRINT_DIRECT -DROCK_ZXN_TINY_PRINT_CONTROLS"
         ;;
-      tiny-1)
-        zxn_tiny_core=1
-        zxn_startup=1
+      core-31)
+        zxn_light_core=1
+        zxn_startup=31
+        tiny_print_direct_define="-DROCK_ZXN_TINY_PRINT_DIRECT -DROCK_ZXN_TINY_PRINT_CONTROLS"
+        light_core_define="-DROCK_ZXN_LIGHT_CORE"
         ;;
     esac
     if [ "$(printf '%s\n' "$selected_ids" | sed '/^core$/d;/^tiny_print$/d;/^tiny_test$/d;/^$/d' | wc -l | tr -d ' ')" -gt 0 ]; then
       zxn_tiny_core=0
+      zxn_light_core=0
       zxn_startup=1
+      tiny_print_direct_define=""
+      light_core_define=""
     fi
     [ "$zxn_tiny_core" = "1" ] && tiny_core_define="-DROCK_ZXN_TINY_CORE"
   fi
@@ -167,13 +177,15 @@ build() {
     [ "$ZXN_TEST" = "1" ] && zxn_test_define="-DROCK_ZXN_TEST"
     [ "$ALLOCATOR_STATS" = "1" ] && allocator_stats_define="-DROCK_ALLOCATOR_STATS"
     pool_capacity_defines="-DROCK_ZXN_BUMP_POOL_CAPACITY=$ZXN_BUMP_POOL_CAPACITY -DROCK_ZXN_LONGLIVED_POOL_CAPACITY=$ZXN_LONGLIVED_POOL_CAPACITY"
-    echo "ZXN profile: startup=$zxn_startup, bump-pool=$ZXN_BUMP_POOL_CAPACITY, longlived-pool=$ZXN_LONGLIVED_POOL_CAPACITY, tiny-core=$zxn_tiny_core"
+    echo "ZXN profile: startup=$zxn_startup, bump-pool=$ZXN_BUMP_POOL_CAPACITY, longlived-pool=$ZXN_LONGLIVED_POOL_CAPACITY, tiny-core=$zxn_tiny_core, light-core=$zxn_light_core"
     zcc +zxn -m -vn -subtype=nex -startup="$zxn_startup" -clib=$CLIB --opt-code-size -create-app \
       $zxn_test_define \
       $allocator_stats_define \
       $pool_fast_define \
       $pool_capacity_defines \
       $tiny_core_define \
+      $tiny_print_direct_define \
+      $light_core_define \
       -pragma-include:"${RT}/lib/zxn/zpragma_zxn.inc" \
       -I"${RT}/lib" \
       -lm \

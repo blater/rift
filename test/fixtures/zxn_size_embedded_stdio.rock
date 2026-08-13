@@ -1,0 +1,5 @@
+sub main() {
+  @embed c
+    printf("embedded stdio\n");
+  @end c
+}

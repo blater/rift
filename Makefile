@@ -10,7 +10,7 @@ OBJECTS = $(BUILD)alloc.o $(BUILD)ast.o $(BUILD)lexer.o $(BUILD)token.o \
           $(BUILD)main.o
 DEPS = $(OBJECTS:.o=.d)
 
-.PHONY: all clean test-pools test-name-table test-type-method-autocast test-component-manifest test-negative test-refcount test-zxn test-autolink test-memory-profile test-zxn-size
+.PHONY: all clean test-pools test-name-table test-type-method-autocast test-component-manifest test-negative test-refcount test-zxn test-zxn-tiny-print test-zxn-light-core test-autolink test-memory-profile test-zxn-size
 
 all: $(BUILD) rockc
 
@@ -85,6 +85,16 @@ test-refcount: $(BUILD)string_refcount_test
 # `tools/test-zxn --emulator-bin ...`.
 test-zxn: rockc
 	tools/test-zxn
+
+# Verify the startup-31 tiny literal writer against ULA screen memory in the
+# project-patched ZEsarUX build.
+test-zxn-tiny-print: rockc
+	sh test/test_zxn_tiny_print.sh
+
+# Execute a dynamic string through pools/refcounting and the Rock-owned console
+# without linking startup=1's stdio streams or terminal.
+test-zxn-light-core: rockc
+	sh test/test_zxn_light_core.sh
 
 # Build a representative multi-component RTL program with both ZXN link modes.
 # The script verifies that auto-linking resolves all required dependencies and

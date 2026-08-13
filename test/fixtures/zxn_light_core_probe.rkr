@@ -1,0 +1,5 @@
+sub main() {
+  string message := concat("dynamic", " light core\n");
+  print(message);
+  zxn_test_pass();
+}

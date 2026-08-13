@@ -16,7 +16,9 @@ for source in \
   test/function_argument_ownership_test.rkr \
   test/fluent_array_ownership_test.rkr \
   test/module_ownership_test.rkr \
-  test/collect_test.rkr
+  test/collect_test.rkr \
+  test/array_reassignment_soak_test.rkr \
+  test/mixed_memory_soak_test.rkr
 do
   name=$(basename "$source" .rkr)
   output="$tmpdir/$name"

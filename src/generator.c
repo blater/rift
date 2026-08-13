@@ -1523,6 +1523,36 @@ string_view get_var_type(string_view name, name_table_t table) {
   return sv_from_cstr("");
 }
 
+// Resolve an identifier's declared array type. Parameters are represented in
+// the name table by their enclosing function definition, so handle both local
+// variable and parameter entries here.
+static int get_identifier_array_type(string_view name, name_table_t table,
+                                     ast_type *result) {
+  ast_t ref = get_ref(name, table);
+  if (!ref) return 0;
+
+  if (ref->tag == vardef) {
+    ast_type declared_type = ref->data.vardef.type->data.type;
+    if (!declared_type.is_array) return 0;
+    if (result) *result = declared_type;
+    return 1;
+  }
+
+  if (ref->tag == fundef) {
+    ast_fundef fundef = ref->data.fundef;
+    for (int i = 0; i < fundef.args.length; i++) {
+      if (svcmp(fundef.args.data[i].lexeme, name) == 0) {
+        ast_type declared_type = fundef.types.data[i]->data.type;
+        if (!declared_type.is_array) return 0;
+        if (result) *result = declared_type;
+        return 1;
+      }
+    }
+  }
+
+  return 0;
+}
+
 // Returns 1 if the named variable is a scalar (non-array) string type
 static int is_scalar_string_var(string_view name, name_table_t table) {
   ast_t ref = get_ref(name, table);
@@ -2856,6 +2886,29 @@ void generate_assignement(generator_t *g, ast_t assignment) {
     generate_expression(g, assign.expr);
     fprintf(f, ")");
   } else {
+    /* An array variable owns one reference. Retain a borrowed RHS before
+     * releasing the old destination so aliases remain live; producer results
+     * transfer their existing reference into the destination. */
+    ast_type target_array_type = {0};
+    if (assign.target->tag == identifier &&
+        get_identifier_array_type(
+            assign.target->data.identifier.id.lexeme, g->table,
+            &target_array_type)) {
+      char *rhs_text = capture_expression(g, assign.expr);
+      char *target_text = capture_expression(g, assign.target);
+      flush_pre_f(g, f);
+      if (strcmp(rhs_text, target_text) != 0) {
+        if (rhs_is_borrower(assign.expr)) {
+          fprintf(f, "__internal_retain_array(%s);\n", rhs_text);
+        }
+        fprintf(f, "__internal_free_array(%s, %d);\n", target_text,
+                svcmp(target_array_type.name.lexeme, SV_STRING) == 0);
+        fprintf(f, "%s = %s;\n", target_text, rhs_text);
+      }
+      free(rhs_text);
+      free(target_text);
+      return;
+    }
     // For string reassignment, free the old value before overwriting
     if (assign.target->tag == identifier &&
         is_scalar_string_var(assign.target->data.identifier.id.lexeme, g->table)) {
@@ -4115,6 +4168,13 @@ static void collect_component_uses(generator_t *g, ast_t node) {
   case funcall: {
     ast_funcall call = node->data.funcall;
     record_fundef_component(g, call.resolved_target);
+    if ((!call.resolved_target || call.resolved_target->tag != fundef ||
+         call.resolved_target->data.fundef.body == NULL) &&
+        (svcmp(call.name.lexeme, sv_from_cstr("putchar")) == 0 ||
+         (svcmp(call.name.lexeme, sv_from_cstr("printf")) == 0 &&
+          (call.args.length != 1 ||
+           !expr_returns_string(call.args.data[0], g->table)))))
+      g->zxn_light_core_eligible = 0;
     for (int i = 0; i < call.args.length; i++)
       collect_component_uses(g, call.args.data[i]);
     return;
@@ -4192,6 +4252,11 @@ static void collect_component_uses(generator_t *g, ast_t node) {
         mark_opaque_type_usage(g, constructor->data.cons.type);
     }
     return;
+  case embed:
+    /* Embedded C/assembly may use CRT state or stdio behind the compiler's
+     * back. Keep the established startup=1 contract for that escape hatch. */
+    g->zxn_light_core_eligible = 0;
+    return;
   default:
     return;
   }
@@ -4249,9 +4314,10 @@ static void write_component_output(generator_t *g) {
   fprintf(file, "@profile=%s\n",
           g->zxn_tiny_eligible
               ? (g->zxn_tiny_uses_stdout
-                     ? (g->zxn_tiny_simple_stdout ? "tiny-0" : "tiny-1")
+                     ? (g->zxn_tiny_simple_stdout ? "tiny-31"
+                                                  : "tiny-console-31")
                      : "tiny-31")
-              : "full");
+              : (g->zxn_light_core_eligible ? "core-31" : "full"));
   for (int i = 0; i < g->component_order_count; i++)
     fprintf(file, "%s\n",
             g->components->components[g->component_order[i]].id);
@@ -4301,7 +4367,14 @@ void transpile(generator_t *g, ast_t program) {
   g->zxn_tiny_eligible = tiny.eligible;
   g->zxn_tiny_uses_stdout = tiny.uses_stdout;
   g->zxn_tiny_simple_stdout = tiny.simple_stdout;
+  g->zxn_light_core_eligible = g->target == TARGET_ZXN;
   collect_component_uses(g, program);
+  for (int i = 0; i < g->components->component_count; i++) {
+    const char *id = g->components->components[i].id;
+    if (g->direct_components[i] && strcmp(id, "core") != 0 &&
+        strcmp(id, "tiny_print") != 0 && strcmp(id, "tiny_test") != 0)
+      g->zxn_light_core_eligible = 0;
+  }
   if (tiny.eligible) {
     int core = component_index(g, "core");
     if (core >= 0) g->direct_components[core] = 0;
@@ -4315,9 +4388,11 @@ void transpile(generator_t *g, ast_t program) {
     if (!tiny.uses_stdout)
       fprintf(f, "/* ROCK_PROFILE:ZXN_TINY_CORE:STARTUP=31 */\n");
     else if (tiny.simple_stdout)
-      fprintf(f, "/* ROCK_PROFILE:ZXN_TINY_CORE:STARTUP=0 */\n");
+      fprintf(f, "/* ROCK_PROFILE:ZXN_TINY_CORE:STARTUP=31 */\n");
     else
-      fprintf(f, "/* ROCK_PROFILE:ZXN_TINY_CORE:STARTUP=1 */\n");
+      fprintf(f, "/* ROCK_PROFILE:ZXN_TINY_CORE:STARTUP=31:LIGHT_CONSOLE */\n");
+  } else if (g->zxn_light_core_eligible) {
+    fprintf(f, "/* ROCK_PROFILE:ZXN_LIGHT_CORE:STARTUP=31 */\n");
   }
 
   fprintf(f, "#include <stdlib.h>\n");

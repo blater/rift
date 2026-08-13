@@ -1,7 +1,7 @@
 # Rock runtime component manifest v1.
 # Lists are comma-separated paths relative to src/lib. Empty fields are valid.
 # component|id|dependencies|headers|host_sources|zxn_sources|host_asm|zxn_asm|init|shutdown|always?
-component|core|tiny_print,tiny_test|pools.h,fundefs.h,fundefs_internal.h,typedefs.h,host_caps.h,zxn_test.h|pools.c,print_bytes.c,fundefs.c,fundefs_internal.c,asm_interop.c,host_caps.c,zxn_test.c,host/termbox2_impl.c|pools.c,fundefs.c,fundefs_internal.c,asm_interop.c,host_caps.c|||rock_rtl_init|rock_rtl_shutdown|always
+component|core|tiny_print,tiny_test|pools.h,fundefs.h,fundefs_internal.h,typedefs.h,host_caps.h,zxn_test.h,light_console.h|pools.c,print_bytes.c,fundefs.c,fundefs_internal.c,asm_interop.c,host_caps.c,zxn_test.c,host/termbox2_impl.c|pools.c,fundefs.c,fundefs_internal.c,asm_interop.c,host_caps.c|||rock_rtl_init|rock_rtl_shutdown|always
 component|tiny_print||||print_bytes.c|||||
 component|tiny_test||||zxn_test.c|||||
 component|keyboard|core|keyboard.h|keyboard.c|keyboard.c||zxn/keyboard.asm|||

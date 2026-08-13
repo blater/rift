@@ -20,16 +20,18 @@ build_debug hello "$FIXTURES/zxn_size_hello.rock"
 build_debug control "$FIXTURES/zxn_size_control.rock"
 build_debug marker_collision "$FIXTURES/zxn_size_marker_collision.rock"
 build_debug general "$FIXTURES/zxn_size_general_string.rock"
+build_debug embedded "$FIXTURES/zxn_size_embedded_stdio.rock"
 build_debug hello_all "$FIXTURES/zxn_size_hello.rock" --rtl=all
 build_debug custom "$FIXTURES/zxn_size_general_string.rock" \
   --zxn-bump-pool=256 --zxn-longlived-pool=1024
 
 grep -q 'ZXN profile: startup=31, .*tiny-core=1' "$TMPDIR_SIZE/empty.log"
-grep -q 'ZXN profile: startup=0, .*tiny-core=1' "$TMPDIR_SIZE/hello.log"
-grep -q 'ZXN profile: startup=1, .*tiny-core=1' "$TMPDIR_SIZE/control.log"
-grep -q 'ZXN profile: startup=0, .*tiny-core=1' "$TMPDIR_SIZE/marker_collision.log"
-grep -q 'ZXN profile: startup=1, .*tiny-core=0' "$TMPDIR_SIZE/general.log"
-grep -q 'ZXN profile: startup=1, .*tiny-core=0' "$TMPDIR_SIZE/hello_all.log"
+grep -q 'ZXN profile: startup=31, .*tiny-core=1' "$TMPDIR_SIZE/hello.log"
+grep -q 'ZXN profile: startup=31, .*tiny-core=1' "$TMPDIR_SIZE/control.log"
+grep -q 'ZXN profile: startup=31, .*tiny-core=1' "$TMPDIR_SIZE/marker_collision.log"
+grep -q 'ZXN profile: startup=31, .*tiny-core=0, light-core=1' "$TMPDIR_SIZE/general.log"
+grep -q 'ZXN profile: startup=1, .*tiny-core=0, light-core=0' "$TMPDIR_SIZE/embedded.log"
+grep -q 'ZXN profile: startup=1, .*tiny-core=0, light-core=0' "$TMPDIR_SIZE/hello_all.log"
 if grep -q '^#define ROCK_ZXN_TINY_CORE' "$TMPDIR_SIZE/hello_all.exe.c"; then
   echo "FAIL: --rtl=all retained an active generated tiny-core macro" >&2
   exit 1
@@ -38,6 +40,22 @@ grep -q 'rock_pools_init(ROCK_ZXN_BUMP_POOL_CAPACITY' "$TMPDIR_SIZE/hello_all.ex
 grep -q 'bump-pool=256, longlived-pool=1024' "$TMPDIR_SIZE/custom.log"
 
 grep -q 'rock_print_bytes("hello world", 11)' "$TMPDIR_SIZE/hello.exe.c"
+grep -q 'ROCK_PROFILE:ZXN_TINY_CORE:STARTUP=31' "$TMPDIR_SIZE/hello.exe.c"
+grep -q -- '-DROCK_ZXN_TINY_PRINT_DIRECT' "$TMPDIR_SIZE/hello.log"
+if grep -q -- '-DROCK_ZXN_TINY_PRINT_CONTROLS' "$TMPDIR_SIZE/hello.log"; then
+  echo "FAIL: plain literal selected the larger control writer" >&2
+  exit 1
+fi
+grep -q 'ROCK_PROFILE:ZXN_TINY_CORE:STARTUP=31:LIGHT_CONSOLE' \
+  "$TMPDIR_SIZE/control.exe.c"
+grep -q -- '-DROCK_ZXN_TINY_PRINT_DIRECT' "$TMPDIR_SIZE/control.log"
+grep -q -- '-DROCK_ZXN_TINY_PRINT_CONTROLS' "$TMPDIR_SIZE/control.log"
+grep -q 'ROCK_PROFILE:ZXN_LIGHT_CORE:STARTUP=31' "$TMPDIR_SIZE/general.exe.c"
+grep -q -- '-DROCK_ZXN_LIGHT_CORE' "$TMPDIR_SIZE/general.log"
+if grep -q -- '-DROCK_ZXN_LIGHT_CORE' "$TMPDIR_SIZE/embedded.log"; then
+  echo "FAIL: embedded code selected the lightweight core" >&2
+  exit 1
+fi
 if grep -q '__rock_make_string' "$TMPDIR_SIZE/hello.exe.c"; then
   echo "FAIL: literal print still constructs a Rock string" >&2
   exit 1
@@ -52,11 +70,20 @@ grep -q '/lib/fundefs.c' "$TMPDIR_SIZE/general.log"
 
 EMPTY_BYTES=$(wc -c <"$TMPDIR_SIZE/empty_CODE.bin" | tr -d '[:space:]')
 HELLO_BYTES=$(wc -c <"$TMPDIR_SIZE/hello_CODE.bin" | tr -d '[:space:]')
+CONTROL_BYTES=$(wc -c <"$TMPDIR_SIZE/control_CODE.bin" | tr -d '[:space:]')
 GENERAL_BYTES=$(wc -c <"$TMPDIR_SIZE/general_CODE.bin" | tr -d '[:space:]')
 CUSTOM_BYTES=$(wc -c <"$TMPDIR_SIZE/custom_CODE.bin" | tr -d '[:space:]')
 
 if [ "$HELLO_BYTES" -ge "$GENERAL_BYTES" ]; then
   echo "FAIL: tiny hello ($HELLO_BYTES) is not smaller than full string build ($GENERAL_BYTES)" >&2
+  exit 1
+fi
+if [ $((HELLO_BYTES - EMPTY_BYTES)) -gt 600 ]; then
+  echo "FAIL: tiny literal print overhead exceeds 600 bytes ($HELLO_BYTES vs $EMPTY_BYTES)" >&2
+  exit 1
+fi
+if [ $((CONTROL_BYTES - EMPTY_BYTES)) -gt 1400 ]; then
+  echo "FAIL: lightweight console overhead exceeds 1400 bytes ($CONTROL_BYTES vs $EMPTY_BYTES)" >&2
   exit 1
 fi
 if [ $((GENERAL_BYTES - CUSTOM_BYTES)) -lt 5000 ]; then
@@ -114,4 +141,5 @@ fi
 
 echo "PASS: empty tiny-core resident size is $EMPTY_BYTES bytes"
 echo "PASS: literal hello resident size is $HELLO_BYTES bytes"
-echo "PASS: full string build is $GENERAL_BYTES bytes; custom pools reduce it to $CUSTOM_BYTES bytes"
+echo "PASS: escaped literal resident size is $CONTROL_BYTES bytes with the lightweight console"
+echo "PASS: dynamic-string lightweight core is $GENERAL_BYTES bytes; custom pools reduce it to $CUSTOM_BYTES bytes"

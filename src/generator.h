@@ -78,6 +78,7 @@ typedef struct generator_t {
   int zxn_tiny_eligible;
   int zxn_tiny_uses_stdout;
   int zxn_tiny_simple_stdout;
+  int zxn_light_core_eligible;
 } generator_t;
 
 generator_t new_generator(char *filename, const char *output_base,

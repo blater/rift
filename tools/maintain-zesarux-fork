@@ -1,0 +1,310 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+ROCK_ROOT=${ZESARUX_ROCK_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}
+ZESARUX_SOURCE=${ZESARUX_SOURCE:-$(cd "$ROCK_ROOT/.." && pwd)/zesarux}
+INTEGRATION_BRANCH=${ZESARUX_INTEGRATION_BRANCH:-integration/zrcp-automation}
+MAIN_BRANCH=${ZESARUX_MAIN_BRANCH:-main}
+ORIGIN_REMOTE=${ZESARUX_ORIGIN_REMOTE:-origin}
+UPSTREAM_REMOTE=${ZESARUX_UPSTREAM_REMOTE:-upstream}
+JOBS=${JOBS:-4}
+
+usage() {
+  cat <<'EOF'
+usage: tools/maintain-zesarux-fork <command> [arguments]
+
+Commands:
+  status
+      Show the upstream base, fork README overlay, and maintained patch stack.
+
+  refresh
+      Rebase main's README overlay onto upstream/main, then rebase the
+      maintained patch stack onto main. This changes no remote refs.
+
+  validate
+      Build the maintained stack and run Rock's focused ZRCP and full ZXN
+      headless suites.
+
+  publish <new-tag>
+      Validate, push main, replace the remote integration branch with
+      --force-with-lease, then create and push a new immutable annotated tag.
+
+  contribution <new-branch> <commit> [commit ...]
+      Create a temporary upstream contribution branch from upstream/main and
+      cherry-pick the selected atomic patch commit(s). This does not push it.
+
+Environment:
+  ZESARUX_SOURCE              ZEsarUX checkout (default: sibling of Rock)
+  ZESARUX_ROCK_ROOT           Rock checkout (default: parent of this tool)
+  ZESARUX_INTEGRATION_BRANCH  Maintained patch stack
+  ZESARUX_MAIN_BRANCH         Upstream mirror with the shared fork README
+  ZESARUX_ORIGIN_REMOTE       Fork remote name
+  ZESARUX_UPSTREAM_REMOTE     Core-project remote name
+  JOBS                        Parallel build jobs (default: 4)
+EOF
+}
+
+die() {
+  echo "maintain-zesarux-fork: $*" >&2
+  exit 1
+}
+
+git_z() {
+  git -C "$ZESARUX_SOURCE" "$@"
+}
+
+require_checkout() {
+  [[ -d "$ZESARUX_SOURCE" ]] ||
+    die "source checkout does not exist: $ZESARUX_SOURCE"
+  git_z rev-parse --git-dir >/dev/null 2>&1 ||
+    die "not a Git checkout: $ZESARUX_SOURCE"
+  git_z remote get-url "$ORIGIN_REMOTE" >/dev/null 2>&1 ||
+    die "missing fork remote '$ORIGIN_REMOTE'"
+  git_z remote get-url "$UPSTREAM_REMOTE" >/dev/null 2>&1 ||
+    die "missing core-project remote '$UPSTREAM_REMOTE'"
+}
+
+require_clean() {
+  [[ -z $(git_z status --porcelain) ]] ||
+    die "ZEsarUX checkout has uncommitted changes"
+}
+
+require_branch() {
+  local expected=$1
+  local actual
+  actual=$(git_z branch --show-current)
+  [[ "$actual" == "$expected" ]] ||
+    die "expected branch '$expected', found '${actual:-detached HEAD}'"
+}
+
+require_main_readme_overlay() {
+  local changed
+  local overlay_commits
+
+  git_z merge-base --is-ancestor \
+    "$UPSTREAM_REMOTE/$MAIN_BRANCH" "$MAIN_BRANCH" ||
+    die "$MAIN_BRANCH is not based on $UPSTREAM_REMOTE/$MAIN_BRANCH"
+  changed=$(git_z diff --name-only \
+    "$UPSTREAM_REMOTE/$MAIN_BRANCH" "$MAIN_BRANCH")
+  [[ "$changed" == README.md ]] ||
+    die "$MAIN_BRANCH must differ from $UPSTREAM_REMOTE/$MAIN_BRANCH only by README.md"
+  overlay_commits=$(git_z rev-list --count \
+    "$UPSTREAM_REMOTE/$MAIN_BRANCH..$MAIN_BRANCH")
+  [[ "$overlay_commits" == 1 ]] ||
+    die "$MAIN_BRANCH must contain exactly one fork README commit"
+}
+
+require_shared_readme() {
+  git_z diff --quiet \
+    "$MAIN_BRANCH:README.md" "$INTEGRATION_BRANCH:README.md" -- ||
+    die "$MAIN_BRANCH and $INTEGRATION_BRANCH must have identical README.md files"
+}
+
+sha256_file() {
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  elif command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    die "neither shasum nor sha256sum is available"
+  fi
+}
+
+show_status() {
+  require_checkout
+  printf 'source:      %s\n' "$ZESARUX_SOURCE"
+  printf 'main:        %s\n' "$(git_z rev-parse "$MAIN_BRANCH")"
+  printf 'upstream:    %s\n' \
+    "$(git_z rev-parse "$UPSTREAM_REMOTE/$MAIN_BRANCH")"
+  printf 'integration: %s\n' "$(git_z rev-parse "$INTEGRATION_BRANCH")"
+  echo
+  echo "Fork main overlay:"
+  git_z log --reverse --oneline \
+    "$UPSTREAM_REMOTE/$MAIN_BRANCH..$MAIN_BRANCH"
+  echo
+  echo "Outstanding fork commits:"
+  git_z log --reverse --oneline \
+    "$MAIN_BRANCH..$INTEGRATION_BRANCH"
+}
+
+refresh_stack() {
+  local previous_main
+
+  require_checkout
+  require_clean
+
+  git_z fetch "$UPSTREAM_REMOTE"
+  previous_main=$(git_z rev-parse "$MAIN_BRANCH")
+  git_z switch "$MAIN_BRANCH"
+  git_z rebase "$UPSTREAM_REMOTE/$MAIN_BRANCH"
+  require_main_readme_overlay
+  git_z merge-base --is-ancestor "$previous_main" "$INTEGRATION_BRANCH" ||
+    die "$INTEGRATION_BRANCH is not based on $MAIN_BRANCH"
+
+  git_z config rerere.enabled true
+  git_z switch "$INTEGRATION_BRANCH"
+  git_z rebase --onto "$MAIN_BRANCH" "$previous_main" "$INTEGRATION_BRANCH"
+  require_shared_readme
+
+  echo
+  echo "Local patch stack refreshed; no remote refs were changed."
+  echo "Review the outstanding commits, then run:"
+  echo "  tools/maintain-zesarux-fork validate"
+  git_z log --reverse --oneline \
+    "$MAIN_BRANCH..$INTEGRATION_BRANCH"
+}
+
+validate_stack() {
+  local binary="$ZESARUX_SOURCE/src/zesarux"
+
+  require_checkout
+  require_clean
+  require_branch "$INTEGRATION_BRANCH"
+  [[ -d "$ROCK_ROOT" ]] || die "Rock checkout does not exist: $ROCK_ROOT"
+  [[ -f "$ZESARUX_SOURCE/src/Makefile" ]] ||
+    die "configure ZEsarUX before validation (src/Makefile is missing)"
+
+  make -C "$ZESARUX_SOURCE/src" -j"$JOBS"
+  [[ -x "$binary" ]] || die "build did not produce executable: $binary"
+
+  ZESARUX_BIN="$binary" "$ROCK_ROOT/tools/test-zesarux-zrcp"
+  ZESARUX_BIN="$binary" make -C "$ROCK_ROOT" test-zxn
+
+  echo
+  printf 'validated commit: %s\n' "$(git_z rev-parse HEAD)"
+  printf 'binary sha256:    %s\n' "$(sha256_file "$binary")"
+}
+
+publish_stack() {
+  local tag=${1:-}
+  local main_head
+  local remote_main
+  local remote_integration
+  local tag_query_status
+  local upstream_head
+
+  [[ -n "$tag" ]] || die "publish requires a new validation tag"
+  [[ "$tag" != -* ]] || die "tag must not begin with '-'"
+  git check-ref-format "refs/tags/$tag" >/dev/null 2>&1 ||
+    die "invalid tag name: $tag"
+
+  require_checkout
+  require_clean
+  require_branch "$INTEGRATION_BRANCH"
+  require_main_readme_overlay
+  git_z merge-base --is-ancestor "$MAIN_BRANCH" "$INTEGRATION_BRANCH" ||
+    die "$INTEGRATION_BRANCH is not based on $MAIN_BRANCH"
+  require_shared_readme
+  upstream_head=$(git_z rev-parse "$UPSTREAM_REMOTE/$MAIN_BRANCH")
+
+  git_z fetch "$UPSTREAM_REMOTE"
+  [[ "$upstream_head" == \
+    "$(git_z rev-parse "$UPSTREAM_REMOTE/$MAIN_BRANCH")" ]] ||
+    die "upstream advanced; refresh and validate again"
+  require_main_readme_overlay
+  if git_z show-ref --verify --quiet "refs/tags/$tag"; then
+    die "tag already exists locally: $tag"
+  fi
+  if git_z ls-remote --exit-code --tags \
+      "$ORIGIN_REMOTE" "refs/tags/$tag" >/dev/null 2>&1; then
+    die "tag already exists on the fork: $tag"
+  else
+    tag_query_status=$?
+    [[ "$tag_query_status" == 2 ]] ||
+      die "could not check tag on $ORIGIN_REMOTE: $tag"
+  fi
+  git_z fetch "$ORIGIN_REMOTE"
+  remote_main=$(git_z rev-parse \
+    "$ORIGIN_REMOTE/$MAIN_BRANCH" 2>/dev/null) ||
+    die "missing remote-tracking ref: $ORIGIN_REMOTE/$MAIN_BRANCH"
+  remote_integration=$(git_z rev-parse \
+    "$ORIGIN_REMOTE/$INTEGRATION_BRANCH" 2>/dev/null) ||
+    die "missing reviewed remote-tracking ref: $ORIGIN_REMOTE/$INTEGRATION_BRANCH"
+
+  validate_stack
+
+  git_z fetch "$UPSTREAM_REMOTE"
+  [[ "$upstream_head" == \
+    "$(git_z rev-parse "$UPSTREAM_REMOTE/$MAIN_BRANCH")" ]] ||
+    die "upstream advanced during validation; refresh and validate again"
+  require_main_readme_overlay
+  require_shared_readme
+  main_head=$(git_z rev-parse "$MAIN_BRANCH")
+  git_z push \
+    "--force-with-lease=refs/heads/$MAIN_BRANCH:$remote_main" \
+    "$ORIGIN_REMOTE" "$MAIN_BRANCH"
+  git_z push \
+    "--force-with-lease=refs/heads/$INTEGRATION_BRANCH:$remote_integration" \
+    "$ORIGIN_REMOTE" "$INTEGRATION_BRANCH"
+  git_z tag -a "$tag" -m "Validate Rock headless ZRCP integration"
+  git_z push "$ORIGIN_REMOTE" "$tag"
+
+  echo
+  echo "Published $INTEGRATION_BRANCH at $(git_z rev-parse HEAD)"
+  echo "Published immutable validation tag $tag"
+  echo "Update Rock's pinned revision and the ZEsarUX maintenance wiki evidence."
+}
+
+create_contribution() {
+  local branch=${1:-}
+  shift || true
+
+  [[ -n "$branch" ]] || die "contribution requires a new branch name"
+  (($# > 0)) || die "contribution requires at least one patch commit"
+  git check-ref-format --branch "$branch" >/dev/null 2>&1 ||
+    die "invalid branch name: $branch"
+
+  require_checkout
+  require_clean
+  if git_z show-ref --verify --quiet "refs/heads/$branch"; then
+    die "local branch already exists: $branch"
+  fi
+
+  git_z fetch "$UPSTREAM_REMOTE"
+  local commit
+  for commit in "$@"; do
+    git_z rev-parse --verify "$commit^{commit}" >/dev/null 2>&1 ||
+      die "not a commit: $commit"
+  done
+
+  git_z switch -c "$branch" "$UPSTREAM_REMOTE/$MAIN_BRANCH"
+  git_z cherry-pick "$@"
+
+  echo
+  echo "Created contribution branch '$branch'; it has not been pushed."
+  echo "Run its focused checks, inspect its diff against upstream, then push it."
+}
+
+command=${1:-}
+case "$command" in
+  status)
+    (($# == 1)) || die "status takes no arguments"
+    show_status
+    ;;
+  refresh)
+    (($# == 1)) || die "refresh takes no arguments"
+    refresh_stack
+    ;;
+  validate)
+    (($# == 1)) || die "validate takes no arguments"
+    validate_stack
+    ;;
+  publish)
+    (($# == 2)) || die "publish requires exactly one tag"
+    publish_stack "$2"
+    ;;
+  contribution)
+    (($# >= 3)) || die "contribution requires a branch and patch commit(s)"
+    shift
+    create_contribution "$@"
+    ;;
+  -h|--help|help)
+    usage
+    ;;
+  *)
+    usage >&2
+    exit 1
+    ;;
+esac

@@ -73,7 +73,17 @@ language behavior, memory/ownership risk, broken supported target behavior, or
 missing compatibility coverage; use `REQUIRED` for an unmet matrix entry.
 
 ## Wiki
-This project has a persistent knowledge wiki at `wikiroot/`. It is the compiled architectural understanding of the transpiler — always prefer it over guessing or re-deriving from scratch.
+This project has a persistent knowledge wiki checked out at
+`/Users/blater/src/rocklang/wikiroot/`. It is the compiled architectural
+understanding of the transpiler — always prefer it over guessing or re-deriving
+from scratch.
+
+`wikiroot/` is a standalone Git repository, not content tracked by the parent
+Rock project repository. Its `main` branch uses
+`git@github.com:blater/rocklang_internal.git` as `origin`; the parent project
+uses a different remote. Run wiki status, commit, and push operations against
+`wikiroot/` (for example, `git -C wikiroot status`) and never include wiki files
+in a parent-project commit.
 
 ### Session start
 At the start of every session, run the `/wiki` skill (no arguments). This displays the wiki README and reports any pending sources in `wikiroot/new/`.

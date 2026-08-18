@@ -1,0 +1,68 @@
+include "Assert.rift"
+
+Assert as;
+
+record Item {
+  string label
+}
+
+sub makeValues(int n) returns int[] {
+  int[] values := [];
+  append(values, n);
+  append(values, n + 1);
+  append(values, n + 2);
+  append(values, n + 3);
+  return values;
+}
+
+sub replaceParameter(int[] values, int n) returns int {
+  values := makeValues(n);
+  return get(values, 3);
+}
+
+sub makeLabels(int n) returns string[] {
+  string[] labels := [];
+  append(labels, concat("label-", toString(n)));
+  return labels;
+}
+
+sub makeItems(int n) returns Item[] {
+  Item[] items := [];
+  Item item := {label := concat("item-", toString(n))};
+  append(items, item);
+  return items;
+}
+
+sub main() {
+  int[] current := makeValues(0);
+  int[] alias := current;
+  current := alias;
+  current := current;
+  for i := 1 to 100000 {
+    current := makeValues(i);
+  }
+  as.AssertEQ("array reassignment soak preserves latest value", 100003,
+              get(current, 3));
+
+  int parameterResult := 0;
+  for i := 1 to 100000 {
+    parameterResult := replaceParameter(current, i);
+  }
+  as.AssertEQ("array parameter reassignment releases overwritten value", 100003,
+              parameterResult);
+
+  string[] labels := makeLabels(0);
+  for i := 1 to 100000 {
+    labels := makeLabels(i);
+  }
+  as.AssertEquals("string array reassignment releases elements", "label-100000",
+                  get(labels, 0));
+
+  Item[] items := makeItems(0);
+  for i := 1 to 100000 {
+    items := makeItems(i);
+  }
+  Item latest := get(items, 0);
+  as.AssertEquals("aggregate array reassignment releases nested fields",
+                  "item-100000", latest.label);
+}

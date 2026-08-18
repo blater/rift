@@ -1,0 +1,37 @@
+include "../Assert.rift"
+
+Assert a;
+
+// Target-only hardware probe for NextReg $43 bit 7.  The host NextReg
+// implementation is only a flat register shadow and cannot model palette RAM.
+sub main() {
+  byte saved_control := next_reg_get(67);
+
+  // Select sprite palette 0 for editing with bit 7 clear.
+  next_reg_set(67, 32);
+  next_reg_set(64, 10);
+  next_reg_set(65, 224);
+  next_reg_set(65, 28);
+
+  a.AssertEQ("palette bit 7 clear advances twice",
+             12, to_int(next_reg_get(64)));
+  next_reg_set(64, 10);
+  a.AssertEQ("palette clear-bit first write kept at index 10",
+             224, to_int(next_reg_get(65)));
+  next_reg_set(64, 11);
+  a.AssertEQ("palette clear-bit second write reached index 11",
+             28, to_int(next_reg_get(65)));
+
+  // Select the same palette with bit 7 set.
+  next_reg_set(67, 160);
+  next_reg_set(64, 20);
+  next_reg_set(65, 224);
+  next_reg_set(65, 28);
+
+  a.AssertEQ("palette bit 7 set keeps the index",
+             20, to_int(next_reg_get(64)));
+  a.AssertEQ("palette disabled increment overwrites one entry",
+             28, to_int(next_reg_get(65)));
+
+  next_reg_set(67, saved_control);
+}

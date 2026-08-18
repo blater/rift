@@ -1,0 +1,4 @@
+union Maybe { byte Sprite, None }
+
+sub main() {
+}

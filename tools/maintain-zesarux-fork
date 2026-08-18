@@ -3,8 +3,8 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-ROCK_ROOT=${ZESARUX_ROCK_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}
-ZESARUX_SOURCE=${ZESARUX_SOURCE:-$(cd "$ROCK_ROOT/.." && pwd)/zesarux}
+RIFT_ROOT=${ZESARUX_RIFT_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}
+ZESARUX_SOURCE=${ZESARUX_SOURCE:-$(cd "$RIFT_ROOT/.." && pwd)/zesarux}
 INTEGRATION_BRANCH=${ZESARUX_INTEGRATION_BRANCH:-integration/zrcp-automation}
 MAIN_BRANCH=${ZESARUX_MAIN_BRANCH:-main}
 ORIGIN_REMOTE=${ZESARUX_ORIGIN_REMOTE:-origin}
@@ -24,7 +24,7 @@ Commands:
       maintained patch stack onto main. This changes no remote refs.
 
   validate
-      Build the maintained stack and run Rock's focused ZRCP and full ZXN
+      Build the maintained stack and run Rift's focused ZRCP and full ZXN
       headless suites.
 
   publish <new-tag>
@@ -36,8 +36,8 @@ Commands:
       cherry-pick the selected atomic patch commit(s). This does not push it.
 
 Environment:
-  ZESARUX_SOURCE              ZEsarUX checkout (default: sibling of Rock)
-  ZESARUX_ROCK_ROOT           Rock checkout (default: parent of this tool)
+  ZESARUX_SOURCE              ZEsarUX checkout (default: sibling of Rift)
+  ZESARUX_RIFT_ROOT           Rift checkout (default: parent of this tool)
   ZESARUX_INTEGRATION_BRANCH  Maintained patch stack
   ZESARUX_MAIN_BRANCH         Upstream mirror with the shared fork README
   ZESARUX_ORIGIN_REMOTE       Fork remote name
@@ -162,15 +162,15 @@ validate_stack() {
   require_checkout
   require_clean
   require_branch "$INTEGRATION_BRANCH"
-  [[ -d "$ROCK_ROOT" ]] || die "Rock checkout does not exist: $ROCK_ROOT"
+  [[ -d "$RIFT_ROOT" ]] || die "Rift checkout does not exist: $RIFT_ROOT"
   [[ -f "$ZESARUX_SOURCE/src/Makefile" ]] ||
     die "configure ZEsarUX before validation (src/Makefile is missing)"
 
   make -C "$ZESARUX_SOURCE/src" -j"$JOBS"
   [[ -x "$binary" ]] || die "build did not produce executable: $binary"
 
-  ZESARUX_BIN="$binary" "$ROCK_ROOT/tools/test-zesarux-zrcp"
-  ZESARUX_BIN="$binary" make -C "$ROCK_ROOT" test-zxn
+  ZESARUX_BIN="$binary" "$RIFT_ROOT/tools/test-zesarux-zrcp"
+  ZESARUX_BIN="$binary" make -C "$RIFT_ROOT" test-zxn
 
   echo
   printf 'validated commit: %s\n' "$(git_z rev-parse HEAD)"
@@ -238,13 +238,13 @@ publish_stack() {
   git_z push \
     "--force-with-lease=refs/heads/$INTEGRATION_BRANCH:$remote_integration" \
     "$ORIGIN_REMOTE" "$INTEGRATION_BRANCH"
-  git_z tag -a "$tag" -m "Validate Rock headless ZRCP integration"
+  git_z tag -a "$tag" -m "Validate Rift headless ZRCP integration"
   git_z push "$ORIGIN_REMOTE" "$tag"
 
   echo
   echo "Published $INTEGRATION_BRANCH at $(git_z rev-parse HEAD)"
   echo "Published immutable validation tag $tag"
-  echo "Update Rock's pinned revision and the ZEsarUX maintenance wiki evidence."
+  echo "Update Rift's pinned revision and the ZEsarUX maintenance wiki evidence."
 }
 
 create_contribution() {

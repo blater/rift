@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 char *includes[1024];
 int includes_num = 0;
@@ -62,6 +63,9 @@ ast_t parse_iter_loop(parser_t *p);
 ast_t parse_leaf(parser_t *p);
 ast_t parse_embed(parser_t *p);
 static ast_t parse_graphics_statement(parser_t *p);
+static ast_t parse_sprite_pattern_decl(parser_t *p, ast_t module);
+static ast_t invalid_asset_decl(token_t kind, token_t name, token_t path,
+                                ast_t module);
 
 void print_error_prefix(parser_t p) {
   token_t tok = peek_token(p);
@@ -109,6 +113,7 @@ parser_t new_parser(token_array_t tokens) {
   res.source = NULL;
   res.source_length = 0;
   res.scope_depth = 0;
+  res.entry_filename = tokens.length > 0 ? tokens.data[0].filename : NULL;
   return res;
 }
 
@@ -440,6 +445,24 @@ ast_t parse_enum(parser_t *p) {
   return new_ast((node_t){enum_tdef, {.enum_tdef = {name, elems}}});
 }
 
+static int starts_legacy_sprite_asset(parser_t p) {
+  if (peek_type(p) != TOK_IDENTIFIER ||
+      svcmp(peek_token(p).lexeme, sv_from_cstr("asset")) != 0)
+    return 0;
+  consume_token(&p);
+  if (peek_type(p) != TOK_IDENTIFIER) return 0;
+  string_view kind = peek_token(p).lexeme;
+  if (svcmp(kind, sv_from_cstr("sprite4")) != 0 &&
+      svcmp(kind, sv_from_cstr("sprite8")) != 0)
+    return 0;
+  consume_token(&p);
+  if (peek_type(p) != TOK_IDENTIFIER) return 0;
+  consume_token(&p);
+  if (peek_type(p) != TOK_GETS) return 0;
+  consume_token(&p);
+  return peek_type(p) == TOK_STR_LIT;
+}
+
 ast_t parse_statement(parser_t *p) {
   token_type_t a = peek_type(*p);
   // Stop parsing when we reach EOF
@@ -461,6 +484,19 @@ ast_t parse_statement(parser_t *p) {
     // Check sub before is_assign — is_assign scans ahead and could find := inside a function body
     return parse_fundef(p);
   }
+  else if (starts_legacy_sprite_asset(*p)) {
+    token_t old = consume_token(p);
+    error(old.filename, old.line, old.col,
+          "'asset' declarations were removed; use "
+          "'SpritePattern name := SpritePattern.load(\"path\")'");
+    while (peek_type(*p) != TOK_SEMICOL && peek_type(*p) != TOK_EOF)
+      consume_token(p);
+    if (peek_type(*p) == TOK_SEMICOL) consume_token(p);
+    return invalid_asset_decl((token_t){0}, (token_t){0}, (token_t){0}, NULL);
+  }
+  else if (a == TOK_IDENTIFIER &&
+           svcmp(peek_token(*p).lexeme, sv_from_cstr("SpritePattern")) == 0)
+    return parse_sprite_pattern_decl(p, NULL);
   else if (a == TOK_IDENTIFIER && is_new_style_vardef(*p))
     return parse_new_style_var_def(p);
   else if (is_assign(*p))
@@ -535,6 +571,197 @@ ast_t parse_statement(parser_t *p) {
     return expr;
   }
   return NULL;
+}
+
+static int path_has_parent_segment(const char *path) {
+  const char *cursor = path;
+  while (*cursor) {
+    while (*cursor == '/') cursor++;
+    const char *start = cursor;
+    while (*cursor && *cursor != '/') cursor++;
+    if (cursor - start == 2 && start[0] == '.' && start[1] == '.') return 1;
+  }
+  return 0;
+}
+
+static int path_is_beneath(const char *path, const char *root) {
+  size_t length = strlen(root);
+  return strncmp(path, root, length) == 0 &&
+         (root[length - 1] == '/' || path[length] == '/' || path[length] == '\0');
+}
+
+static ast_t invalid_asset_decl(token_t kind, token_t name, token_t path,
+                                ast_t module) {
+  token_t module_name = {0};
+  if (module) module_name = module->data.tdef.name;
+  node_t invalid = {0};
+  invalid.tag = asset_decl;
+  invalid.data.asset_decl = (ast_asset_decl){
+      .kind = kind, .name = name, .path = path, .module = module_name};
+  return new_ast(invalid);
+}
+
+static void recover_asset_decl(parser_t *p) {
+  while (peek_type(*p) != TOK_SEMICOL && peek_type(*p) != TOK_EOF)
+    consume_token(p);
+  if (peek_type(*p) == TOK_SEMICOL) consume_token(p);
+}
+
+static ast_t parse_sprite_pattern_decl(parser_t *p, ast_t module) {
+  token_t category = consume_token(p);
+  if (p->scope_depth != 0)
+    error(category.filename, category.line, category.col,
+          "SpritePattern bindings are only allowed at file scope");
+  expect(*p, TOK_IDENTIFIER);
+  token_t name = consume_token(p);
+  if (peek_type(*p) != TOK_GETS) {
+    token_t found = peek_token(*p);
+    error(found.filename, found.line, found.col,
+          "Expected ':=' in SpritePattern binding");
+    recover_asset_decl(p);
+    return invalid_asset_decl((token_t){0}, name, (token_t){0}, module);
+  }
+  consume_token(p);
+  if (peek_type(*p) != TOK_IDENTIFIER ||
+      svcmp(peek_token(*p).lexeme, sv_from_cstr("SpritePattern")) != 0) {
+    token_t found = peek_token(*p);
+    error(found.filename, found.line, found.col,
+          "SpritePattern binding must call SpritePattern.load");
+    recover_asset_decl(p);
+    return invalid_asset_decl((token_t){0}, name, (token_t){0}, module);
+  }
+  consume_token(p);
+  if (peek_type(*p) != TOK_DOT) {
+    token_t found = peek_token(*p);
+    error(found.filename, found.line, found.col,
+          "SpritePattern binding must call SpritePattern.load");
+    recover_asset_decl(p);
+    return invalid_asset_decl((token_t){0}, name, (token_t){0}, module);
+  }
+  consume_token(p);
+  if (peek_type(*p) != TOK_IDENTIFIER ||
+      svcmp(peek_token(*p).lexeme, sv_from_cstr("load")) != 0) {
+    token_t found = peek_token(*p);
+    error(found.filename, found.line, found.col,
+          "SpritePattern binding must call SpritePattern.load");
+    recover_asset_decl(p);
+    return invalid_asset_decl((token_t){0}, name, (token_t){0}, module);
+  }
+  consume_token(p);
+  if (peek_type(*p) != TOK_OPEN_PAREN) {
+    token_t found = peek_token(*p);
+    error(found.filename, found.line, found.col,
+          "Expected '(' after SpritePattern.load");
+    recover_asset_decl(p);
+    return invalid_asset_decl((token_t){0}, name, (token_t){0}, module);
+  }
+  consume_token(p);
+  if (peek_type(*p) != TOK_STR_LIT) {
+    token_t found = peek_token(*p);
+    error(found.filename, found.line, found.col,
+          "SpritePattern.load path must be a string literal");
+    recover_asset_decl(p);
+    return invalid_asset_decl((token_t){0}, name, (token_t){0}, module);
+  }
+  token_t path = consume_token(p);
+
+  token_t kind = category;
+  kind.lexeme = sv_from_cstr("sprite4");
+  if (peek_type(*p) == TOK_COMMA) {
+    consume_token(p);
+    if (peek_type(*p) != TOK_NUM_LIT) {
+      token_t found = peek_token(*p);
+      error(found.filename, found.line, found.col,
+            "SpritePattern.load format must be literal 4 or 8");
+      recover_asset_decl(p);
+      return invalid_asset_decl(kind, name, path, module);
+    }
+    token_t format = consume_token(p);
+    if (svcmp(format.lexeme, sv_from_cstr("4")) == 0)
+      kind.lexeme = sv_from_cstr("sprite4");
+    else if (svcmp(format.lexeme, sv_from_cstr("8")) == 0)
+      kind.lexeme = sv_from_cstr("sprite8");
+    else
+      error(format.filename, format.line, format.col,
+            "SpritePattern.load format must be literal 4 or 8");
+  }
+  if (peek_type(*p) != TOK_CLOSE_PAREN) {
+    token_t found = peek_token(*p);
+    error(found.filename, found.line, found.col,
+          "SpritePattern.load expects a path and optional format");
+    recover_asset_decl(p);
+    return invalid_asset_decl(kind, name, path, module);
+  }
+  consume_token(p);
+  if (peek_type(*p) != TOK_SEMICOL) {
+    token_t found = peek_token(*p);
+    error(found.filename, found.line, found.col,
+          "Expected ';' after SpritePattern binding");
+  } else {
+    consume_token(p);
+  }
+
+  char *quoted = string_of_sv(path.lexeme);
+  size_t quoted_length = strlen(quoted);
+  if (quoted_length < 2) error(path.filename, path.line, path.col,
+          "SpritePattern.load path must be a string literal");
+  quoted[quoted_length - 1] = '\0';
+  char *relative = quoted + 1;
+  if (relative[0] == '/' || path_has_parent_segment(relative)) {
+    error(path.filename, path.line, path.col,
+          "SpritePattern.load path must be relative and may not contain '..'");
+    return invalid_asset_decl(kind, name, path, module);
+  }
+
+  char declaring_buf[PATH_MAX];
+  snprintf(declaring_buf, sizeof(declaring_buf), "%s", path.filename);
+  char *declaring_dir = dirname(declaring_buf);
+  char joined[PATH_MAX];
+  int written = snprintf(joined, sizeof(joined), "%s/%s", declaring_dir,
+                         relative);
+  if (written < 0 || written >= (int)sizeof(joined)) {
+    error(path.filename, path.line, path.col, "asset path is too long");
+    return invalid_asset_decl(kind, name, path, module);
+  }
+  char canonical[PATH_MAX];
+  if (!realpath(joined, canonical)) {
+    error(path.filename, path.line, path.col,
+          "cannot resolve asset path '%s'", relative);
+    return invalid_asset_decl(kind, name, path, module);
+  }
+  struct stat info;
+  if (stat(canonical, &info) != 0 || !S_ISREG(info.st_mode)) {
+    error(path.filename, path.line, path.col,
+          "asset path '%s' is not a regular file", relative);
+    return invalid_asset_decl(kind, name, path, module);
+  }
+
+  char entry_buf[PATH_MAX];
+  snprintf(entry_buf, sizeof(entry_buf), "%s", p->entry_filename);
+  char entry_real[PATH_MAX];
+  if (!realpath(entry_buf, entry_real)) {
+    error(path.filename, path.line, path.col,
+          "cannot resolve entry source path");
+    return invalid_asset_decl(kind, name, path, module);
+  }
+  char *entry_dir = dirname(entry_real);
+  if (!path_is_beneath(canonical, entry_dir)) {
+    error(path.filename, path.line, path.col,
+          "asset path escapes the entry source directory");
+    return invalid_asset_decl(kind, name, path, module);
+  }
+
+  char *owned_path = allocate_compiler_persistent(strlen(canonical) + 1);
+  strcpy(owned_path, canonical);
+  token_t module_name = {0};
+  if (module) module_name = module->data.tdef.name;
+  node_t node = {0};
+  node.tag = asset_decl;
+  node.data.asset_decl = (ast_asset_decl){
+      .kind = kind, .name = name, .path = path, .module = module_name,
+      .canonical_path = owned_path, .byte_length = (long)info.st_size,
+      .referenced = 0};
+  return new_ast(node);
 }
 
 static ast_t parse_graphics_statement(parser_t *p) {
@@ -734,6 +961,12 @@ static ast_t synthesize_default(ast_t type_node) {
     // The lexeme must include the quotes, so for empty string it's ""
     tok.lexeme = (string_view)SV_Static("\"\"");
     return new_ast((node_t){literal, {.literal = {tok}}});
+  }
+
+  if (svcmp(name, (string_view)SV_Static("Sprite")) == 0) {
+    error(pos.filename, pos.line, pos.col,
+          "Sprite has no default slot; use Sprite(byteSlot)");
+    return NULL;
   }
 
   // Module types: default to TypeName_new()
@@ -1304,6 +1537,12 @@ void parse_program(parser_t *p) {
   ast_array_t prog = new_ast_array();
   ast_t last_module = NULL; // tracks the most recent module tdef for field collection
   while (p->cursor < p->tokens.length) {
+    /* Included tokens retain their declaring filename. A module declaration
+     * never captures fields or assets after control returns to another file. */
+    if (last_module &&
+        strcmp(last_module->data.tdef.name.filename,
+               peek_token(*p).filename) != 0)
+      last_module = NULL;
     if (peek_type(*p) == TOK_EMBED) {
       ast_t stmt = parse_embed(p);
       push_ast_array(&prog, stmt);
@@ -1352,6 +1591,13 @@ void parse_program(parser_t *p) {
         }
         p->tokens = new_toks;
       }
+      continue;
+    }
+    if (peek_type(*p) == TOK_IDENTIFIER &&
+        svcmp(peek_token(*p).lexeme, sv_from_cstr("SpritePattern")) == 0) {
+      ast_t stmt = parse_sprite_pattern_decl(p, last_module);
+      push_ast_array(&prog, stmt);
+      /* Asset members belong to the preceding module but are never fields. */
       continue;
     }
     ast_t stmt = parse_statement(p);

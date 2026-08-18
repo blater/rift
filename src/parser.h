@@ -1,5 +1,5 @@
 /*****************************************************
- * ROCKER PARSER HEADER
+ * RIFT PARSER HEADER
  * MIT License
  * Copyright (c) 2024 Paul Passeron
  *****************************************************/
@@ -17,6 +17,7 @@ typedef struct parser_t {
   char *source;         // Raw source data for embed block processing
   int source_length;    // Length of raw source data
   int scope_depth;      // 0 = top-level, >0 = inside function/block
+  char *entry_filename; // Canonical root source; stable while includes splice tokens
 } parser_t;
 
 parser_t new_parser(token_array_t l);

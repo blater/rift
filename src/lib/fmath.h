@@ -1,5 +1,5 @@
-#ifndef ROCK_FMATH_H
-#define ROCK_FMATH_H
+#ifndef RIFT_FMATH_H
+#define RIFT_FMATH_H
 
 #include "typedefs.h"
 
@@ -14,4 +14,4 @@ float fsqrt(float x);
 float fabs_float(float x);
 float fpi(void);
 
-#endif /* ROCK_FMATH_H */
+#endif /* RIFT_FMATH_H */

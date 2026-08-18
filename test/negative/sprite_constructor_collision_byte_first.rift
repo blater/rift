@@ -1,0 +1,6 @@
+union ByteChoice { byte PickByte, NoByte }
+union SpriteChoice { Sprite PickByte, NoSprite }
+
+sub main() {
+  SpriteChoice invalid := PickByte(3);
+}

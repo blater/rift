@@ -1,0 +1,248 @@
+include "Assert.rift"
+
+// --- Helper functions ---
+
+// Returns a concat result (tests return escape)
+sub buildMsg(string prefix, int n) returns string {
+  string result := concat(prefix, toString(n));
+  return result;
+}
+
+// Identity: returns its argument (tests parameter pass-through)
+sub identity(string s) returns string {
+  string copy := s;
+  return copy;
+}
+
+// Multiple locals, returns one (tests non-returned locals are freed)
+sub multiLocal(string x) returns string {
+  string a := concat("local-a-", x);
+  string b := concat("local-b-", x);
+  string c := concat("local-c-", x);
+  return b;
+}
+
+// Early return from conditional
+sub earlyReturn(int flag) returns string {
+  string outer := concat("outer-", "value");
+  if flag = 1 then {
+    string inner := concat("inner-", "yes");
+    return inner;
+  }
+  return outer;
+}
+
+// Chained function calls
+sub wrapMsg(string msg) returns string {
+  string wrapped := concat("[", concat(msg, "]"));
+  return wrapped;
+}
+
+sub main() {
+  Assert a;
+
+  // =========================================================================
+  // Group 1: Scope cleanup basics
+  // =========================================================================
+
+  // 1a: String literal (static backing) — no-op cleanup
+  string lit := "hello";
+  a.AssertEquals("literal survives", "hello", lit);
+
+  // 1b: Concat result (long-lived backing) — released at scope exit
+  string cat := concat("Hello", " World");
+  a.AssertEquals("concat in outer scope", "Hello World", cat);
+
+  // 1c: toString result (long-lived backing) — released at scope exit
+  string numstr := toString(42);
+  a.AssertEquals("toString in scope", "42", numstr);
+
+  // =========================================================================
+  // Group 2: Reassignment patterns
+  // =========================================================================
+
+  // 2a: Literal to concat (static to long-lived)
+  string r1 := "start";
+  r1 := concat("re", "placed");
+  a.AssertEquals("literal->concat reassign", "replaced", r1);
+
+  // 2b: Concat to literal (long-lived to static)
+  string r2 := concat("heap", "val");
+  r2 := "back to literal";
+  a.AssertEquals("concat->literal reassign", "back to literal", r2);
+
+  // 2c: Concat to concat (long-lived to long-lived, old released)
+  string r3 := concat("first", " value");
+  r3 := concat("second", " value");
+  a.AssertEquals("concat->concat reassign", "second value", r3);
+
+  // 2d: Multiple reassignments in sequence
+  string r4 := "a";
+  r4 := concat(r4, "b");
+  r4 := concat(r4, "c");
+  r4 := concat(r4, "d");
+  r4 := concat(r4, "e");
+  a.AssertEquals("5x reassign chain", "abcde", r4);
+
+  // =========================================================================
+  // Group 3: Loop stress (1000 iterations)
+  // =========================================================================
+
+  // 3a: concat+toString in while loop (1000 iters)
+  int i := 0;
+  string last := "";
+  while i < 1000 {
+    last := concat("n=", toString(i));
+    i := i + 1;
+  }
+  a.AssertEquals("1000-iter loop last", "n=999", last);
+
+  // 3b: Accumulating concat in while loop (200 iters)
+  i := 0;
+  string acc := "";
+  while i < 200 {
+    acc := concat(acc, ".");
+    i := i + 1;
+  }
+  a.AssertEQ("200-iter acc length", 200, length(acc));
+
+  // 3c: String local declared inside loop body (freed each iteration)
+  i := 0;
+  while i < 1000 {
+    string temp := toString(i);
+    i := i + 1;
+  }
+  a.AssertTrue("1000-iter temp loop ok", 1);
+
+  // 3d: for-counter loop with string per iteration
+  for j := 0 to 999 {
+    string ftemp := concat("i=", toString(j));
+  }
+  a.AssertTrue("for-loop 1000 ok", 1);
+
+  // =========================================================================
+  // Group 4: Function return escapes
+  // =========================================================================
+
+  // 4a: Simple return
+  string msg1 := buildMsg("count=", 7);
+  a.AssertEquals("buildMsg return", "count=7", msg1);
+
+  // 4b: Identity (pass-through copy)
+  string src := concat("pass", "through");
+  string dst := identity(src);
+  a.AssertEquals("identity src intact", "passthrough", src);
+  a.AssertEquals("identity dst correct", "passthrough", dst);
+
+  // 4c: Multiple locals, one returned
+  string ml := multiLocal("X");
+  a.AssertEquals("multiLocal returns b", "local-b-X", ml);
+
+  // 4d: Early return from if-body
+  string er1 := earlyReturn(1);
+  a.AssertEquals("early return flag=1", "inner-yes", er1);
+
+  // 4e: Normal return (else path)
+  string er2 := earlyReturn(0);
+  a.AssertEquals("early return flag=0", "outer-value", er2);
+
+  // 4f: Chained function calls (wrapMsg calls concat inside)
+  string wrapped := wrapMsg("hello");
+  a.AssertEquals("chained fn return", "[hello]", wrapped);
+
+  // 4g: Return value used in loop
+  i := 0;
+  while i < 500 {
+    string loopMsg := buildMsg("loop-", i);
+    i := i + 1;
+  }
+  a.AssertTrue("500-iter fn return loop ok", 1);
+
+  // =========================================================================
+  // Group 5: Conditional branches
+  // =========================================================================
+
+  // 5a: String declared in if-body only
+  int flag := 1;
+  string afterIf := "before";
+  if flag = 1 then {
+    string inIf := concat("in", "if");
+    afterIf := inIf;
+  }
+  a.AssertEquals("string from if branch", "inif", afterIf);
+
+  // 5b: Reassignment inside conditional
+  string condStr := "initial";
+  if flag = 1 then {
+    condStr := concat("cond-", "set");
+  }
+  a.AssertEquals("reassign in if", "cond-set", condStr);
+
+  // =========================================================================
+  // Group 6: Nested scopes
+  // =========================================================================
+
+  // 6a: 3 levels deep
+  string outer := "O";
+  {
+    string mid := concat(outer, "-M");
+    {
+      string inner := concat(mid, "-I");
+      a.AssertEquals("3-level inner", "O-M-I", inner);
+    }
+    a.AssertEquals("3-level mid", "O-M", mid);
+  }
+
+  // 6b: Nested for loops with strings
+  for x := 0 to 9 {
+    for y := 0 to 9 {
+      string cell := concat(toString(x), toString(y));
+    }
+  }
+  a.AssertTrue("nested for 10x10 ok", 1);
+
+  // =========================================================================
+  // Group 7: String arrays interaction
+  // =========================================================================
+
+  // 7a: Push concat result to array, then verify original is independent
+  string[] arr := [];
+  string pushSrc := concat("push", "me");
+  append(arr, pushSrc);
+  pushSrc := "overwritten";
+  a.AssertEquals("array[0] independent", "pushme", get(arr, 0));
+  a.AssertEquals("pushSrc overwritten", "overwritten", pushSrc);
+
+  // 7b: Loop pushing to array
+  string[] nums := [];
+  for k := 0 to 9 {
+    append(nums, toString(k));
+  }
+  a.AssertEQ("nums length", 10, length(nums));
+  a.AssertEquals("nums[9]", "9", get(nums, 9));
+
+  // =========================================================================
+  // Group 8: Edge cases
+  // =========================================================================
+
+  // 8a: Empty string concat
+  string empty := concat("", "");
+  a.AssertEQ("empty concat length", 0, length(empty));
+
+  // 8b: Concat with empty
+  string halfEmpty := concat("hello", "");
+  a.AssertEquals("concat with empty rhs", "hello", halfEmpty);
+
+  // 8c: toString of zero
+  string zero := toString(0);
+  a.AssertEquals("toString(0)", "0", zero);
+
+  // 8d: Substring edge — full string
+  string full := "abcdef";
+  string fullSub := substring(full, 1, 6);
+  a.AssertEquals("full substring", "abcdef", fullSub);
+
+  // 8e: Substring — single char
+  string oneCh := substring(full, 1, 1);
+  a.AssertEquals("single char substring", "a", oneCh);
+}

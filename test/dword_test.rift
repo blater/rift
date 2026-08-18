@@ -1,0 +1,29 @@
+include "Assert.rift"
+Assert a;
+
+sub main() {
+  dword d := 1000000;
+  a.AssertEquals("Basic dword variable and to_string", "1000000", toString(d));
+
+  int n:= to_int(d);
+  a.AssertEquals("dword to_int", "1000000", toString(n));
+
+  dword d2 := to_dword(2000000);
+  a.AssertEquals("Cast int to_dword(2000000)", "2000000", toString(d2));
+
+  dword d3 := to_dword(2147483647);
+  a.AssertEquals("Max size 32-bit int to_dword(2147483647)", "2147483647", toString(d3));
+
+  int sum := to_int(d) + to_int(d2);
+  a.AssertEquals("Arithmentic via in promotion(1000000 + 2000000)","3000000", toString(sum)); 
+
+  dword[] arr := [];
+  append(arr, to_dword(100000));
+  append(arr, to_dword(200000));
+  append(arr, to_dword(300000));
+  a.AssertEQ("dword arrays length", 3, length(arr));
+  a.AssertEQ("dword arrays value", 200000, get(arr,1));
+
+  int i := 42;
+  a.AssertEquals("to_string on int", "42", toString(i));
+}

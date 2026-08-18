@@ -1,0 +1,21 @@
+include "Assert.rift"
+
+Assert as;
+
+sub main() {
+  int[] values;
+  append(values, 10);
+  append(values, 20);
+  int last := pop(values);
+  int first := pop(values);
+  as.AssertEQ("pop returns the last int", 20, last);
+  as.AssertEQ("pop transfers the remaining int", 10, first);
+  as.AssertEQ("pop removes both int elements", 0, length(values));
+
+  string[] words;
+  append(words, "one");
+  append(words, "two");
+  string word := pop(words);
+  as.AssertEquals("pop transfers a string descriptor", "two", word);
+  as.AssertEQ("pop removes the string slot", 1, length(words));
+}

@@ -1,0 +1,12 @@
+record Holder {
+  Sprite value
+}
+
+sub Holder.useSprite(Sprite value) {
+  this.value := value;
+}
+
+sub main() {
+  Holder holder := { value := Sprite(1) };
+  holder.useSprite(2);
+}

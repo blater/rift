@@ -1,5 +1,5 @@
-#ifndef ROCK_RANDOM_H
-#define ROCK_RANDOM_H
+#ifndef RIFT_RANDOM_H
+#define RIFT_RANDOM_H
 
 #include "typedefs.h"
 
@@ -23,4 +23,4 @@ void randomize(void);
 byte random_byte(byte max);
 word random_word(word max);
 
-#endif /* ROCK_RANDOM_H */
+#endif /* RIFT_RANDOM_H */

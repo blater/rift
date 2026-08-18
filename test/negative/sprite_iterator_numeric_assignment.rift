@@ -1,0 +1,7 @@
+sub main() {
+  Sprite[] sprites;
+  append(sprites, Sprite(0));
+  for sprite in sprites {
+    sprite := 3;
+  }
+}

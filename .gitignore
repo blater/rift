@@ -7,7 +7,8 @@ x/
 test-artifacts/
 
 # Compiler binary and scratch output
-rockc
+rift
+riftc
 out.c
 
 # ZXN target build artifacts
@@ -20,8 +21,10 @@ out.c
 # Generated dep files in vendored deps
 src/ext/src/termbox2/demo/*.d
 
-# Legacy docs are being retired in favor of wikiroot/
-docs/
+# Legacy docs are being retired in favor of wikiroot. Keep the public sprite
+# contract tracked while the canonical wiki is unavailable.
+docs/*
+!docs/sprites-and-assets.md
 logs/
 RELATIVE_PATH_FIX_PLAN.md
 .bak/RELATIVE_PATH_FIX_PLAN.md

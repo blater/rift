@@ -1,0 +1,8 @@
+union Choice { Sprite Pick, None }
+
+sub Pick(byte value) {
+}
+
+sub main() {
+  Pick(3);
+}

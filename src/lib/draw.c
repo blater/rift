@@ -51,24 +51,24 @@ void draw(byte x0, byte y0, byte x1, byte y1) {
 #ifdef __SDCC
 
 /* Scratch bytes read by the inline-asm blocks via absolute LD A,(nn).
- * Non-static so SDCC emits `_rock_draw_*` symbols. */
-unsigned char  rock_draw_x;
-unsigned char  rock_draw_y;
-unsigned char  rock_draw_count;
-unsigned int   rock_draw_hl;    /* 16-bit: stored HL from a PIXELAD */
+ * Non-static so SDCC emits `_rift_draw_*` symbols. */
+unsigned char  rift_draw_x;
+unsigned char  rift_draw_y;
+unsigned char  rift_draw_count;
+unsigned int   rift_draw_hl;    /* 16-bit: stored HL from a PIXELAD */
 
 /* -------- horizontal line: byte-mask walk ----------------------- */
 
 static void pixad_into_hl(byte y, byte x) {
-  rock_draw_y = y;
-  rock_draw_x = x;
+  rift_draw_y = y;
+  rift_draw_x = x;
   __asm
-    ld a, (_rock_draw_y)
+    ld a, (_rift_draw_y)
     ld d, a
-    ld a, (_rock_draw_x)
+    ld a, (_rift_draw_x)
     ld e, a
     pixelad
-    ld (_rock_draw_hl), hl
+    ld (_rift_draw_hl), hl
   __endasm;
 }
 
@@ -78,7 +78,7 @@ static void pixad_into_hl(byte y, byte x) {
  * ULA scanline). */
 static void draw_hline(byte y, byte x0, byte x1) {
   pixad_into_hl(y, x0);
-  unsigned char *p = (unsigned char *)rock_draw_hl;
+  unsigned char *p = (unsigned char *)rift_draw_hl;
 
   byte col0  = x0 >> 3;
   byte col1  = x1 >> 3;
@@ -86,7 +86,7 @@ static void draw_hline(byte y, byte x0, byte x1) {
   byte trail = (byte)(0xff << (7 - (x1 & 7)));
   byte n;
 
-  if (rock_draw_mode) {
+  if (rift_draw_mode) {
     /* XOR: toggle the covered bits. */
     if (col0 == col1) { *p ^= (byte)(lead & trail); return; }
     *p++ ^= lead;
@@ -108,20 +108,20 @@ static void draw_hline(byte y, byte x0, byte x1) {
 /* Assumes y0 <= y1, both in 0..191. One PIXELAD + one SETAE, then a
  * tight PIXELDN loop that reuses the cached mask in B. */
 static void draw_vline(byte x, byte y0, byte y1) {
-  rock_draw_x = x;
-  rock_draw_y = y0;
-  rock_draw_count = (byte)(y1 - y0 + 1);
-  if (rock_draw_mode) {
+  rift_draw_x = x;
+  rift_draw_y = y0;
+  rift_draw_count = (byte)(y1 - y0 + 1);
+  if (rift_draw_mode) {
     /* XOR loop. */
     __asm
-      ld a, (_rock_draw_y)
+      ld a, (_rift_draw_y)
       ld d, a
-      ld a, (_rock_draw_x)
+      ld a, (_rift_draw_x)
       ld e, a
       pixelad
       setae
       ld b, a
-      ld a, (_rock_draw_count)
+      ld a, (_rift_draw_count)
       ld c, a
     00001$:
       ld a, (hl)
@@ -134,14 +134,14 @@ static void draw_vline(byte x, byte y0, byte y1) {
   } else {
     /* OR loop (default). */
     __asm
-      ld a, (_rock_draw_y)
+      ld a, (_rift_draw_y)
       ld d, a
-      ld a, (_rock_draw_x)
+      ld a, (_rift_draw_x)
       ld e, a
       pixelad
       setae
       ld b, a
-      ld a, (_rock_draw_count)
+      ld a, (_rift_draw_count)
       ld c, a
     00001$:
       ld a, (hl)
@@ -181,13 +181,13 @@ static void draw_line_general(byte x0, byte y0, byte x1, byte y1) {
     int i = dx;
     do {
       if ((unsigned)y < 192) {
-        rock_draw_x = (byte)x;
-        rock_draw_y = (byte)y;
-        if (rock_draw_mode) {
+        rift_draw_x = (byte)x;
+        rift_draw_y = (byte)y;
+        if (rift_draw_mode) {
           __asm
-            ld a, (_rock_draw_y)
+            ld a, (_rift_draw_y)
             ld d, a
-            ld a, (_rock_draw_x)
+            ld a, (_rift_draw_x)
             ld e, a
             pixelad
             setae
@@ -196,9 +196,9 @@ static void draw_line_general(byte x0, byte y0, byte x1, byte y1) {
           __endasm;
         } else {
           __asm
-            ld a, (_rock_draw_y)
+            ld a, (_rift_draw_y)
             ld d, a
-            ld a, (_rock_draw_x)
+            ld a, (_rift_draw_x)
             ld e, a
             pixelad
             setae
@@ -216,13 +216,13 @@ static void draw_line_general(byte x0, byte y0, byte x1, byte y1) {
     int i = dy;
     do {
       if ((unsigned)y < 192) {
-        rock_draw_x = (byte)x;
-        rock_draw_y = (byte)y;
-        if (rock_draw_mode) {
+        rift_draw_x = (byte)x;
+        rift_draw_y = (byte)y;
+        if (rift_draw_mode) {
           __asm
-            ld a, (_rock_draw_y)
+            ld a, (_rift_draw_y)
             ld d, a
-            ld a, (_rock_draw_x)
+            ld a, (_rift_draw_x)
             ld e, a
             pixelad
             setae
@@ -231,9 +231,9 @@ static void draw_line_general(byte x0, byte y0, byte x1, byte y1) {
           __endasm;
         } else {
           __asm
-            ld a, (_rock_draw_y)
+            ld a, (_rift_draw_y)
             ld d, a
-            ld a, (_rock_draw_x)
+            ld a, (_rift_draw_x)
             ld e, a
             pixelad
             setae

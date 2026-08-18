@@ -1,0 +1,16 @@
+include "Assert.rift"
+Assert a;
+
+sub main() {
+  string[] names := [];
+  append(names, "Alice");
+  append(names, "Bob");
+
+  // Reassigning the loop variable should NOT corrupt the array
+  for item in names {
+    item := concat(item, "!");
+  }
+
+  a.AssertEquals("array[0] after reassign", "Alice", get(names, 0));
+  a.AssertEquals("array[1] after reassign", "Bob", get(names, 1));
+}

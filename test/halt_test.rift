@@ -1,0 +1,18 @@
+include "Assert.rift"
+
+// halt(code) terminates the program. We can't actually call it in a
+// unit test (it would kill the test harness), so this test only
+// exercises the name-resolution and code-generation path by
+// referencing halt from an unreachable branch.
+
+sub main() {
+  Assert a;
+  int taken := 0;
+
+  if taken = 1 {
+    // Unreachable: proves halt() is a valid builtin call-site.
+    halt(42);
+  }
+
+  a.AssertEQ("halt linked", 0, taken);
+}

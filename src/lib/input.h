@@ -1,5 +1,5 @@
-#ifndef ROCK_INPUT_H
-#define ROCK_INPUT_H
+#ifndef RIFT_INPUT_H
+#define RIFT_INPUT_H
 
 #include "typedefs.h"
 
@@ -13,4 +13,4 @@
 byte inkey(void);
 byte keypress(void);
 
-#endif /* ROCK_INPUT_H */
+#endif /* RIFT_INPUT_H */

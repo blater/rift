@@ -1,0 +1,9 @@
+sub partial(byte choose) returns Sprite {
+  Sprite result := Sprite(0);
+  if choose {
+    return result;
+  }
+}
+
+sub main() {
+}

@@ -1,0 +1,6 @@
+sub missing() returns Sprite {
+  return;
+}
+
+sub main() {
+}

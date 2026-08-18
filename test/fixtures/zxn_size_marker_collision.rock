@@ -1,3 +1,0 @@
-sub main() {
-  print("ROCK_ZXN_STARTUP=31");
-}

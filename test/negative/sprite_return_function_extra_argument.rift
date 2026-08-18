@@ -1,0 +1,8 @@
+sub makeSprite() returns Sprite {
+  Sprite result := Sprite(0);
+  return result;
+}
+
+sub main() {
+  Sprite invalid := makeSprite(1);
+}

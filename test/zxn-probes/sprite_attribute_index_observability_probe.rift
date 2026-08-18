@@ -1,0 +1,36 @@
+include "../Assert.rift"
+
+Assert a;
+
+@embed c
+#ifdef __SDCC
+#include <z80.h>
+void rift_probe_sprite_attribute(byte value) { z80_outp(0x0057, value); }
+#else
+void rift_probe_sprite_attribute(byte value) { (void)value; }
+#endif
+@end c
+
+sub main() {
+  // Limited observation for Gate S2: after attempted four- and five-byte
+  // writes through $xx57, NextReg $34 retains the value written explicitly
+  // below.  Without a rendered or internal-pointer positive control, this
+  // does not establish whether the writes occurred, the private pointer
+  // advanced, or the two selectors are related.  S2 remains open.
+  next_reg_set(52, 0);
+  rift_probe_sprite_attribute(10);
+  rift_probe_sprite_attribute(20);
+  rift_probe_sprite_attribute(0);
+  rift_probe_sprite_attribute(128);
+  a.AssertEQ("four-byte upload does not change NextReg 52",
+             0, to_int(next_reg_get(52)));
+
+  next_reg_set(52, 2);
+  rift_probe_sprite_attribute(30);
+  rift_probe_sprite_attribute(40);
+  rift_probe_sprite_attribute(0);
+  rift_probe_sprite_attribute(192);
+  rift_probe_sprite_attribute(0);
+  a.AssertEQ("five-byte upload does not change NextReg 52",
+             2, to_int(next_reg_get(52)));
+}

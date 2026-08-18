@@ -1,0 +1,37 @@
+include "Assert.rift"
+Assert as;
+
+record array_wrapper {
+  int[] Items,
+  string[] Names
+}
+
+sub make_wrapper() returns array_wrapper {
+  array_wrapper a := {
+    Items := [],
+    Names := []
+  };
+
+  append(a.Items, 1);
+  append(a.Items, 2);
+  append(a.Items, 3);
+
+  append(a.Names, "First");
+  append(a.Names, "Second");
+  append(a.Names, "Third");
+
+  return a;
+}
+
+sub main() returns void {
+  array_wrapper a := make_wrapper();
+
+  string direct_name := a.Names[0];
+  as.AssertEquals("direct field index read string", "First", direct_name);
+
+  int direct_item := a.Items[1];
+  as.AssertEQ("direct field index read int", 2, direct_item);
+
+  a.Items[1] := 42;
+  as.AssertEQ("direct field index assignment", 42, get(a.Items, 1));
+}

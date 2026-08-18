@@ -1,0 +1,14 @@
+include "Assert.rift"
+Assert as;
+int pos := 42;
+string msg := "hello";
+int age;
+string name;
+
+sub main() {
+  as.AssertEQ("global int should be set", 42, pos);
+  as.AssertEquals("global string should be set", "hello", msg);
+
+  as.AssertEQ("age int should default to 0", 0, age);
+  as.AssertEquals("name string should default to empty", "", name);
+}

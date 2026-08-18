@@ -3,7 +3,8 @@ set -eu
 
 PROBE_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 PROBE_DIR="$PROBE_ROOT/test/zxn-probes"
-PROBE_TMP=$(mktemp -d "${TMPDIR:-/tmp}/rock-nex-pages.XXXXXX")
+PROBE_TMP=$(mktemp -d "${TMPDIR:-/tmp}/rift-nex-pages.XXXXXX")
+EMULATOR=${ZESARUX_BIN:-/Users/blater/src/zesarux/src/zesarux}
 trap 'rm -rf "$PROBE_TMP"' EXIT HUP INT TERM
 
 zcc +zxn -m -vn -subtype=nex -startup=1 -clib=sdcc_iy -create-app \
@@ -18,9 +19,9 @@ shasum -a 256 "$PROBE_TMP/probe.nex"
 
 (
   cd "$PROBE_ROOT"
-  ./tools/rock-emu test "$PROBE_TMP/probe.nex" \
+  ./tools/rift-emu test "$PROBE_TMP/probe.nex" \
     --target zxn \
-    --emulator-bin /Users/blater/retro/retro1/zesarux/src/zesarux \
+    --emulator-bin "$EMULATOR" \
     --require-emulator \
     --keep-all \
     --timeout-seconds 20 \
@@ -28,7 +29,7 @@ shasum -a 256 "$PROBE_TMP/probe.nex"
 )
 
 zcc +zxn -m -vn -subtype=nex -startup=1 -clib=sdcc_iy -create-app \
-  -DROCK_PROBE_EXPANDED \
+  -DRIFT_PROBE_EXPANDED \
   -pragma-include:"$PROBE_ROOT/src/lib/zxn/zpragma_zxn.inc" \
   -o "$PROBE_TMP/expanded.exe" \
   "$PROBE_DIR/nex_page_packaging_probe.c" \
@@ -41,9 +42,9 @@ shasum -a 256 "$PROBE_TMP/expanded.nex"
 
 (
   cd "$PROBE_ROOT"
-  ./tools/rock-emu test "$PROBE_TMP/expanded.nex" \
+  ./tools/rift-emu test "$PROBE_TMP/expanded.nex" \
     --target zxn \
-    --emulator-bin /Users/blater/retro/retro1/zesarux/src/zesarux \
+    --emulator-bin "$EMULATOR" \
     --require-emulator \
     --keep-all \
     --timeout-seconds 20 \

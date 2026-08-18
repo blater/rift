@@ -1,5 +1,5 @@
-#ifndef ROCKER_ASM_INTEROP_H
-#define ROCKER_ASM_INTEROP_H
+#ifndef RIFT_ASM_INTEROP_H
+#define RIFT_ASM_INTEROP_H
 
 #include "typedefs.h"
 
@@ -10,4 +10,4 @@
 byte peek(word address);
 void poke(word address, byte val);
 
-#endif // ROCKER_ASM_INTEROP_H
+#endif // RIFT_ASM_INTEROP_H

@@ -1,5 +1,5 @@
 /*****************************************************
- * ROCKER TYPECHECKER HEADER
+ * RIFT TYPECHECKER HEADER
  * MIT License
  * Copyright (c) 2024 Paul Passeron
  *****************************************************/
@@ -16,7 +16,7 @@ typedef struct typechecker_t {
   ast_t current_function;
 } typechecker_t;
 
-typedef struct rocker_type_t {
+typedef struct rift_type_t {
   enum {
     builtin_int,
     builtin_char,
@@ -31,7 +31,7 @@ typedef struct rocker_type_t {
       string_view name;
     } user_defined_type;
   } data;
-} rocker_type_t;
+} rift_type_t;
 
 int tc_program(ast_t program);
 

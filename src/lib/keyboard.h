@@ -1,5 +1,5 @@
-#ifndef ROCK_KEYBOARD_H
-#define ROCK_KEYBOARD_H
+#ifndef RIFT_KEYBOARD_H
+#define RIFT_KEYBOARD_H
 
 #include "typedefs.h"
 
@@ -65,4 +65,4 @@
 void scan_keyboard(void);
 byte key_pressed(byte key_id);
 
-#endif /* ROCK_KEYBOARD_H */
+#endif /* RIFT_KEYBOARD_H */

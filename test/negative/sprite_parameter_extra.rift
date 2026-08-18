@@ -1,0 +1,6 @@
+sub consume(Sprite value) {
+}
+
+sub main() {
+  consume(Sprite(1), Sprite(2));
+}

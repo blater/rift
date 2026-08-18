@@ -44,6 +44,11 @@ transpile() {
     "--component-manifest=${COMPONENT_MANIFEST}" $extra
 }
 
+remove_asset_intermediates() {
+  local exe_abs="$1"
+  rm -f "${exe_abs}.assets.asm"
+}
+
 append_manifest_paths() {
   local current="$1" paths="$2" item
   [ -z "$paths" ] && { printf '%s' "$current"; return; }
@@ -90,6 +95,14 @@ selected_profile() {
   sed -n 's/^@profile=//p' "$sidecar"
 }
 
+file_size_bytes() {
+  if [ ! -f "$1" ]; then
+    echo "build failed: missing size artifact $1" >&2
+    return 1
+  fi
+  wc -c <"$1" | tr -d '[:space:]'
+}
+
 build() {
   local target="$1" exe_abs="$2" sourcefile="$3"
   local LIB_SRCS=""
@@ -105,9 +118,27 @@ build() {
   local zxn_tiny_core=0
   local zxn_light_core=0
   local generated_source="${exe_abs}.c"
+  local build_dir
+  local exe_name
   local component_output="${exe_abs}.components"
   local generated_profile=""
   local selected_ids=""
+  local asset_asm_source=""
+  local asset_upload_asm_source=""
+  local asset_zcc_sources=()
+
+  build_dir="$(dirname "$exe_abs")"
+  exe_name="$(basename "$exe_abs")"
+
+  [ -s "${exe_abs}.assets.asm" ] && asset_asm_source="${exe_abs}.assets.asm"
+  if [ "$target" = "zxn" ] && [ -n "$asset_asm_source" ]; then
+    asset_upload_asm_source="${RT}/lib/zxn/sprite_upload.asm"
+    if [ ! -f "$asset_upload_asm_source" ]; then
+      echo "build failed: missing ZXN sprite asset uploader $asset_upload_asm_source" >&2
+      exit 1
+    fi
+    asset_zcc_sources=("$asset_upload_asm_source" "${exe_name}.assets.asm")
+  fi
 
   selected_ids="$(selected_component_ids "$component_output")"
 
@@ -131,7 +162,7 @@ build() {
         light_core_define="-DROCK_ZXN_LIGHT_CORE"
         ;;
     esac
-    if [ "$(printf '%s\n' "$selected_ids" | sed '/^core$/d;/^tiny_print$/d;/^tiny_test$/d;/^$/d' | wc -l | tr -d ' ')" -gt 0 ]; then
+    if [ "$(printf '%s\n' "$selected_ids" | sed '/^core$/d;/^tiny_print$/d;/^tiny_test$/d;/^sprite$/d;/^$/d' | wc -l | tr -d ' ')" -gt 0 ]; then
       zxn_tiny_core=0
       zxn_light_core=0
       zxn_startup=1
@@ -173,24 +204,28 @@ build() {
       -I "${RT}/lib" -I "${RT}/ext/lib" \
       -o "${exe_abs}" "${exe_abs}.c" ${LIB_SRCS} -lm
   else
-    nex_file="${exe_abs%%.*}.nex"
+    nex_file="${exe_abs%.*}.nex"
     [ "$ZXN_TEST" = "1" ] && zxn_test_define="-DROCK_ZXN_TEST"
     [ "$ALLOCATOR_STATS" = "1" ] && allocator_stats_define="-DROCK_ALLOCATOR_STATS"
     pool_capacity_defines="-DROCK_ZXN_BUMP_POOL_CAPACITY=$ZXN_BUMP_POOL_CAPACITY -DROCK_ZXN_LONGLIVED_POOL_CAPACITY=$ZXN_LONGLIVED_POOL_CAPACITY"
     echo "ZXN profile: startup=$zxn_startup, bump-pool=$ZXN_BUMP_POOL_CAPACITY, longlived-pool=$ZXN_LONGLIVED_POOL_CAPACITY, tiny-core=$zxn_tiny_core, light-core=$zxn_light_core"
-    zcc +zxn -m -vn -subtype=nex -startup="$zxn_startup" -clib=$CLIB --opt-code-size -create-app \
-      $zxn_test_define \
-      $allocator_stats_define \
-      $pool_fast_define \
-      $pool_capacity_defines \
-      $tiny_core_define \
-      $tiny_print_direct_define \
-      $light_core_define \
-      -pragma-include:"${RT}/lib/zxn/zpragma_zxn.inc" \
-      -I"${RT}/lib" \
-      -lm \
-      -o "${exe_abs}" \
-      "${exe_abs}.c" ${LIB_SRCS} ${ZXN_ASM_SRCS}
+    (
+      cd "$build_dir"
+      zcc +zxn -m -vn -subtype=nex -startup="$zxn_startup" -clib=$CLIB --opt-code-size -create-app \
+        $zxn_test_define \
+        $allocator_stats_define \
+        $pool_fast_define \
+        $pool_capacity_defines \
+        $tiny_core_define \
+        $tiny_print_direct_define \
+        $light_core_define \
+        -pragma-include:"${RT}/lib/zxn/zpragma_zxn.inc" \
+        -I"${RT}/lib" \
+        -lm \
+        -o "$exe_name" \
+        "${exe_name}.c" ${LIB_SRCS} ${ZXN_ASM_SRCS} \
+        "${asset_zcc_sources[@]}"
+    )
     local map_file="${exe_abs%.*}.map"
     if [ ! -f "$map_file" ]; then
       echo "build failed: z88dk did not produce a link map"
@@ -211,14 +246,34 @@ build() {
     fi
     printf 'ZXN layout: BSS ends at 0x%04X; reserved stack is 0x%04X-0x%04X\n' \
       "$bss_end" "$stack_floor" "$ZXN_STACK_TOP"
+    if [ -n "$asset_asm_source" ]; then
+      local asset_verifier="$ROCK_ROOT/build/verify-zxn-assets"
+      if [ ! -x "$asset_verifier" ]; then
+        rm -f "$nex_file"
+        echo "build failed: missing native asset verifier; run make" >&2
+        exit 1
+      fi
+      if ! "$asset_verifier" --map "$map_file" --nex "$nex_file" \
+          --ram-pages=96; then
+        rm -f "$nex_file"
+        echo "build failed: asset placement did not match the linked NEX" >&2
+        exit 1
+      fi
+    fi
     [ "$DEBUG" -eq 1 ] || rm -f "$map_file"
   fi
   if [ $? -eq 0 ]; then
     if [ "$target" = "gcc" ]; then
-      echo "created $exe_abs"
+      local exe_bytes
+      exe_bytes=$(file_size_bytes "$exe_abs")
+      echo "created $exe_abs (EXE: $exe_bytes bytes)"
     else
+      local nex_bytes prewrap_exe_bytes prewrap_exe_file
+      prewrap_exe_file="${exe_abs%.*}_CODE.bin"
+      nex_bytes=$(file_size_bytes "$nex_file")
+      prewrap_exe_bytes=$(file_size_bytes "$prewrap_exe_file")
       rm -f "${exe_abs}"
-      echo "created $nex_file"
+      echo "created $nex_file (NEX: $nex_bytes bytes; pre-wrap EXE: $prewrap_exe_bytes bytes)"
     fi
   else
     echo "build failed"
@@ -348,12 +403,14 @@ if [ "$zxn_pool_roots" -gt 2 ]; then
 fi
 
 [ $DEBUG -eq 1 ] && echo "target=$target exe=$exe_abs auto_cast=$AUTO_CAST"
+remove_asset_intermediates "$exe_abs"
 transpile "$target" "$exe_abs" "$source_abs" "$AUTO_CAST" "$ZXN_TEST" "$MEMORY_PROFILE"
 build "$target" "$exe_abs" "$sourcefile"
 
 if [ $DEBUG -eq 0 ]; then
   rm -f "${exe_abs}.c"
   rm -f "${exe_abs}.components"
+  remove_asset_intermediates "$exe_abs"
 else
   clang-format -i "${exe_abs}.c"
 fi

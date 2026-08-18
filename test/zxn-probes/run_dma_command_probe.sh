@@ -3,7 +3,8 @@ set -eu
 
 PROBE_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 PROBE_DIR="$PROBE_ROOT/test/zxn-probes"
-PROBE_TMP=$(mktemp -d "${TMPDIR:-/tmp}/rock-dma-probe.XXXXXX")
+PROBE_TMP=$(mktemp -d "${TMPDIR:-/tmp}/rift-dma-probe.XXXXXX")
+EMULATOR=${ZESARUX_BIN:-/Users/blater/src/zesarux/src/zesarux}
 trap 'rm -rf "$PROBE_TMP"' EXIT HUP INT TERM
 
 zcc +zxn -m -vn -subtype=nex -startup=1 -clib=sdcc_iy -create-app \
@@ -15,9 +16,9 @@ zcc +zxn -m -vn -subtype=nex -startup=1 -clib=sdcc_iy -create-app \
 shasum -a 256 "$PROBE_TMP/probe.nex"
 (
   cd "$PROBE_ROOT"
-  ./tools/rock-emu test "$PROBE_TMP/probe.nex" \
+  ./tools/rift-emu test "$PROBE_TMP/probe.nex" \
     --target zxn \
-    --emulator-bin /Users/blater/retro/retro1/zesarux/src/zesarux \
+    --emulator-bin "$EMULATOR" \
     --require-emulator \
     --keep-all \
     --timeout-seconds 20 \

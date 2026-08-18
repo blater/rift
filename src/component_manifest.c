@@ -80,6 +80,15 @@ static int list_contains(const char *list, const char *wanted) {
   return 0;
 }
 
+static int primitive_interface_type(const char *name, int allow_void) {
+  const char *primitives[] = {"boolean", "bool", "byte", "char", "int",
+                              "word", "dword", "float", "string"};
+  if (allow_void && strcmp(name, "void") == 0) return 1;
+  for (size_t i = 0; i < sizeof(primitives) / sizeof(primitives[0]); i++)
+    if (strcmp(name, primitives[i]) == 0) return 1;
+  return 0;
+}
+
 static int valid_interface_type(component_manifest *manifest,
                                 const char *type_name, int allow_void) {
   size_t length = strlen(type_name);
@@ -88,12 +97,40 @@ static int valid_interface_type(component_manifest *manifest,
   memcpy(base, type_name, length + 1);
   if (length >= 2 && base[length - 2] == '[' && base[length - 1] == ']')
     base[length - 2] = '\0';
-  const char *primitives[] = {"boolean", "bool", "byte", "char", "int",
-                              "word", "dword", "float", "string"};
-  if (allow_void && strcmp(base, "void") == 0) return 1;
-  for (size_t i = 0; i < sizeof(primitives) / sizeof(primitives[0]); i++)
-    if (strcmp(base, primitives[i]) == 0) return 1;
-  return find_opaque_interface(manifest, base) != NULL;
+  if (primitive_interface_type(base, allow_void)) return 1;
+  if (find_opaque_interface(manifest, base) != NULL) return 1;
+  return 0;
+}
+
+static int asset_category_type(component_manifest *manifest,
+                               const char *type_name) {
+  size_t length = strlen(type_name);
+  char base[128];
+  if (length == 0 || length >= sizeof(base)) return 0;
+  memcpy(base, type_name, length + 1);
+  if (length >= 2 && base[length - 2] == '[' && base[length - 1] == ']')
+    base[length - 2] = '\0';
+  for (int i = 0; i < manifest->asset_kind_count; i++)
+    if (strcmp(manifest->asset_kinds[i].category, base) == 0) return 1;
+  return 0;
+}
+
+static int valid_asset_consumer_parameter(component_manifest *manifest,
+                                          component_interface_spec *entry,
+                                          int index,
+                                          const char *type_name) {
+  if (entry->kind != COMPONENT_INSTANCE_METHOD ||
+      strcmp(entry->owner, "Sprite") != 0 ||
+      strcmp(entry->name, "frame") != 0 || index != 0 ||
+      component_parameter_count(entry->parameters) != 2)
+    return 0;
+  for (int i = 0; i < manifest->asset_kind_count; i++) {
+    component_asset_kind_spec *asset = &manifest->asset_kinds[i];
+    if (strcmp(asset->category, type_name) == 0 &&
+        strcmp(asset->component_id, entry->component_id) == 0)
+      return 1;
+  }
+  return 0;
 }
 
 static void validate_unique_path_column(component_manifest *manifest,
@@ -228,6 +265,24 @@ component_interface_spec *find_method_interface(component_manifest *manifest,
   return NULL;
 }
 
+component_namespace_spec *find_namespace(component_manifest *manifest,
+                                         const char *owner) {
+  if (!manifest || !owner) return NULL;
+  for (int i = 0; i < manifest->namespace_count; i++)
+    if (strcmp(manifest->namespaces[i].owner, owner) == 0)
+      return &manifest->namespaces[i];
+  return NULL;
+}
+
+component_asset_kind_spec *find_asset_kind(component_manifest *manifest,
+                                           const char *kind) {
+  if (!manifest || !kind) return NULL;
+  for (int i = 0; i < manifest->asset_kind_count; i++)
+    if (strcmp(manifest->asset_kinds[i].kind, kind) == 0)
+      return &manifest->asset_kinds[i];
+  return NULL;
+}
+
 static void validate_manifest(component_manifest *manifest) {
   if (manifest->component_count == 0)
     manifest_error(manifest->path, 0, "contains no components");
@@ -273,6 +328,37 @@ static void validate_manifest(component_manifest *manifest) {
   unsigned char visited[COMPONENT_MANIFEST_MAX_COMPONENTS] = {0};
   for (int i = 0; i < manifest->component_count; i++)
     validate_component_cycle(manifest, i, visiting, visited);
+  for (int i = 0; i < manifest->namespace_count; i++) {
+    component_namespace_spec *entry = &manifest->namespaces[i];
+    if (!valid_identifier(entry->owner, 0) ||
+        !find_component(manifest, entry->component_id))
+      manifest_error(manifest->path, 0, "has an invalid namespace row");
+    for (int j = 0; j < i; j++)
+      if (strcmp(entry->owner, manifest->namespaces[j].owner) == 0)
+        manifest_error(manifest->path, 0, "contains a duplicate namespace owner");
+  }
+  for (int i = 0; i < manifest->asset_kind_count; i++) {
+    component_asset_kind_spec *entry = &manifest->asset_kinds[i];
+    if (!valid_identifier(entry->kind, 0) ||
+        !valid_identifier(entry->category, 0) ||
+        !find_component(manifest, entry->component_id))
+      manifest_error(manifest->path, 0, "has an invalid asset row");
+    if (primitive_interface_type(entry->category, 1) ||
+        find_opaque_interface(manifest, entry->category) ||
+        find_namespace(manifest, entry->category))
+      manifest_error(manifest->path, 0,
+                     "asset category collides with a runtime or namespace type");
+    if ((strcmp(entry->kind, "sprite4") != 0 &&
+         strcmp(entry->kind, "sprite8") != 0) ||
+        strcmp(entry->category, "SpritePattern") != 0)
+      manifest_error(manifest->path, 0,
+                     "sprite assets support only sprite4/sprite8 SpritePattern assets");
+    for (int j = 0; j < i; j++) {
+      component_asset_kind_spec *prior = &manifest->asset_kinds[j];
+      if (strcmp(entry->kind, prior->kind) == 0)
+        manifest_error(manifest->path, 0, "contains a duplicate asset kind");
+    }
+  }
   for (int i = 0; i < manifest->interface_count; i++) {
     component_interface_spec *entry = &manifest->interfaces[i];
     if (!find_component(manifest, entry->component_id))
@@ -284,9 +370,10 @@ static void validate_manifest(component_manifest *manifest) {
                      "interface has too many parameters");
     if ((entry->kind == COMPONENT_INSTANCE_METHOD ||
          entry->kind == COMPONENT_TYPE_METHOD) &&
-        !find_opaque_interface(manifest, entry->owner))
+        !find_opaque_interface(manifest, entry->owner) &&
+        !find_namespace(manifest, entry->owner))
       manifest_error(manifest->path, 0,
-                     "method owner is not a declared opaque interface");
+                     "method owner is not a declared opaque interface or namespace");
     if (entry->kind == COMPONENT_OPAQUE) {
       char expected[256];
       int written = snprintf(expected, sizeof(expected), "%s_new", entry->owner);
@@ -299,16 +386,26 @@ static void validate_manifest(component_manifest *manifest) {
         (entry->owner[0] && !valid_identifier(entry->owner, 0)) ||
         !valid_identifier(entry->c_symbol, 0))
       manifest_error(manifest->path, 0, "has an invalid interface identifier");
+    if (asset_category_type(manifest, entry->return_type))
+      manifest_error(manifest->path, 0,
+                     "asset category may not be an interface return type");
     if (!valid_interface_type(manifest, entry->return_type, 1))
       manifest_error(manifest->path, 0, "has an unknown interface return type");
     char parameter[128];
     int parameter_count = component_parameter_count(entry->parameters);
     for (int j = 0; j < parameter_count; j++) {
       if (!component_parameter_at(entry->parameters, j, parameter,
-                                  sizeof(parameter)) ||
-          !valid_interface_type(manifest, parameter, 0))
+                                  sizeof(parameter)))
         manifest_error(manifest->path, 0,
                        "has an unknown interface parameter type");
+      if (asset_category_type(manifest, parameter)) {
+        if (!valid_asset_consumer_parameter(manifest, entry, j, parameter))
+          manifest_error(manifest->path, 0,
+                         "asset category is only valid in its registered consumer parameter");
+      } else if (!valid_interface_type(manifest, parameter, 0)) {
+        manifest_error(manifest->path, 0,
+                       "has an unknown interface parameter type");
+      }
     }
     for (int j = 0; j < i; j++) {
       component_interface_spec *prior = &manifest->interfaces[j];
@@ -328,6 +425,25 @@ static void validate_manifest(component_manifest *manifest) {
         manifest_error(manifest->path, 0, "contains a duplicate native symbol");
     }
   }
+  int has_sprite4 = 0;
+  int has_sprite8 = 0;
+  for (int i = 0; i < manifest->asset_kind_count; i++) {
+    component_asset_kind_spec *asset = &manifest->asset_kinds[i];
+    if (strcmp(asset->kind, "sprite4") == 0) has_sprite4 = 1;
+    if (strcmp(asset->kind, "sprite8") == 0) has_sprite8 = 1;
+    component_interface_spec *consumer =
+        find_method_interface(manifest, "Sprite", "frame", 0, 2);
+    char category[128];
+    if (!consumer || strcmp(consumer->component_id, asset->component_id) != 0 ||
+        !component_parameter_at(consumer->parameters, 0, category,
+                                sizeof(category)) ||
+        strcmp(category, asset->category) != 0)
+      manifest_error(manifest->path, 0,
+                     "sprite assets require Sprite.frame argument 1 to be SpritePattern in the same component");
+  }
+  if (manifest->asset_kind_count > 0 && (!has_sprite4 || !has_sprite8))
+    manifest_error(manifest->path, 0,
+                   "sprite assets require both sprite4 and sprite8 SpritePattern asset kinds");
 }
 
 component_manifest *load_component_manifest(const char *path) {
@@ -371,6 +487,29 @@ component_manifest *load_component_manifest(const char *path) {
       if (entry->id[0] == '\0') manifest_error(path, line_number, "has an empty component ID");
       if (fields[10][0] && strcmp(fields[10], "always") != 0)
         manifest_error(path, line_number, "component selection must be empty or always");
+      continue;
+    }
+
+    if (strcmp(fields[0], "namespace") == 0) {
+      if (count != 3) manifest_error(path, line_number, "namespace row needs 3 fields");
+      if (manifest->namespace_count >= COMPONENT_MANIFEST_MAX_NAMESPACES)
+        manifest_error(path, line_number, "has too many namespaces");
+      component_namespace_spec *entry =
+          &manifest->namespaces[manifest->namespace_count++];
+      entry->owner = manifest_copy(fields[1]);
+      entry->component_id = manifest_copy(fields[2]);
+      continue;
+    }
+
+    if (strcmp(fields[0], "asset") == 0) {
+      if (count != 4) manifest_error(path, line_number, "asset row needs 4 fields");
+      if (manifest->asset_kind_count >= COMPONENT_MANIFEST_MAX_ASSET_KINDS)
+        manifest_error(path, line_number, "has too many asset kinds");
+      component_asset_kind_spec *entry =
+          &manifest->asset_kinds[manifest->asset_kind_count++];
+      entry->kind = manifest_copy(fields[1]);
+      entry->category = manifest_copy(fields[2]);
+      entry->component_id = manifest_copy(fields[3]);
       continue;
     }
 

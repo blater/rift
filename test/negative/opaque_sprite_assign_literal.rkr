@@ -1,4 +1,0 @@
-sub main() {
-  Sprite player;
-  player := { slot := 1 };
-}

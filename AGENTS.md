@@ -1,37 +1,37 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-`src/` contains compiler components (lexer, parser, typechecker, generator) and `src/lib/` holds the runtime plus ZX Next interop linked into generated programs. `build/` only caches objects created by `make` and should stay out of commits. Root-level binaries include `rockc` and the `rock` driver; language notes live in `docs/`, while `test/` collects `.rkr` regression inputs that define current behavior.
+`src/` contains compiler components (lexer, parser, typechecker, generator) and `src/lib/` holds the runtime plus ZX Next interop linked into generated programs. `build/` only caches objects created by `make` and should stay out of commits. Root-level binaries include `riftc` and the `rift` driver; language notes live in `docs/`, while `test/` collects `.rift` regression inputs that define current behavior. `.rift` is canonical; tools must also accept `.rft` sources.
 
 ## Build, Test, and Development Commands
-- `make` — compiles everything under `src/` into `rockc` using `gcc -Werror -Wall -Wextra`. Run it before testing or submitting patches.
-- `make clean` — removes `build/` and `rockc`.
-- `./rock path/to/foo.rkr [foo.exe]` — transpiles via `rockc` then builds the executable. Pass `--target=gcc` (default) for native runs or `--target=zxn` for ZX Next binaries (requires the `zcc +zxn` toolchain).
-- `./run_tests.sh [test/substring_test.rkr]` — compiles each `.rkr` with `./rock` and runs the resulting binaries; provide a path to iterate on a single test.
+- `make` — compiles everything under `src/` into `riftc` using `gcc -Werror -Wall -Wextra`. Run it before testing or submitting patches.
+- `make clean` — removes `build/` and `riftc`.
+- `./rift path/to/foo.rift [foo]` — transpiles via `riftc` then builds `foo.zxn` for the default ZX Next target (requires the `zcc +zxn` toolchain). Pass `--target=gcc` to build `foo.exe` for the host. Intermediates stay under `/tmp`; `--debug` reports and retains that workspace.
+- `./run_tests.sh [test/substring_test.rift]` — compiles each `.rift` with `./rift --target=gcc` and runs the resulting binaries; provide a path to iterate on a single test.
 
 ## Coding Style & Naming Conventions
-All C sources use two-space indentation and brace-on-same-line style (see `src/parser.c`). Use `snake_case` for functions, locals, and struct fields, reserving `UPPER_SNAKE_CASE` for enums or macros. Prefer `static` helpers for module-internal behavior and include only the headers a file needs. When invoking `./rock --debug`, generated C is formatted with `clang-format`; keep manual changes similarly tidy.
+All C sources use two-space indentation and brace-on-same-line style (see `src/parser.c`). Use `snake_case` for functions, locals, and struct fields, reserving `UPPER_SNAKE_CASE` for enums or macros. Prefer `static` helpers for module-internal behavior and include only the headers a file needs. When invoking `./rift --debug`, generated C is formatted with `clang-format`; keep manual changes similarly tidy.
 
 ## Testing Guidelines
-Tests live in `test/` with descriptive names such as `array_test.rkr` or `module_decl_test.rkr` so `run_tests.sh` can auto-discover them. Each file should import `test/Assert.rkr` helpers and emit `PASS`/`FAIL` strings that the harness parses. Run the suite after touching parsing, code generation, or runtime code. Runtime additions in `src/lib/` usually need a new `.rkr` plus, when relevant, a ZX Next check via `./rock --target=zxn`.
+Tests live in `test/` with descriptive names such as `array_test.rift` or `module_decl_test.rift` so `run_tests.sh` can auto-discover them. Each file should import `test/Assert.rift` helpers and emit `PASS`/`FAIL` strings that the harness parses. Run the suite after touching parsing, code generation, or runtime code. Runtime additions in `src/lib/` usually need a new `.rift` plus, when relevant, a ZX Next check via `./rift --target=zxn`.
 
 ### ZX Next emulator
 The canonical version-controlled ZEsarUX checkout is
 `/Users/blater/src/zesarux`. Use its project-patched binary at
 `/Users/blater/src/zesarux/src/zesarux` for automated ZX Next tests.
-The maintained integration branch is `rocklang/zrcp-automation`; the validated
+The maintained integration branch is `integration/zrcp-automation`; the validated
 executable baseline is tag
-`rocklang-zrcp-2026-08-15` at commit `4a5c08189e1c6406d50f9d565ea44cc156a4d7f9`.
+`zrcp-headless-2026-08-15` at commit `4a5c08189e1c6406d50f9d565ea44cc156a4d7f9`.
 It provides the loopback-only ZRCP and measurement behavior expected by
-`tools/test-zxn` and `tools/rock-emu`. Higher-level test targets select this
-binary by default. For a direct `tools/rock-emu` invocation, pass
+`tools/test-zxn` and `tools/rift-emu`. Higher-level test targets select this
+binary by default. For a direct `tools/rift-emu` invocation, pass
 `--emulator-bin /Users/blater/src/zesarux/src/zesarux` or set `ZESARUX_BIN` to
 that path. Do not substitute the older
 `/Users/blater/retro/retro1/zesarux/src/zesarux` or
 `/Users/blater/bin/zesa/MacOS/zesarux` builds for test evidence.
 
 ## Commit & Pull Request Guidelines
-Existing commits are short and imperative (e.g., “Fix relative path resolution”), so follow that voice and keep unrelated work split. Before opening a PR, verify `make`, `./run_tests.sh`, and representative `./rock` invocations for each target you touched. PR descriptions should summarize behavioral impact, mention docs/tests updates, link issues, and attach logs or ZX screenshots when they illustrate new output.
+Existing commits are short and imperative (e.g., “Fix relative path resolution”), so follow that voice and keep unrelated work split. Before opening a PR, verify `make`, `./run_tests.sh`, and representative `./rift` invocations for each target you touched. PR descriptions should summarize behavioral impact, mention docs/tests updates, link issues, and attach logs or ZX screenshots when they illustrate new output.
 
 ## Review Charter
 Review is a set of focused lenses, not a fixed team structure. Keep a change owned
@@ -43,10 +43,10 @@ language behavior, runtime ownership, or target-specific changes.
 
 | Role | Owns | Reviews for |
 | --- | --- | --- |
-| Language contributor | Lexer, parser, AST, typechecker, and C generation | Rock syntax/semantics remain coherent through the full pipeline |
+| Language contributor | Lexer, parser, AST, typechecker, and C generation | Rift syntax/semantics remain coherent through the full pipeline |
 | Runtime and target contributor | `src/lib/`, host support, and ZX Next interop | Ownership, resource limits, and equivalent supported-target behavior |
 | Test and integration contributor | Test harness, driver/build flow, and cross-cutting changes | Reproducible coverage and a small, compatible integration |
-| Semantics reviewer | Observable Rock language behavior | Regressions, ambiguous syntax, type/representation mismatches, and generated-C correctness |
+| Semantics reviewer | Observable Rift language behavior | Regressions, ambiguous syntax, type/representation mismatches, and generated-C correctness |
 | Runtime/target reviewer | Runtime and target contracts | Lifetime or memory errors, host/ZXN divergence, and missing target evidence |
 | Maintainer reviewer | Cross-cutting direction | Unnecessary coupling, undocumented compatibility changes, and missing user-facing docs |
 
@@ -59,11 +59,11 @@ stages, changes a public language contract, or alters the build/driver flow.
 | Change | Required independent review | Minimum evidence |
 | --- | --- | --- |
 | Documentation or behavior-preserving local refactor | One relevant domain reviewer | Targeted build/test when code changes |
-| Lexer, parser, AST, typechecker, or generator behavior | Semantics reviewer | New or updated `.rkr` regression test; `make`; focused test run |
+| Lexer, parser, AST, typechecker, or generator behavior | Semantics reviewer | New or updated `.rift` regression test; `make`; focused test run |
 | Runtime allocation, strings, arrays, records, or ownership | Runtime/target reviewer | Regression test covering the lifetime/overwrite/error path; host suite or focused test |
-| Host/ZX Next RTL, inline assembly, or target selection | Runtime/target reviewer | Host test where applicable and `./rock --target=zxn` compile check; hardware/emulator evidence when behavior cannot be checked on host |
+| Host/ZX Next RTL, inline assembly, or target selection | Runtime/target reviewer | Host test where applicable and `./rift --target=zxn` compile check; hardware/emulator evidence when behavior cannot be checked on host |
 | New built-in or language-visible runtime API | Semantics reviewer and runtime/target reviewer | Syntax/semantic test plus supported-target checks |
-| Build scripts, `rock` driver, or test harness | Test/integration contributor or maintainer reviewer | Command(s) affected, including a representative compile/run path |
+| Build scripts, `rift` driver, or test harness | Test/integration contributor or maintainer reviewer | Command(s) affected, including a representative compile/run path |
 | Cross-cutting language change or compatibility decision | Maintainer reviewer plus relevant specialist | Brief PR contract: affected behavior, compatibility decision, tests, and documentation/wiki impact |
 
 Every PR should state the user-visible outcome, affected compiler/runtime
@@ -74,13 +74,13 @@ missing compatibility coverage; use `REQUIRED` for an unmet matrix entry.
 
 ## Wiki
 This project has a persistent knowledge wiki checked out at
-`/Users/blater/src/rocklang/wikiroot/`. It is the compiled architectural
+`/Users/blater/src/rift/wikiroot/`. It is the compiled architectural
 understanding of the transpiler — always prefer it over guessing or re-deriving
 from scratch.
 
 `wikiroot/` is a standalone Git repository, not content tracked by the parent
-Rock project repository. Its `main` branch uses
-`git@github.com:blater/rocklang_internal.git` as `origin`; the parent project
+Rift project repository. Its `main` branch uses
+`git@github.com:blater/rift_internal.git` as `origin`; the parent project
 uses a different remote. Run wiki status, commit, and push operations against
 `wikiroot/` (for example, `git -C wikiroot status`) and never include wiki files
 in a parent-project commit.

@@ -1,23 +1,23 @@
-#ifndef ROCKER_FUNDEFS_INTERNAL
-#define ROCKER_FUNDEFS_INTERNAL
+#ifndef RIFT_FUNDEFS_INTERNAL
+#define RIFT_FUNDEFS_INTERNAL
 
 #include "typedefs.h"
 #include "fundefs.h"
 
 #define __INTERNAL_DYNAMIC_ARRAY_CAP 64
 
-#if defined(__SDCC) && defined(ROCK_ZXN_TINY_CORE)
+#if defined(__SDCC) && defined(RIFT_ZXN_TINY_CORE)
 #define __internal_set_dynamic_array_initial_capacity(capacity) ((void)(capacity))
 #else
 void __internal_set_dynamic_array_initial_capacity(size_t capacity);
 #endif
 
-void init_rocker(int argc, char **argv);
-void end_rocker(void);
-void exit_rocker(int status);
+void init_rift(int argc, char **argv);
+void end_rift(void);
+void exit_rift(int status);
 
-/* Rock-exposed program termination. Mirrors PASTA/80's Halt(ExitCode).
- * Runs end_rocker() then exits with the given code. */
+/* Rift-exposed program termination. Mirrors PASTA/80's Halt(ExitCode).
+ * Runs end_rift() then exits with the given code. */
 void halt(byte code);
 
 __internal_dynamic_array_t __internal_make_array(size_t size, size_t max_capacity);
@@ -43,7 +43,7 @@ size_t __length_string(string s);
 #endif
 
 __internal_dynamic_array_t get_args(void);
-#if defined(__SDCC) && defined(ROCK_ZXN_TINY_CORE)
+#if defined(__SDCC) && defined(RIFT_ZXN_TINY_CORE)
 #define fill_cmd_args(argc, argv) ((void)(argc), (void)(argv))
 #else
 void fill_cmd_args(int argc, char **argv);
@@ -146,4 +146,4 @@ void dword_set_elem(__internal_dynamic_array_t arr, size_t index, dword elem);
 
 void dword_insert(__internal_dynamic_array_t arr, size_t index, dword elem);
 
-#endif // ROCKER_FUNDEFS_INTERNAL
+#endif // RIFT_FUNDEFS_INTERNAL

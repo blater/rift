@@ -1,0 +1,92 @@
+include "Assert.rift"
+Assert a;
+
+// Helper: creates array, returns it (array survives scope cleanup)
+sub makeNums(int n) returns int[] {
+  int[] result := [];
+  for i := 0 to n - 1 {
+    append(result, i);
+  }
+  return result;
+}
+
+sub main() {
+  // =========================================================================
+  // Group 1: Array declared and used in inner scope — freed at scope exit
+  // =========================================================================
+
+  // 1a: int array in block scope
+  int total := 0;
+  {
+    int[] tmp := [];
+    append(tmp, 10);
+    append(tmp, 20);
+    append(tmp, 30);
+    total := get(tmp, 0) + get(tmp, 1) + get(tmp, 2);
+  }
+  a.AssertEQ("int array block scope", 60, total);
+
+  // 1b: string array in block scope
+  string result := "";
+  {
+    string[] words := [];
+    append(words, "hello");
+    append(words, " ");
+    append(words, "world");
+    for w in words {
+      result := concat(result, w);
+    }
+  }
+  a.AssertEquals("str array block scope", "hello world", result);
+
+  // =========================================================================
+  // Group 2: Array in loop body — freed each iteration
+  // =========================================================================
+
+  // 2a: int array created each iteration of for-range
+  int lastSum := 0;
+  for j := 1 to 50 {
+    int[] inner := [];
+    append(inner, j);
+    append(inner, j * 2);
+    lastSum := get(inner, 0) + get(inner, 1);
+  }
+  a.AssertEQ("array in for-range loop", 150, lastSum);
+
+  // 2b: string array created each iteration of while loop
+  int i := 0;
+  string lastJoined := "";
+  while i < 50 {
+    string[] parts := [];
+    append(parts, toString(i));
+    append(parts, "-end");
+    lastJoined := concat(get(parts, 0), get(parts, 1));
+    i := i + 1;
+  }
+  a.AssertEquals("str array in while loop", "49-end", lastJoined);
+
+  // =========================================================================
+  // Group 3: Array returned from function (survives scope cleanup)
+  // =========================================================================
+
+  // 3a: function returns array
+  int[] nums := makeNums(5);
+  a.AssertEQ("returned array length", 5, length(nums));
+  a.AssertEQ("returned array[4]", 4, get(nums, 4));
+
+  // =========================================================================
+  // Group 4: Multiple arrays in same scope
+  // =========================================================================
+
+  // 4a: multiple arrays allocated and freed together
+  {
+    int[] a1 := [];
+    int[] a2 := [];
+    int[] a3 := [];
+    append(a1, 1);
+    append(a2, 2);
+    append(a3, 3);
+    total := get(a1, 0) + get(a2, 0) + get(a3, 0);
+  }
+  a.AssertEQ("multiple arrays in scope", 6, total);
+}

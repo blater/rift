@@ -1,5 +1,5 @@
-#ifndef ROCK_PLOT_H
-#define ROCK_PLOT_H
+#ifndef RIFT_PLOT_H
+#define RIFT_PLOT_H
 
 #include "typedefs.h"
 
@@ -33,7 +33,7 @@
  *
  * Internal — read by draw.c / plot.c inline asm via absolute LD A,(nn).
  */
-extern unsigned char rock_draw_mode;
+extern unsigned char rift_draw_mode;
 
 void plot(byte x, byte y);
 
@@ -56,4 +56,4 @@ byte point(byte x, byte y);
 void plot_nopresent(byte x, byte y);
 void plot_flush(void);
 
-#endif /* ROCK_PLOT_H */
+#endif /* RIFT_PLOT_H */

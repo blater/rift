@@ -1,0 +1,31 @@
+include "Assert.rift"
+
+// Host smoke test for the ink/paper/bright/flash/inverse/over setters.
+// Host stub mutates shadow state and print_at reads attr_fg/attr_bg
+// when the termbox capability is on; under `run_tests.sh` stdout is
+// piped so the capability is off and the fallback branch runs. We
+// only assert that the calls return normally.
+
+sub main() {
+  Assert a;
+  int i:=0;
+
+  print("hello world");
+ sleep(1);
+  
+
+  ink(2);      // COLOUR_RED
+  paper(7);    // COLOUR_WHITE
+  bright(1);
+  print(5,5,"hello world");
+
+  flash(0);
+  inverse(0);
+  over(0);
+  print(0, 0, "red on white, bright");
+
+  inverse(1);
+  print(0, 1, "inverse");
+
+  a.AssertEQ("ink_paper smoke", 1, 1);
+}

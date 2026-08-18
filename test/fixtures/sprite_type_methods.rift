@@ -1,0 +1,7 @@
+sub main() {
+  Sprite sprite := Sprite(3);
+  sprite.position(12, 34);
+  sprite.show();
+  sprite.hide();
+  Sprite.hideall();
+}

@@ -24,11 +24,11 @@ static byte sh_paper   = 0;
 static byte sh_bright  = 0;
 static byte sh_flash   = 0;
 
-unsigned char rock_ip_rom_byte;
+unsigned char rift_ip_rom_byte;
 
 static void ip_rst10_emit(void) {
   __asm
-    ld a, (_rock_ip_rom_byte)
+    ld a, (_rift_ip_rom_byte)
     rst 0x10
   __endasm;
 }
@@ -41,8 +41,8 @@ static void set_attr(byte kind, byte val) {
     case ATTR_FLASH:  sh_flash  = val; break;
     default: break;
   }
-  rock_ip_rom_byte = kind; ip_rst10_emit();
-  rock_ip_rom_byte = val;  ip_rst10_emit();
+  rift_ip_rom_byte = kind; ip_rst10_emit();
+  rift_ip_rom_byte = val;  ip_rst10_emit();
 }
 
 unsigned int attr_fg(void) { return sh_ink  | (sh_bright ? 0x08 : 0); }
@@ -116,6 +116,6 @@ void over(byte n) {
    * framebuffer-merge flag read by plot.c / draw.c inline asm, then
    * forwards to set_attr so the ROM path (ZXN) and the host shadow
    * stay consistent. */
-  rock_draw_mode = n ? 1 : 0;
+  rift_draw_mode = n ? 1 : 0;
   set_attr(ATTR_OVER, n);
 }

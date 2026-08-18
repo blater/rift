@@ -1,0 +1,4 @@
+sub main() {
+  word slot := 256;
+  Sprite invalid := Sprite(slot);
+}

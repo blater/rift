@@ -1,0 +1,9 @@
+sub choose(byte key, Sprite first, Sprite second) returns Sprite {
+  match key {
+    0: return first;
+    default: second.hide();
+  }
+}
+
+sub main() {
+}

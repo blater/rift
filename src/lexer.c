@@ -117,7 +117,7 @@ int length_of_num_lit(lexer_t l) {
   }
   /* Optional fractional part: exactly one dot followed by at least one
    * digit. A trailing dot without a digit is left to the caller so we
-   * do not eat record-field access like `arr.0` (Rock does not have
+   * do not eat record-field access like `arr.0` (Rift does not have
    * number.field semantics, but the principle stands). */
   if (lexer_peek(l) == '.') {
     lexer_t peek = l;
@@ -458,9 +458,9 @@ token_t step_lexer(lexer_t *l) {
     lexer_consume_n(l, length);
   }
   if (res.type == TOK_IDENTIFIER && res.lexeme.length >= 9 &&
-      strncmp(res.lexeme.data, "rock__tm_", 9) == 0) {
+      strncmp(res.lexeme.data, "rift__tm_", 9) == 0) {
     error(res.filename, res.line, res.col,
-          "identifiers beginning with 'rock__tm_' are reserved by the compiler");
+          "identifiers beginning with 'rift__tm_' are reserved by the compiler");
     exit(1);
   }
   return res;

@@ -1,6 +1,6 @@
 #include "zxn_test.h"
 
-#if defined(__SDCC) && defined(ROCK_ZXN_TEST)
+#if defined(__SDCC) && defined(RIFT_ZXN_TEST)
 #include <z80.h>
 
 #define ZESARUX_ZXI_REGISTER_PORT 0xcf3b
@@ -28,35 +28,35 @@ static void emit_count(int count) {
 void zxn_test_begin(void) {
   pass_count = 0;
   fail_count = 0;
-  emit_text("ROCKTEST:BEGIN\n");
+  emit_text("RIFTTEST:BEGIN\n");
 }
 
 void zxn_test_stage(const char *stage) {
-  emit_text("ROCKTEST:STAGE:");
+  emit_text("RIFTTEST:STAGE:");
   emit_text(stage);
   emit_char('\n');
 }
 
 void zxn_test_pass(void) {
   pass_count++;
-  emit_text("ROCKTEST:PASS\n");
+  emit_text("RIFTTEST:PASS\n");
 }
 
 void zxn_test_fail(void) {
   fail_count++;
-  emit_text("ROCKTEST:FAIL\n");
+  emit_text("RIFTTEST:FAIL\n");
 }
 
 void zxn_test_assert_pass(string description) {
   pass_count++;
-  emit_text("ROCKTEST:PASS:");
+  emit_text("RIFTTEST:PASS:");
   emit_text(description.data);
   emit_char('\n');
 }
 
 void zxn_test_assert_fail(string description, string expected, string actual) {
   fail_count++;
-  emit_text("ROCKTEST:FAIL:");
+  emit_text("RIFTTEST:FAIL:");
   emit_text(description.data);
   emit_text(":expected=");
   emit_text(expected.data);
@@ -66,7 +66,7 @@ void zxn_test_assert_fail(string description, string expected, string actual) {
 }
 
 void zxn_test_finish(void) {
-  emit_text("ROCKTEST:FINISH:");
+  emit_text("RIFTTEST:FINISH:");
   emit_count(pass_count);
   emit_char(':');
   emit_count(fail_count);

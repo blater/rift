@@ -5,19 +5,46 @@ SRC    = src/
 LIB    = src/lib/
 BUILD  = build/
 OBJECTS = $(BUILD)alloc.o $(BUILD)ast.o $(BUILD)lexer.o $(BUILD)token.o \
-          $(BUILD)parser.o $(BUILD)generator.o $(BUILD)name_table.o \
-          $(BUILD)stringview.o $(BUILD)error.o $(BUILD)component_manifest.o $(BUILD)typechecker.o \
-          $(BUILD)main.o
-DEPS = $(OBJECTS:.o=.d)
+          $(BUILD)parser.o $(BUILD)generator.o $(BUILD)generator_components.o $(BUILD)generator_ownership.o $(BUILD)generator_profile.o $(BUILD)generator_type_info.o $(BUILD)name_table.o \
+          $(BUILD)stringview.o $(BUILD)error.o $(BUILD)component_manifest.o $(BUILD)asset_generator.o $(BUILD)typechecker.o \
+          $(BUILD)semantic_resolve.o $(BUILD)main.o
+DRIVER_OBJECTS = $(BUILD)driver_main.o $(BUILD)driver_options.o \
+                 $(BUILD)driver_paths.o $(BUILD)driver_process.o \
+                 $(BUILD)driver_sidecar.o $(BUILD)driver_build_plan.o
+DEPS = $(OBJECTS:.o=.d) $(DRIVER_OBJECTS:.o=.d)
 
-.PHONY: all clean test-pools test-name-table test-type-method-autocast test-component-manifest test-negative test-refcount test-zxn test-zxn-tiny-print test-zxn-light-core test-autolink test-memory-profile test-zxn-size
+.PHONY: all clean test-driver-locations test-driver-options test-driver-sidecar test-pools test-name-table test-type-method-autocast test-component-manifest test-asset-language test-negative test-refcount test-sprite-runtime test-zesarux-zrcp test-zesarux-maintenance test-zxn-assets test-zxn-sprite test-zxn test-zxn-tiny-print test-zxn-light-core test-autolink test-memory-profile test-zxn-size check-rift-rename
 
-all: $(BUILD) rockc
+all: $(BUILD) riftc rift $(BUILD)verify-zxn-assets
 
 $(BUILD):
 	@mkdir -p $(BUILD)
 
 $(BUILD)%.o: $(SRC)%.c | $(BUILD)
+	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
+
+$(BUILD)generator.o: $(SRC)generator/generator.c | $(BUILD)
+	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
+
+$(BUILD)generator_profile.o: $(SRC)generator/profile.c | $(BUILD)
+	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
+
+$(BUILD)generator_components.o: $(SRC)generator/components.c | $(BUILD)
+	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
+
+$(BUILD)generator_ownership.o: $(SRC)generator/ownership.c | $(BUILD)
+	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
+
+$(BUILD)generator_type_info.o: $(SRC)generator/type_info.c | $(BUILD)
+	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
+
+$(BUILD)semantic_resolve.o: $(SRC)semantic/resolve.c | $(BUILD)
+	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
+
+$(BUILD)driver_%.o: $(SRC)driver/%.c | $(BUILD)
+	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
+
+$(BUILD)asset_generator.o: $(SRC)generator/assets.c | $(BUILD)
 	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
 
 $(BUILD)alloc.o: $(LIB)alloc.c | $(BUILD)
@@ -26,11 +53,17 @@ $(BUILD)alloc.o: $(LIB)alloc.c | $(BUILD)
 $(BUILD)pools.o: $(LIB)pools.c $(LIB)pools.h | $(BUILD)
 	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
 
-rockc: $(OBJECTS)
+riftc: $(OBJECTS)
 	$(CC) $(CFLAGS) -o $@ $^
 
+rift: $(DRIVER_OBJECTS) $(BUILD)component_manifest.o $(BUILD)alloc.o
+	$(CC) $(CFLAGS) -o $@ $^
+
+$(BUILD)verify-zxn-assets: tools/verify-zxn-assets.c | $(BUILD)
+	$(CC) $(CFLAGS) -o $@ $<
+
 # Phase A.2 — pool runtime test harness.
-# Standalone C test, no Rock language integration yet.
+# Standalone C test, no Rift language integration yet.
 $(BUILD)pools_test: test/pools_test.c $(BUILD)pools.o | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ test/pools_test.c $(BUILD)pools.o
 
@@ -45,25 +78,49 @@ $(BUILD)name_table_test: test/name_table_test.c $(BUILD)name_table.o \
 test-name-table: $(BUILD)name_table_test
 	$(BUILD)name_table_test
 
-test-type-method-autocast: rockc
+test-driver-locations: rift riftc
+	sh test/build_locations_test.sh
+
+$(BUILD)driver_options_test: test/driver_options_test.c \
+                              $(BUILD)driver_options.o | $(BUILD)
+	$(CC) $(CFLAGS) -o $@ $^
+
+test-driver-options: $(BUILD)driver_options_test
+	$(BUILD)driver_options_test
+
+$(BUILD)driver_sidecar_test: test/driver_sidecar_test.c \
+                               $(BUILD)driver_sidecar.o \
+                               $(BUILD)component_manifest.o $(BUILD)alloc.o | $(BUILD)
+	$(CC) $(CFLAGS) -o $@ $^
+
+test-driver-sidecar: $(BUILD)driver_sidecar_test
+	$(BUILD)driver_sidecar_test src/lib/components.manifest \
+		test/fixtures/driver_sidecar_valid.txt \
+		test/fixtures/driver_sidecar_bad_profile.txt \
+		test/fixtures/driver_sidecar_duplicate.txt
+
+test-type-method-autocast: riftc
 	sh test/test_type_method_autocast.sh
 
-test-component-manifest: rockc
+test-component-manifest: riftc
 	bash test/test_component_manifest.sh
 
+test-asset-language: riftc
+	bash test/test_asset_language.sh
+
 # Phase B — negative tests for the typechecker's acyclicity rule (ADR §9.4).
-# Each test is a Rock program that MUST fail compilation with a specific
+# Each test is a Rift program that MUST fail compilation with a specific
 # diagnostic.
-test-negative: rockc
+test-negative: riftc
 	test/negative/run_negative.sh
 
 # Phase E.a — string retain/release runtime helpers.
 # Synthesises longlived backings to exercise the live refcount paths
-# since no Rock program path populates `backing` until Phase H.
+# since no Rift program path populates `backing` until Phase H.
 #
 # fundefs.c and fundefs_internal.c are compiled with the same
-# relaxed flags the `rock` script uses for runtime sources (the strict
-# rockc flags would catch pre-existing sign-compare warnings unrelated
+# relaxed flags the `rift` script uses for runtime sources (the strict
+# riftc flags would catch pre-existing sign-compare warnings unrelated
 # to ADR-0003 work).
 RUNTIME_CFLAGS = -Wall -Wno-unused-variable -I src
 $(BUILD)fundefs_for_test.o: $(LIB)fundefs.c $(LIB)fundefs.h $(LIB)pools.h | $(BUILD)
@@ -78,42 +135,75 @@ $(BUILD)string_refcount_test: test/string_refcount_test.c $(BUILD)pools.o \
                               $(BUILD)print_bytes_for_test.o | $(BUILD)
 	$(CC) $(RUNTIME_CFLAGS) -o $@ $^
 
-test-refcount: $(BUILD)string_refcount_test
-	$(BUILD)string_refcount_test
+$(BUILD)fixed_array_set_test: test/fixed_array_set_test.c $(BUILD)pools.o \
+                              $(BUILD)fundefs_for_test.o \
+                              $(BUILD)fundefs_internal_for_test.o \
+                              $(BUILD)print_bytes_for_test.o | $(BUILD)
+	$(CC) $(RUNTIME_CFLAGS) -o $@ $^
 
-# Requires a ZEsarUX path through ZESARUX_BIN or
-# `tools/test-zxn --emulator-bin ...`.
-test-zxn: rockc
-	tools/test-zxn
+test-refcount: riftc $(BUILD)string_refcount_test $(BUILD)fixed_array_set_test
+	$(BUILD)string_refcount_test
+	$(BUILD)fixed_array_set_test
+	@if $(BUILD)fixed_array_set_test gap >$(BUILD)fixed_array_set_gap.log 2>&1; then \
+		echo 'FAIL: fixed array accepted a gap set' >&2; exit 1; \
+	fi
+	@grep -q 'INDEX OUT OF BOUNDS (2, limit: 1)' $(BUILD)fixed_array_set_gap.log
+	@echo 'PASS: fixed array rejects a gap set before exposing skipped slots'
+	sh test/test_fixed_array_ownership.sh
+
+test-sprite-runtime:
+	sh test/test_sprite_runtime.sh
+
+test-zesarux-zrcp:
+	tools/test-zesarux-zrcp
+
+test-zesarux-maintenance:
+	bash test/test_zesarux_fork_maintenance.sh
+
+test-zxn-assets: riftc $(BUILD)verify-zxn-assets
+	sh test/test_zxn_asset_integration.sh
+
+# Execute the sprite uploader and presentation API on the project-patched
+# emulator, including mixed 4/8bpp attributes and rendered 4bpp halves.
+test-zxn-sprite: riftc $(BUILD)verify-zxn-assets
+	sh test/test_zxn_sprite_uploader_restore.sh
+	sh test/test_zxn_sprite_smoke.sh
+
+# Uses the canonical fork build by default; ZESARUX_BIN remains an override.
+test-zxn: riftc
+	tools/test-zxn --emulator-bin "$${ZESARUX_BIN:-/Users/blater/src/zesarux/src/zesarux}"
 
 # Verify the startup-31 tiny literal writer against ULA screen memory in the
 # project-patched ZEsarUX build.
-test-zxn-tiny-print: rockc
+test-zxn-tiny-print: riftc
 	sh test/test_zxn_tiny_print.sh
 
-# Execute a dynamic string through pools/refcounting and the Rock-owned console
+# Execute a dynamic string through pools/refcounting and the Rift-owned console
 # without linking startup=1's stdio streams or terminal.
-test-zxn-light-core: rockc
+test-zxn-light-core: riftc
 	sh test/test_zxn_light_core.sh
 
 # Build a representative multi-component RTL program with both ZXN link modes.
 # The script verifies that auto-linking resolves all required dependencies and
 # leaves a materially smaller target artifact than the compatibility mode.
-test-autolink: rockc
+test-autolink: riftc
 	sh test/test_rtl_autolink.sh
 
 # Host execution under the exact constrained pool sizes used by the ZX Next
 # target. Ownership loops must complete without pool exhaustion or UAF.
-test-memory-profile: rockc
+test-memory-profile: riftc
 	sh test/test_memory_profile.sh
 
 # Verify literal-print lowering, conservative CRT/tiny-core selection, and
 # configurable target pool capacities without requiring an emulator.
-test-zxn-size: rockc
+test-zxn-size: riftc
 	sh test/test_zxn_size_profile.sh
 
 clean:
 	rm -rf $(BUILD)
-	rm -f rockc
+	rm -f rift riftc
+
+check-rift-rename:
+	tools/check-rift-rename.sh
 
 -include $(DEPS)

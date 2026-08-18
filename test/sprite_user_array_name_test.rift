@@ -1,0 +1,20 @@
+include "Assert.rift"
+
+Assert as;
+
+sub append(Sprite[] values, byte marker, byte extra) {
+}
+
+sub set(Sprite[] values, byte marker) {
+}
+
+sub insert(Sprite[] values, byte marker) {
+}
+
+sub main() {
+  Sprite[] values;
+  append(values, 1, 2);
+  set(values, 3);
+  insert(values, 4);
+  as.AssertTrue("user array function names retain their signatures", 1);
+}

@@ -1,0 +1,39 @@
+include "Assert.rift"
+
+Assert as;
+
+record Packet { string label, int value }
+
+sub makeLabel(int n) returns string {
+  return concat("packet-", toString(n));
+}
+
+sub makePacket(string label, int n) returns Packet {
+  Packet p := {label := label, value := n};
+  return p;
+}
+
+sub makeValues(int n) returns int[] {
+  int[] values := [];
+  append(values, n);
+  append(values, n + 1);
+  append(values, n + 2);
+  append(values, n + 3);
+  return values;
+}
+
+sub churn(int n) returns int {
+  string label := makeLabel(n);
+  string alias := label;
+  Packet p := makePacket(alias, n);
+  int[] values := makeValues(p.value);
+  return get(values, 0) + get(values, 3);
+}
+
+sub main() {
+  int last := 0;
+  for i := 1 to 100000 {
+    last := churn(i);
+  }
+  as.AssertEQ("mixed allocation soak preserves latest result", 200003, last);
+}

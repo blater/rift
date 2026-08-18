@@ -1,7 +1,7 @@
-# Rock runtime component manifest v1.
+# Rift runtime component manifest v1.
 # Lists are comma-separated paths relative to src/lib. Empty fields are valid.
 # component|id|dependencies|headers|host_sources|zxn_sources|host_asm|zxn_asm|init|shutdown|always?
-component|core|tiny_print,tiny_test|pools.h,fundefs.h,fundefs_internal.h,typedefs.h,host_caps.h,zxn_test.h,light_console.h|pools.c,print_bytes.c,fundefs.c,fundefs_internal.c,asm_interop.c,host_caps.c,zxn_test.c,host/termbox2_impl.c|pools.c,fundefs.c,fundefs_internal.c,asm_interop.c,host_caps.c|||rock_rtl_init|rock_rtl_shutdown|always
+component|core|tiny_print,tiny_test|pools.h,fundefs.h,fundefs_internal.h,typedefs.h,host_caps.h,zxn_test.h,light_console.h|pools.c,print_bytes.c,fundefs.c,fundefs_internal.c,asm_interop.c,host_caps.c,zxn_test.c,host/termbox2_impl.c|pools.c,fundefs.c,fundefs_internal.c,asm_interop.c,host_caps.c|||rift_rtl_init|rift_rtl_shutdown|always
 component|tiny_print||||print_bytes.c|||||
 component|tiny_test||||zxn_test.c|||||
 component|keyboard|core|keyboard.h|keyboard.c|keyboard.c||zxn/keyboard.asm|||
@@ -22,9 +22,9 @@ component|random|core|random.h|random.c|random.c|||||
 component|nextreg|core|nextreg.h|nextreg.c|nextreg.c|||||
 component|helpers|core|helpers.h|helpers.c|helpers.c|||||
 component|fmath|core|fmath.h|fmath.c|fmath.c|||||
-component|sprite|core|sprite.h|sprite.c|sprite.c|||sprite_component_init|sprite_component_shutdown|
+component|sprite||sprite.h|sprite_host.c|||zxn/sprite.asm|||
 
-# builtin|rock-name|component|return-type|parameter-types|C-symbol|reserved
+# builtin|rift-name|component|return-type|parameter-types|C-symbol|reserved
 builtin|scan_keyboard|keyboard|void||scan_keyboard|
 builtin|key_pressed|keyboard|byte|byte|key_pressed|
 builtin|border|border|void|byte|border|
@@ -68,25 +68,21 @@ builtin|fcos|fmath|float|float|fcos|
 builtin|fsqrt|fmath|float|float|fsqrt|
 builtin|fabs_float|fmath|float|float|fabs_float|
 builtin|fpi|fmath|float||fpi|
-builtin|sleep|time|void|word|rock_sleep|
+builtin|sleep|time|void|word|rift_sleep|
 builtin|beep|sound|void|word,word|beep|
 builtin|inkey|input|byte||inkey|
 builtin|keypress|input|byte||keypress|
 builtin|print|core|void|string|print|
 lowered|print|print_at|void|byte,byte,string|print_at|
 
-# opaque|Rock-type|component|constructor-name|C-symbol
-opaque|Sprite|sprite|Sprite_new|Sprite_new
+# namespace|Rift-owner|component
+namespace|Sprite|sprite
+# asset|asset-kind|compiler-type|component
+asset|sprite4|SpritePattern|sprite
+asset|sprite8|SpritePattern|sprite
 # method|owner|instance/type|name|component|return-type|explicit-parameter-types|C-symbol|reserved
-method|Sprite|instance|index|sprite|byte|byte|Sprite_index|
-method|Sprite|instance|position|sprite|byte|word,word|Sprite_position|
-method|Sprite|instance|pattern|sprite|byte|word,byte|Sprite_pattern|
-method|Sprite|instance|palette|sprite|byte|byte|Sprite_palette|
-method|Sprite|instance|mirror|sprite|byte|byte,byte|Sprite_mirror|
-method|Sprite|instance|rotate|sprite|byte|byte|Sprite_rotate|
-method|Sprite|instance|scale|sprite|byte|byte,byte|Sprite_scale|
-method|Sprite|instance|show|sprite|byte||Sprite_show|
-method|Sprite|instance|hide|sprite|byte||Sprite_hide|
-method|Sprite|type|hideall|sprite|byte||rock__tm_L6_Sprite_L7_hideall_A0|
-method|Sprite|type|transparency|sprite|byte|byte|rock__tm_L6_Sprite_L12_transparency_A1|
-method|Sprite|type|status|sprite|byte||rock__tm_L6_Sprite_L6_status_A0|
+method|Sprite|instance|position|sprite|void|word,word|rift__im_L6_Sprite_L8_position_A2|
+method|Sprite|instance|frame|sprite|void|SpritePattern,byte|rift__im_L6_Sprite_L5_frame_A2|
+method|Sprite|instance|show|sprite|void||rift__im_L6_Sprite_L4_show_A0|
+method|Sprite|instance|hide|sprite|void||rift__im_L6_Sprite_L4_hide_A0|
+method|Sprite|type|hideall|sprite|void||rift__tm_L6_Sprite_L7_hideall_A0|

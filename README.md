@@ -1,15 +1,15 @@
-# Rock (Retro·Oriented·Compiler·Kit)
+# Rift
 
-Rock is a statically typed language written in C and targeted at the ZX Next retro system.  
-It liberally takes inspiration from C, Rust, Zig, Java, and Modula/Pascal.  
+Rift is a statically typed language written in C and targeted at the ZX Next retro system.
 
 Its designed so that you develop on your pc/laptop and deploy to an emulator or real hardware.
-A Rock program can also be directly run locally.
+A Rift program can also be directly run locally.
 
+![Rift title](docs/rift-title.png)
 
 ## Language at a glance
 
-Rock provides:
+Rift provides:
 
 - Scalar types: `int`, `byte`, `word`, `dword`, `float`, `boolean`, `char`, and `string`
 - Dynamic and fixed-size arrays
@@ -21,7 +21,7 @@ Rock provides:
 
 For example:
 
-```rock
+```rift
 sub main() {
   int[] numbers;
 
@@ -33,8 +33,12 @@ sub main() {
 }
 ```
 
-#### Embed and call C and Assembly code directly inside rock code
-```rock
+Fixed arrays grow their logical length through sequential assignment. Writing
+at `length(array)` initializes the next slot, while writing beyond that index
+is rejected; skipped capacity is never exposed as initialized elements.
+
+#### Embed and call C and Assembly code directly inside rift code
+```rift
   @embed c
   int square(int x) { return x * x; }
   @end c
@@ -45,12 +49,12 @@ sub main() {
 ```
 
 #### enums
-```rock
+```rift
   enum Direction { North, South, East, West }
 ```
 
 #### Records (with methods)
-```rock
+```rift
   record Point { 
     int x, 
     int y 
@@ -69,7 +73,7 @@ sub main() {
 
 #### Organise code into modules
 
-```rock
+```rift
   module Scoreboard;
   int score;
 
@@ -84,7 +88,7 @@ Use `static sub Type.method(...)` for behaviour owned by a type rather than an
 instance. The declaration receives no implicit `this`; callers use the type
 name directly.
 
-```rock
+```rift
   module Sprites;
 
   static sub Sprites.hideall() {
@@ -96,23 +100,36 @@ name directly.
   }
 ```
 
-Standard opaque interfaces are preloaded by the compiler, so applications do
-not repeat a declaration. They expose methods but never their C layout:
+Standard interfaces are preloaded by the compiler, so applications do not
+repeat their declarations. Sprite patterns are compiler-only bindings, while
+each `Sprite` value is a one-byte hardware-slot handle:
 
-```rock
-Sprite player;
-player.index(1);
-player.position(10, 20);
-player.show();
-Sprite.hideall();
+```rift
+SpritePattern playerPattern :=
+  SpritePattern.load("assets/player.spr");
+
+sub main() {
+  Sprite player := Sprite(1);
+  player.position(10, 20);
+  player.frame(playerPattern, 0);
+  player.show();
+  player.hide();
+  Sprite.hideall();
+}
 ```
+
+`SpritePattern.load(path)` defaults to 4bpp; pass literal `8` as its second
+argument for 8bpp input. This intentionally replaces both the earlier
+`asset sprite4` declaration and the combined five-argument `Sprite.show` call.
+See [the sprite and asset contract](docs/sprites-and-assets.md) for raw formats,
+hardware ownership, exact memory costs, and test evidence.
 
 Runtime components are selected from resolved calls through
 `src/lib/components.manifest`; the same dependency closure drives host and ZX
 Next builds.
 
 #### Tagged unions and match
-```rock
+```rift
   union Token {
     // a Token instance is allowed to be *one* of these:
     int Number,
@@ -134,14 +151,16 @@ Next builds.
 
 ## Requirements
 
-I'll be reducing the pre-requisite requirements in the future (hopefully to nothing!), but for now to compile rock lang code
+I'll be reducing the prerequisite requirements in the future (hopefully to nothing!), but for now to compile Rift code
 you need:
 - `make`
 - `gcc`
-- `bash`
+- [Z88DK](https://z88dk.org/) with `zcc` available on your `PATH`
 
-Native programs are built with GCC and retro targets (initially ZX Spectrum Next `.nex`) are built with Z88DK, so 
-for ZX Spectrum Next builds, also install [Z88DK](https://z88dk.org/) and make `zcc` available on your `PATH`.
+ZX Spectrum Next `.zxn` programs are the default build target and use Z88DK.
+Native programs use GCC when selected with `--target=gcc`.
+`SpritePattern` build inputs are generated directly by the compiler; the build
+has no Perl or external asset-packing dependency.
 
 ## Build the compiler
 
@@ -149,37 +168,55 @@ for ZX Spectrum Next builds, also install [Z88DK](https://z88dk.org/) and make `
 make
 ```
 
-This creates `rockc`, the Rock-to-C compiler.
+This creates `riftc`, the Rift-to-C compiler, and `rift`, the native build
+driver.
 
-## Write and run a program
+## Write and build a program
 
-Create `hello.rkr`:
+Create `hello.rift`:
 
-```rock
+```rift
 sub main() {
-  print("Hello, Rock!\n");
+  print("Hello, Rift!\n");
 }
 ```
 
-Build and run it:
+`.rift` is the canonical source extension. The shorter `.rft` extension is
+also accepted by the compiler, driver, and test tooling.
+
+Build it for the default ZX Spectrum Next target:
 
 ```bash
-./rock run hello.rkr
+./rift hello.rift
 ```
 
-The `rock` driver translates the source to C, compiles it, and creates `hello.exe`. The host target, GCC, is the default.
+The `rift` driver translates the source to C, compiles it with Z88DK, and
+creates `hello.zxn`.
+
+To build and run it as a native host program instead:
+
+```bash
+./rift run --target=gcc hello.rift
+```
+
+This creates and runs `hello.exe`.
 
 To choose an output name:
 
 ```bash
-./rock hello.rkr hello
+./rift hello.rift hello
 ```
 
-To retain the generated C file for inspection:
+To retain build intermediates for inspection:
 
 ```bash
-./rock hello.rkr --debug
+./rift hello.rift --debug
 ```
+
+Normal builds keep generated C, component sidecars, maps, and target-toolchain
+files inside a private `/tmp/rift-build-*` workspace and remove it after the
+final artifact is published. `--debug` retains that workspace and prints its
+location.
 
 ## Targets
 
@@ -188,20 +225,22 @@ To retain the generated C file for inspection:
 Build a native executable with GCC:
 
 ```bash
-./rock hello.rkr
-# or explicitly:
-./rock hello.rkr --target=gcc
+./rift hello.rift --target=gcc
 ```
 
 ### ZX Spectrum Next
 
-Build a `.nex` program with Z88DK:
+Build a `.zxn` program with Z88DK:
 
 ```bash
-./rock hello.rkr --target=zxn
+./rift hello.rift
+# or explicitly:
+./rift hello.rift --target=zxn
 ```
 
-Rock uses Z88DK’s SDCC backend for this target. The generated C and the runtime library are compiled into the `.nex` file.
+Rift uses Z88DK’s SDCC backend for this target. Z88DK creates a NEX-format
+image internally; the driver publishes the final program with Rift's `.zxn`
+extension.
 
 
 ## Test
@@ -212,24 +251,27 @@ Run the host test suite:
 ./run_tests.sh
 ```
 
+The test harness selects `--target=gcc` explicitly so it can execute each
+compiled program locally.
+
 Run one test while working on a feature:
 
 ```bash
-./run_tests.sh test/array_test.rkr
+./run_tests.sh test/array_test.rift
 ```
 
-Tests are Rock programs in `test/`. Most include `test/Assert.rkr` and print `PASS:` or `FAIL:` markers for the test runner.
+Tests are Rift programs in `test/`. Most include `test/Assert.rift` and print `PASS:` or `FAIL:` markers for the test runner.
 
 ## Project layout
 
 ```text
 src/        Compiler: lexer, parser, type checker, and C generator
 src/lib/    Runtime library and target support
-test/       Rock regression tests
+test/       Rift regression tests
 docs/       Language and implementation notes
 wikiroot/   Maintainer knowledge wiki
-rock        Build driver for Rock programs
-rockc       Generated compiler binary
+rift        Build driver for Rift programs
+riftc       Generated compiler binary
 ```
 
 ## Development
@@ -239,9 +281,9 @@ make
 ./run_tests.sh
 ```
 
-Use `make clean` to remove build output and `rockc`.
+Use `make clean` to remove build output and `riftc`.
 
-The host target has the broadest test coverage. The ZX Spectrum Next target needs Z88DK; compile it separately when a change touches target-specific code. `enum_test.rkr` is currently known to fail on that target because of an SDCC enum syntax incompatibility.
+The host target has the broadest test coverage. The ZX Spectrum Next target needs Z88DK; compile it separately when a change touches target-specific code. `enum_test.rift` is currently known to fail on that target because of an SDCC enum syntax incompatibility.
 
 ## Further reading
 

@@ -1,0 +1,4 @@
+sub main() {
+  Sprite sprite := Sprite(1);
+  sprite := 2;
+}

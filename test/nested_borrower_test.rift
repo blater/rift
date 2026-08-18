@@ -1,0 +1,46 @@
+include "Assert.rift"
+
+Assert as;
+
+record Inner {
+  int x,
+  string label
+}
+
+record Outer {
+  Inner i,
+  int n
+}
+
+sub mkInner(int v, string lbl) returns Inner {
+  Inner r := {x := v, label := lbl};
+  return r;
+}
+
+sub mkOuter(Inner ii, int nn) returns Outer {
+  Outer o := {i := ii, n := nn};
+  return o;
+}
+
+sub main() {
+  // Borrower init from field read: aggregate
+  Inner first := mkInner(7, "alpha");
+  Outer o := mkOuter(first, 99);
+  Inner alias := o.i;
+  as.AssertEQ("alias x matches", 7, alias.x);
+  as.AssertEquals("alias label matches", "alpha", alias.label);
+
+  // Borrower init from field read: string
+  string lbl := o.i.label;
+  as.AssertEquals("borrowed string label", "alpha", lbl);
+
+  // Borrower reassignment from field read: aggregate
+  Inner reslot := mkInner(11, "beta");
+  reslot := o.i;
+  as.AssertEQ("reassigned alias x", 7, reslot.x);
+  as.AssertEquals("reassigned alias label", "alpha", reslot.label);
+
+  // Source must remain intact and readable through both alias paths.
+  as.AssertEQ("source still readable", 7, o.i.x);
+  as.AssertEquals("source label still readable", "alpha", o.i.label);
+}

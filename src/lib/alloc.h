@@ -1,5 +1,5 @@
 /*****************************************************
- * ROCKER ALLOCATOR HEADER
+ * RIFT ALLOCATOR HEADER
  * MIT License
  * Copyright (c) 2024 Paul Passeron
  *****************************************************/

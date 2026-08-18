@@ -1,0 +1,6 @@
+sub missing() returns Sprite {
+  byte work := 1;
+}
+
+sub main() {
+}

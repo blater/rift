@@ -1,0 +1,5 @@
+enum Switch { Off, On }
+
+sub main() {
+  Switch value := On();
+}

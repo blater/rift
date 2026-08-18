@@ -1,6 +1,0 @@
-sub Sprite_new() returns byte {
-  return 0;
-}
-
-sub main() {
-}

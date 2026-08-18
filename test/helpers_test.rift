@@ -1,0 +1,56 @@
+include "Assert.rift"
+
+// Host test for the helpers component (odd/even/hi/lo/swap/upcase/
+// locase/abs_int/abs_word).
+
+
+// does the upper case helper work in any useful way?
+sub upper(string s) returns string {
+  if length(s) = 0
+    return s;
+
+  char c := upcase(charAt(s, 0));
+  string c1 := concat("", c);
+  if length(s) > 1
+    return concat(c1, substring(s, 2));
+  else
+    return c1;
+}
+
+
+sub main() {
+  Assert a;
+
+  for n := 1 to 100 {
+    printf(upper(toString(n)));
+  }
+  a.AssertEquals("uppercase works...", "Hello", upper("hello"));
+
+  // Ordinal — to_int works on byte returns.
+  a.AssertEQ("odd(3)",  1, to_int(odd(3)));
+  a.AssertEQ("odd(4)",  0, to_int(odd(4)));
+  a.AssertEQ("odd(-1)", 1, to_int(odd(0 - 1)));
+  a.AssertEQ("even(0)", 1, to_int(even(0)));
+  a.AssertEQ("even(7)", 0, to_int(even(7)));
+
+  // Hi/Lo/Swap  — 0x1234 = 4660, hi=0x12=18, lo=0x34=52, swap=0x3412=13330
+  a.AssertEQ("hi(4660)",   18,    to_int(hi(4660)));
+  a.AssertEQ("lo(4660)",   52,    to_int(lo(4660)));
+  a.AssertEQ("swap(4660)", 13330, to_int(swap(4660)));
+
+  // Symmetry: swap(swap(x)) = x
+  a.AssertEQ("swap swap",  4660, to_int(swap(swap(4660))));
+
+  // Case conversion — char is already int-compatible, compare raw.
+  a.AssertEQ("upcase a", 65,  upcase('a'));  // 'A'
+  a.AssertEQ("upcase z", 90,  upcase('z'));  // 'Z'
+  a.AssertEQ("upcase 5", 53,  upcase('5'));  // unchanged
+  a.AssertEQ("locase A", 97,  locase('A')); // 'a'
+  a.AssertEQ("locase Z", 122, locase('Z')); // 'z'
+
+  // Abs — int returns can be compared directly.
+  a.AssertEQ("abs_int(5)",  5, abs_int(5));
+  a.AssertEQ("abs_int(-7)", 7, abs_int(0 - 7));
+  a.AssertEQ("abs_int(0)",  0, abs_int(0));
+  a.AssertEQ("abs_word",    42, to_int(abs_word(42)));
+}

@@ -1,0 +1,8 @@
+sub get() returns Probe {
+  Probe result;
+  return result;
+}
+
+sub main() {
+  get().accept("value");
+}

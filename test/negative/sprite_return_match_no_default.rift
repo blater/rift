@@ -1,0 +1,9 @@
+sub choose(byte key, Sprite first, Sprite second) returns Sprite {
+  match key {
+    0: return first;
+    1: return second;
+  }
+}
+
+sub main() {
+}

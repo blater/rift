@@ -1,0 +1,3 @@
+asset sprite4 pattern := "removed.spr";
+
+sub main() {}

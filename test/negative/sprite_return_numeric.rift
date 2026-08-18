@@ -1,0 +1,6 @@
+sub invalid() returns Sprite {
+  return 256;
+}
+
+sub main() {
+}

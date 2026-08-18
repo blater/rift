@@ -1,0 +1,43 @@
+include "Assert.rift"
+Assert as;
+
+record array_wrapper {
+  int[] Items,
+  string[] Names
+}
+
+record wrapper_holder {
+  array_wrapper Data
+}
+
+sub make_wrapper() returns array_wrapper {
+  array_wrapper a := {
+    Items := [],
+    Names := []
+  };
+
+  append(a.Items, 1);
+  append(a.Items, 2);
+
+  append(a.Names, "First");
+  append(a.Names, "Second");
+
+  return a;
+}
+
+sub make_holder() returns wrapper_holder {
+  wrapper_holder h := {
+    Data := make_wrapper()
+  };
+  return h;
+}
+
+sub main() returns void {
+  string[] names := make_wrapper().Names;
+  as.AssertEquals("funcall receiver field array first", "First", get(names, 0));
+  as.AssertEquals("funcall receiver field array second", "Second", get(names, 1));
+
+  int[] items := make_holder().Data.Items;
+  as.AssertEQ("nested funcall receiver field array first", 1, get(items, 0));
+  as.AssertEQ("nested funcall receiver field array second", 2, get(items, 1));
+}

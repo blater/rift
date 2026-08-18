@@ -1,0 +1,28 @@
+include "Assert.rift"
+
+Assert as;
+
+record Item {
+  string name
+}
+
+record Basket {
+  Item[] items
+}
+
+sub main() {
+  for i := 1 to 200 {
+    Item item := {name := concat("item-", toString(i))};
+    Item[] items;
+    append(items, item);
+    insert(items, 0, item);
+    set(items, 1, item);
+    Basket basket := {items := items};
+    Item selected := get(basket.items, 0);
+    Item popped := pop(items);
+    if i = 200 {
+      as.AssertEquals("aggregate array retains nested item", "item-200", selected.name);
+      as.AssertEquals("aggregate array pop transfers nested item", "item-200", popped.name);
+    }
+  }
+}

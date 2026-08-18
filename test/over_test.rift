@@ -1,0 +1,34 @@
+include "Assert.rift"
+
+// Smoke test for over(0|1) — the unified pixel draw mode and ROM
+// text channel OVER state. over(1) toggles instead of merging, so
+// drawing the same shape twice leaves the framebuffer unchanged.
+// Under run_tests.sh stdout is piped so host_caps.plot is 0 — we
+// only assert calls return normally.
+
+sub main() {
+  Assert a;
+
+  // Additive default: lay down a line.
+  draw(10, 50, 200, 50);
+
+  // Switch to XOR and draw the same line twice (erase/restore idiom).
+  over(1);
+  draw(10, 50, 200, 50);
+  draw(10, 50, 200, 50);
+
+  // XOR vertical + horizontal + general, to exercise every dispatcher
+  // branch under over mode.
+  draw(100, 0,   100, 191);
+  draw(0,   100, 255, 100);
+  draw(20,  20,  180, 160);
+
+  // plot() also respects over mode.
+  plot(5, 5);
+  plot(5, 5);
+
+  // Back to additive.
+  over(0);
+
+  a.AssertEQ("over smoke", 1, 1);
+}

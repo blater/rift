@@ -1,0 +1,30 @@
+include "Assert.rift"
+
+Assert as;
+
+sub dispatchA(byte left, byte right) returns byte {
+  return left + right;
+}
+
+sub dispatchA(Sprite value) returns Sprite {
+  return value;
+}
+
+sub dispatchB(Sprite value) returns Sprite {
+  return value;
+}
+
+sub dispatchB(byte left, byte right) returns byte {
+  return left + right;
+}
+
+sub main() {
+  byte a := dispatchA(1, 2);
+  Sprite spriteA := dispatchA(Sprite(3));
+  Sprite spriteB := dispatchB(Sprite(4));
+  byte b := dispatchB(2, 3);
+  spriteA.hide();
+  spriteB.hide();
+  as.AssertEQ("non-Sprite overload before Sprite overload", 3, a);
+  as.AssertEQ("Sprite overload before non-Sprite overload", 5, b);
+}

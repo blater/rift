@@ -1,0 +1,11 @@
+include "Assert.rift"
+Assert a;
+
+sub main() {
+  int x := 10;
+  @embed c
+    x = x * 2;
+  @end c
+
+  a.AssertEQ("Variable modified in embedded C", 20, x);
+}

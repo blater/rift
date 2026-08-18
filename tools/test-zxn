@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Compile and execute the curated Rock ZX Spectrum Next test suite.
+"""Compile and execute the curated Rift ZX Spectrum Next test suite.
 
 Each case is built in the explicit ZXN test profile and is accepted only when
-the emulator launcher observes a complete, zero-failure ROCKTEST stream.
+the emulator launcher observes a complete, zero-failure RIFTTEST stream.
 """
 
 import argparse
@@ -51,20 +51,20 @@ def write_log(path, output):
 
 def main():
   parser = argparse.ArgumentParser(
-      description="Build and execute curated Rock ZXN semantic tests through ZEsarUX.")
+      description="Build and execute curated Rift ZXN semantic tests through ZEsarUX.")
   parser.add_argument("tests", nargs="*", metavar="TEST",
-                      help="repository-relative .rkr test(s); defaults to the curated suite")
+                      help="repository-relative .rift or .rft test(s); defaults to the curated suite")
   parser.add_argument("--suite", type=Path, default=DEFAULT_SUITE,
                       help="suite manifest used when TEST is omitted")
   parser.add_argument("--emulator-bin", help="path to a ZEsarUX binary (or use ZESARUX_BIN)")
   parser.add_argument("--timeout-seconds", type=float, default=4.0)
   parser.add_argument("--artifacts", type=Path, default=DEFAULT_ARTIFACTS)
   parser.add_argument("--keep-builds", action="store_true",
-                      help="retain intermediate .exe/.nex files after the suite")
+                      help="retain compiled .zxn files after the suite")
   args = parser.parse_args()
 
-  if not (ROOT / "rockc").is_file():
-    parser.error("rockc is missing; run make first")
+  if not (ROOT / "riftc").is_file():
+    parser.error("riftc is missing; run make first")
 
   try:
     cases = [Path(case) for case in args.tests] if args.tests else read_suite(args.suite)
@@ -73,11 +73,11 @@ def main():
 
   for case in cases:
     source = ROOT / case
-    if not source.is_file() or source.suffix != ".rkr":
-      parser.error(f"test is not a .rkr source file: {case}")
+    if not source.is_file() or source.suffix not in (".rift", ".rft"):
+      parser.error(f"test is not a .rift or .rft source file: {case}")
 
   args.artifacts.mkdir(parents=True, exist_ok=True)
-  build_root = Path(tempfile.mkdtemp(prefix="rock-zxn-tests-"))
+  build_root = Path(tempfile.mkdtemp(prefix="rift-zxn-tests-"))
   results = []
   try:
     for index, case in enumerate(cases, 1):
@@ -85,7 +85,7 @@ def main():
       case_name = f"{index:02d}-{case.stem}"
       case_artifacts = args.artifacts / case_name
       exe = build_root / f"{case_name}.exe"
-      build_command = [str(ROOT / "rock"), "--target=zxn", "--zxn-test",
+      build_command = [str(ROOT / "rift"), "--target=zxn", "--zxn-test",
                        str(source), str(exe)]
       build = subprocess.run(build_command, cwd=ROOT, text=True,
                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -97,8 +97,8 @@ def main():
         print(f"FAIL {case} (build; {case_artifacts / 'build.log'})")
         continue
 
-      nex = exe.with_suffix(".nex")
-      launch_command = [str(ROOT / "tools" / "rock-emu"), "--target", "zxn",
+      nex = exe.with_suffix(".zxn")
+      launch_command = [str(ROOT / "tools" / "rift-emu"), "--target", "zxn",
                         "--timeout-seconds", str(args.timeout_seconds),
                         "--artifacts", str(case_artifacts), "--keep-all",
                         "--require-emulator"]

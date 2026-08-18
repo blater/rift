@@ -1,0 +1,3 @@
+sub main() {
+  Sprite invalid := Sprite(-0.5);
+}

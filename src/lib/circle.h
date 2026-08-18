@@ -1,5 +1,5 @@
-#ifndef ROCK_CIRCLE_H
-#define ROCK_CIRCLE_H
+#ifndef RIFT_CIRCLE_H
+#define RIFT_CIRCLE_H
 
 #include "typedefs.h"
 
@@ -24,4 +24,4 @@
  */
 void circle(byte cx, byte cy, byte r);
 
-#endif /* ROCK_CIRCLE_H */
+#endif /* RIFT_CIRCLE_H */

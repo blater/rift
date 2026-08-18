@@ -1,0 +1,8 @@
+record Holder {
+  Sprite value
+}
+
+sub main() {
+  Holder holder := { value := Sprite(1) };
+  holder.value := 2;
+}

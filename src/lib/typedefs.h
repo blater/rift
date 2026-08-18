@@ -1,18 +1,18 @@
-#ifndef ROCKER_TYPEDEFS_INTERNAL
-#define ROCKER_TYPEDEFS_INTERNAL
+#ifndef RIFT_TYPEDEFS_INTERNAL
+#define RIFT_TYPEDEFS_INTERNAL
 
 #include <stddef.h>
 #include <stdint.h>
 
-#include "pools.h"  /* for rock_block_header */
+#include "pools.h"  /* for rift_block_header */
 
 /* ADR-0003 §7.1: a string is a descriptor referencing backing bytes. The
  * `backing` field is the universal block header for refcount-managed bytes
  * in the longlived pool; NULL means the bytes live in static or bump
  * storage and are not refcounted. `capacity == 0` is a read-only view;
  * `capacity > 0` is in-place writable backing. The `__string_block` typedef
- * is an alias for `rock_block_header` per §7.1. */
-typedef rock_block_header __string_block;
+ * is an alias for `rift_block_header` per §7.1. */
+typedef rift_block_header __string_block;
 
 typedef struct string {
   char *data;
@@ -40,4 +40,4 @@ typedef uint32_t dword;
 #define true 1
 #define false 0
 
-#endif // ROCKER_TYPEDEFS_INTERNAL
+#endif // RIFT_TYPEDEFS_INTERNAL

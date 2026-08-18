@@ -5,9 +5,9 @@
 #define ZESARUX_ZXI_ASCII 1
 #define ZESARUX_ZXI_CONTROL 3
 
-extern unsigned int rock_probe_loaded_pages(void);
-#ifdef ROCK_PROBE_EXPANDED
-extern unsigned int rock_probe_loaded_expanded_page(void);
+extern unsigned int rift_probe_loaded_pages(void);
+#ifdef RIFT_PROBE_EXPANDED
+extern unsigned int rift_probe_loaded_expanded_page(void);
 #endif
 
 static void emit_char(char value) {
@@ -20,24 +20,24 @@ static void emit_text(const char *text) {
 }
 
 int main(void) {
-  unsigned int passed = rock_probe_loaded_pages();
-#ifdef ROCK_PROBE_EXPANDED
-  passed = passed && rock_probe_loaded_expanded_page();
+  unsigned int passed = rift_probe_loaded_pages();
+#ifdef RIFT_PROBE_EXPANDED
+  passed = passed && rift_probe_loaded_expanded_page();
 #endif
 
-  emit_text("ROCKTEST:BEGIN\n");
-  emit_text("ROCKTEST:STAGE:nex-page-loader\n");
+  emit_text("RIFTTEST:BEGIN\n");
+  emit_text("RIFTTEST:STAGE:nex-page-loader\n");
 
   if (passed) {
-#ifdef ROCK_PROBE_EXPANDED
-    emit_text("ROCKTEST:PASS:NEX PAGE_24/PAGE_25/PAGE_95/PAGE_96 loaded through MMU6\n");
+#ifdef RIFT_PROBE_EXPANDED
+    emit_text("RIFTTEST:PASS:NEX PAGE_24/PAGE_25/PAGE_95/PAGE_96 loaded through MMU6\n");
 #else
-    emit_text("ROCKTEST:PASS:NEX PAGE_24/PAGE_25/PAGE_95 loaded through MMU6\n");
+    emit_text("RIFTTEST:PASS:NEX PAGE_24/PAGE_25/PAGE_95 loaded through MMU6\n");
 #endif
-    emit_text("ROCKTEST:FINISH:1:0\n");
+    emit_text("RIFTTEST:FINISH:1:0\n");
   } else {
-    emit_text("ROCKTEST:FAIL:NEX page bytes:expected=3c/a7/5a:actual=mismatch\n");
-    emit_text("ROCKTEST:FINISH:0:1\n");
+    emit_text("RIFTTEST:FAIL:NEX page bytes:expected=3c/a7/5a:actual=mismatch\n");
+    emit_text("RIFTTEST:FINISH:0:1\n");
   }
 
   z80_outp(ZESARUX_ZXI_REGISTER_PORT, ZESARUX_ZXI_CONTROL);

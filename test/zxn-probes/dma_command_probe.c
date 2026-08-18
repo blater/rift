@@ -11,9 +11,9 @@ static unsigned char copy_destination[515];
 static unsigned char fill_destination[8194];
 static unsigned char fixed_source[3];
 
-extern void rock_probe_interrupts_disable(void);
-extern void rock_probe_interrupts_enable(void);
-extern unsigned int rock_probe_interrupts_enabled(void);
+extern void rift_probe_interrupts_disable(void);
+extern void rift_probe_interrupts_enable(void);
+extern unsigned int rift_probe_interrupts_enabled(void);
 
 static void emit_char(char value) {
   z80_outp(ZESARUX_ZXI_REGISTER_PORT, ZESARUX_ZXI_ASCII);
@@ -87,13 +87,13 @@ static unsigned char probe_interrupt_state(void) {
   unsigned char disabled_ok;
   unsigned char enabled_ok;
 
-  rock_probe_interrupts_disable();
-  disabled_ok = !rock_probe_interrupts_enabled() && probe_copy_length(512) &&
-                !rock_probe_interrupts_enabled();
+  rift_probe_interrupts_disable();
+  disabled_ok = !rift_probe_interrupts_enabled() && probe_copy_length(512) &&
+                !rift_probe_interrupts_enabled();
 
-  rock_probe_interrupts_enable();
-  enabled_ok = rock_probe_interrupts_enabled() && probe_copy_length(512) &&
-               rock_probe_interrupts_enabled();
+  rift_probe_interrupts_enable();
+  enabled_ok = rift_probe_interrupts_enabled() && probe_copy_length(512) &&
+               rift_probe_interrupts_enabled();
   return disabled_ok && enabled_ok;
 }
 
@@ -105,8 +105,8 @@ int main(void) {
   unsigned char fill_ok = 1;
   unsigned char interrupt_ok;
 
-  emit_text("ROCKTEST:BEGIN\n");
-  emit_text("ROCKTEST:STAGE:dma-command-bytes\n");
+  emit_text("RIFTTEST:BEGIN\n");
+  emit_text("RIFTTEST:STAGE:dma-command-bytes\n");
 
   for (i = 0; i < sizeof(copy_lengths) / sizeof(copy_lengths[0]); ++i)
     copy_ok = copy_ok && probe_copy_length(copy_lengths[i]);
@@ -118,24 +118,24 @@ int main(void) {
   interrupt_ok = probe_interrupt_state();
 
   if (copy_ok)
-    emit_text("ROCKTEST:PASS:zxnDMA xx6B exact lengths 1/2/255/256/257/512\n");
+    emit_text("RIFTTEST:PASS:zxnDMA xx6B exact lengths 1/2/255/256/257/512\n");
   else
-    emit_text("ROCKTEST:FAIL:zxnDMA copy lengths:expected=exact+canaries:actual=mismatch\n");
+    emit_text("RIFTTEST:FAIL:zxnDMA copy lengths:expected=exact+canaries:actual=mismatch\n");
 
   if (fill_ok)
-    emit_text("ROCKTEST:PASS:zxnDMA fixed-source fill lengths 1/255/256/8192\n");
+    emit_text("RIFTTEST:PASS:zxnDMA fixed-source fill lengths 1/255/256/8192\n");
   else
-    emit_text("ROCKTEST:FAIL:zxnDMA fixed fill:expected=exact+canaries:actual=mismatch\n");
+    emit_text("RIFTTEST:FAIL:zxnDMA fixed fill:expected=exact+canaries:actual=mismatch\n");
 
   if (interrupt_ok)
-    emit_text("ROCKTEST:PASS:zxnDMA synchronous return preserves disabled/enabled IFF\n");
+    emit_text("RIFTTEST:PASS:zxnDMA synchronous return preserves disabled/enabled IFF\n");
   else
-    emit_text("ROCKTEST:FAIL:zxnDMA IFF:expected=entry state+complete bytes:actual=mismatch\n");
+    emit_text("RIFTTEST:FAIL:zxnDMA IFF:expected=entry state+complete bytes:actual=mismatch\n");
 
   if (copy_ok && fill_ok && interrupt_ok)
-    emit_text("ROCKTEST:FINISH:3:0\n");
+    emit_text("RIFTTEST:FINISH:3:0\n");
   else
-    emit_text("ROCKTEST:FINISH:0:1\n");
+    emit_text("RIFTTEST:FINISH:0:1\n");
 
   z80_outp(ZESARUX_ZXI_REGISTER_PORT, ZESARUX_ZXI_CONTROL);
   z80_outp(ZESARUX_ZXI_DATA_PORT, 1);

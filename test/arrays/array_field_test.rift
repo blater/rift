@@ -1,0 +1,63 @@
+include "../Assert.rift"
+Assert as;
+
+record array_wrapper {
+  Items: int[],
+  Names: string[],
+}
+
+record wrapper_holder {
+  Data: array_wrapper,
+}
+
+sub make_wrapper(): array_wrapper {
+  array_wrapper a := {
+    Items := [],
+    Names := []
+  };
+
+  append(a.Items, 1);
+  append(a.Items, 2);
+  append(a.Items, 3);
+
+  append(a.Names, "First");
+  append(a.Names, "Second");
+  append(a.Names, "Third");
+
+  return a;
+}
+
+sub make_holder(): wrapper_holder {
+  wrapper_holder h := {
+    Data := make_wrapper()
+  };
+  return h;
+}
+
+sub main(): void {
+  array_wrapper a := make_wrapper();
+  wrapper_holder h := make_holder();
+
+  // Control case: rebinding the field to a named local works today.
+  string[] names := a.Names;
+  as.AssertEquals("alias workaround", "First", names[0]);
+
+  // Expected red cases: these document current array-field limitations.
+  string direct_name := a.Names[0];
+  as.AssertEquals("direct field index read", "First", direct_name);
+
+  int direct_item := a.Items[1];
+  as.AssertEQ("direct field index int read", 2, direct_item);
+
+  a.Items[1] := 42;
+  as.AssertEQ("direct field index assignment", 42, get(a.Items, 1));
+
+  string funcall_name := get(make_wrapper().Names, 0);
+  as.AssertEquals("funcall field get", "First", funcall_name);
+
+  int funcall_item := get(make_wrapper().Items, 2);
+  as.AssertEQ("funcall field int get", 3, funcall_item);
+
+  string nested_name := get(h.Data.Names, 1);
+  as.AssertEquals("nested field get", "Second", nested_name);
+}

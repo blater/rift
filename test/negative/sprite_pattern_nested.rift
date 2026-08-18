@@ -1,0 +1,3 @@
+sub main() {
+  SpritePattern pattern := SpritePattern.load("missing.spr");
+}

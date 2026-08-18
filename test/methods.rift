@@ -1,0 +1,70 @@
+include "Assert.rift"
+
+record Wrapper {
+  string value
+}
+
+sub add(string target, string stringToAdd) returns string {
+  return concat(target, stringToAdd);
+}
+
+// 
+// defines an "add" method usable on strings
+// "this" is implicitly declared and refers to the value of 
+//  the string that this method is invoked on
+//  e.g. 
+//    string name := "mickey"
+//    name.add(" mouse");  // this will point to name
+//
+sub string.add(string stringToAdd) returns string {
+  return concat(this, stringToAdd);
+}
+
+sub string.concat(string s) returns string {
+  return concat(this, s);
+}
+
+// array method: "this" refers to the array itself
+sub string[].join(string sep) returns string {
+  string result := "";
+  int i := 0;
+  while i < length(this) {
+    if i > 0 {
+      result := concat(result, sep);
+    }
+    result := concat(result, get(this, i));
+    i := i + 1;
+  }
+  return result;
+}
+
+sub string[].add(string s) returns string[] {
+  append(this, s);
+  return this;
+}
+
+sub main() returns void {
+  Assert a;
+  string s := "hello";
+
+  a.AssertEquals("should append with standard syntax", "hello world", add(s, " world"));
+  a.AssertEquals("should append with method syntax", "hello world", s.add(" world"));
+
+  Wrapper w := {value := "hello"};
+  a.AssertEquals("field receiver method call", "hello world", w.value.add(" world"));
+  a.AssertEquals("function name override method call", "hello world", w.value.concat(" world"));
+
+  string[] arr;
+  append(arr, "hello");
+  a.AssertEquals("array element receiver method call", "hello world", arr[0].add(" world"));
+
+  string[] words;
+  append(words, "hello");
+  append(words, " ");
+  append(words, "world");
+  a.AssertEquals("array method join", "hello world", words.join(""));
+
+  string[] sentence;
+  sentence.add("the").add("quick").add("brown").add("fox");
+  a.AssertEquals("fluent chain join", "the quick brown fox", sentence.join(" "));
+}

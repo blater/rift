@@ -1,5 +1,5 @@
-#ifndef ROCK_INK_PAPER_H
-#define ROCK_INK_PAPER_H
+#ifndef RIFT_INK_PAPER_H
+#define RIFT_INK_PAPER_H
 
 #include "typedefs.h"
 
@@ -34,4 +34,4 @@ void over(byte on);
 unsigned int attr_fg(void);
 unsigned int attr_bg(void);
 
-#endif /* ROCK_INK_PAPER_H */
+#endif /* RIFT_INK_PAPER_H */

@@ -1,0 +1,76 @@
+include "Assert.rift"
+
+// Smoke test for triangle() and trianglefill(). Under run_tests.sh
+// stdout is piped so host_caps.plot is 0 — we only assert calls return
+// normally and edge arithmetic does not crash on tricky shapes.
+
+sub main() {
+  Assert a;
+
+  // Outline: simple right-angled triangle.
+  triangle(10, 10,
+           60, 10,
+           10, 60);
+
+  // Outline: all three vertices on one scanline (degenerate line).
+  triangle(5,  100,
+           30, 100,
+           60, 100);
+
+  // Outline: all three vertices coincident (degenerate point).
+  triangle(200, 100,
+           200, 100,
+           200, 100);
+
+  // Filled: pointy-down triangle.
+  trianglefill(100, 20,
+               140, 20,
+               120, 80);
+
+  // Filled: pointy-up triangle.
+  trianglefill(120, 100,
+               90,  160,
+               150, 160);
+
+  // Filled: vertices deliberately out of order (sort must handle).
+  trianglefill(200, 150,
+               170, 60,
+               230, 100);
+
+  // Filled: flat-top (y1 == y2).
+  trianglefill(10,  120,
+               60,  120,
+               35,  170);
+
+  // Filled: flat-bottom (y2 == y3).
+  trianglefill(35,  10,
+               10,  60,
+               60,  60);
+
+  // Filled: fully-collinear degenerate (all three on one scanline).
+  trianglefill(0,  185,
+               50, 185,
+               100,185);
+
+  // Filled: triangle whose bottom vertex overhangs y=191.
+  trianglefill(128, 150,
+               100, 200,
+               156, 205);
+
+  // XOR erase: filled triangle twice cancels.
+  over(1);
+  trianglefill(180, 30,
+               240, 40,
+               200, 80);
+  trianglefill(180, 30,
+               240, 40,
+               200, 80);
+  over(0);
+
+  // Large triangle covering most of the screen.
+  trianglefill(128, 2,
+               4,   188,
+               252, 188);
+
+  a.AssertEQ("triangle smoke", 1, 1);
+}

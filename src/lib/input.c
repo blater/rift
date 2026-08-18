@@ -13,10 +13,10 @@
  *     and read LAST_K for the code.
  *
  * DEPENDENCY: this only works while the ROM is paged in at $0000 and
- * IM1 is active. If a Rock program later switches to a custom IM2
+ * IM1 is active. If a Rift program later switches to a custom IM2
  * handler or pages the ROM out, these routines stop seeing keys. */
 
-unsigned char rock_input_byte;
+unsigned char rift_input_byte;
 
 byte inkey(void) {
   __asm
@@ -25,13 +25,13 @@ byte inkey(void) {
     jr z, _inkey_none
     res 5, (iy+1)
     ld a, (23560)      ; LAST_K = $5C08
-    ld (_rock_input_byte), a
+    ld (_rift_input_byte), a
     ret
   _inkey_none:
     xor a
-    ld (_rock_input_byte), a
+    ld (_rift_input_byte), a
   __endasm;
-  return (byte)rock_input_byte;
+  return (byte)rift_input_byte;
 }
 
 byte keypress(void) {
@@ -43,9 +43,9 @@ byte keypress(void) {
     jr z, _keypress_wait
     res 5, (iy+1)
     ld a, (23560)
-    ld (_rock_input_byte), a
+    ld (_rift_input_byte), a
   __endasm;
-  return (byte)rock_input_byte;
+  return (byte)rift_input_byte;
 }
 
 #else

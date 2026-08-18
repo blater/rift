@@ -1,7 +1,7 @@
 #include "lib/alloc.h"
 #include "component_manifest.h"
 #include "error.h"
-#include "generator.h"
+#include "generator/generator.h"
 #include "lexer.h"
 #include "parser.h"
 #include "token.h"
@@ -12,7 +12,7 @@
 #include <unistd.h>
 #include <limits.h>
 
-// #include "generator.h"
+// #include "generator/generator.h"
 
 void usage(char *name) {
   printf("Usage:\n");
@@ -135,6 +135,8 @@ int main(int argc, char *argv[]) {
     if (entry->kind == COMPONENT_OPAQUE)
       parser_register_standard_module_type(entry->owner);
   }
+  for (int i = 0; i < components->namespace_count; i++)
+    parser_register_standard_module_type(components->namespaces[i].owner);
 
   input = get_abs_path(input, NULL);
 
@@ -158,18 +160,20 @@ int main(int argc, char *argv[]) {
 
   char *cout = allocate_compiler_persistent(strlen(output) + 3);
   sprintf(cout, "%s.c", output);
-  generator_t g = new_generator(cout, output, components);
-  if (target_zxn) g.target = TARGET_ZXN;
   if (zxn_test && !target_zxn) {
     printf("--zxn-test requires --target=zxn\n");
     kill_compiler_stack();
     return 1;
   }
-  g.zxn_test = zxn_test;
-  g.zxn_memory_profile = zxn_memory_profile;
-  g.auto_cast = auto_cast;
-  g.select_all_components = select_all_components;
-  transpile(&g, p.prog);
+  generator_options generator_config = {
+      .target = target_zxn ? TARGET_ZXN : TARGET_HOST,
+      .auto_cast = auto_cast,
+      .zxn_test = zxn_test,
+      .zxn_memory_profile = zxn_memory_profile,
+      .select_all_components = select_all_components,
+  };
+  generator_t *g = new_generator(cout, output, components, generator_config);
+  transpile(g, p.prog);
   kill_generator(g);
 
   // If there were any compilation errors, exit after cleanup

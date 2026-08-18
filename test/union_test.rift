@@ -1,0 +1,36 @@
+include "Assert.rift"
+
+union Optional { int value, empty }
+
+sub main() {
+  Assert a;
+
+  Optional opt := value(42);
+  a.AssertEQ("value constructor sets key", opt.key, value);
+  int result;
+  result := 0;
+  match opt {
+    value : result := 1;
+    empty : result := 2;
+  }
+  a.AssertEQ("match value key", result, 1);
+
+  // Match with default
+  result := 0;
+  match opt {
+    empty : result := 1;
+    default: result := 99;
+  }
+  a.AssertEQ("match default on union", result, 99);
+
+
+  Optional optEmpty := empty();
+  a.AssertEQ("optEmpty constructor sets key", optEmpty.key, empty);
+  result := 0;
+  match optEmpty {
+    value : result := 1;
+    empty : result := 2;
+  }
+  a.AssertEQ("match empty key", result, 2);
+
+}

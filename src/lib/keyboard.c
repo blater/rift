@@ -15,7 +15,7 @@ byte key_pressed(byte key_id) {
 
 #else
 
-/* Host target: no hardware. Maintain a zeroed buffer so Rock programs
+/* Host target: no hardware. Maintain a zeroed buffer so Rift programs
  * that call into the keyboard API still link and run deterministically. */
 static unsigned char host_buf[KEY_COUNT];
 

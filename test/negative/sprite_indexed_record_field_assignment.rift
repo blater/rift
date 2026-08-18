@@ -1,0 +1,10 @@
+record Holder {
+  Sprite value
+}
+
+sub main() {
+  Holder[] holders;
+  Holder holder := { value := Sprite(0) };
+  append(holders, holder);
+  holders[0].value := Sprite(1);
+}

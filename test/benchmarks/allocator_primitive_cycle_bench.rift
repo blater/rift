@@ -1,0 +1,45 @@
+// Target-only benchmark fixture. Phase zero waits for the harness to reset
+// the emulator counter; phase one performs exactly 100 allocate/free pairs;
+// phase two is the breakpoint reached after the workload.
+@embed c
+  extern int allocator_primitive_benchmark_flag;
+  int allocator_primitive_benchmark_stats[8];
+
+  int allocator_primitive_benchmark(int phase) {
+  #ifdef __SDCC
+    if (phase == 0) {
+      while (*(volatile int *)&allocator_primitive_benchmark_flag == 0) {
+      }
+    }
+  #endif
+    if (phase == 1) {
+      int i;
+      rift_allocator_stats_reset();
+      for (i = 0; i < 100; i++) {
+        void *block = rift_longlived_alloc(16);
+        rift_longlived_free(block);
+      }
+      {
+        rift_allocator_stats stats = rift_allocator_stats_get();
+        allocator_primitive_benchmark_stats[0] = stats.allocations;
+        allocator_primitive_benchmark_stats[1] = stats.frees;
+        allocator_primitive_benchmark_stats[2] = stats.allocation_scan_steps;
+        allocator_primitive_benchmark_stats[3] = stats.free_scan_steps;
+        allocator_primitive_benchmark_stats[4] = stats.coalesces;
+        allocator_primitive_benchmark_stats[5] = stats.magazine_hits;
+        allocator_primitive_benchmark_stats[6] = stats.buddy_splits;
+        allocator_primitive_benchmark_stats[7] = stats.collect_calls;
+      }
+    }
+    return 0;
+  }
+@end c
+
+int allocator_primitive_benchmark_flag := 0;
+
+sub main() {
+  allocator_primitive_benchmark_flag := 0;
+  allocator_primitive_benchmark(0);
+  allocator_primitive_benchmark(1);
+  allocator_primitive_benchmark(2);
+}

@@ -82,7 +82,7 @@ sub map_value {
 }
 
 fail('MMU6 probe leaf is not resident below 0xC000')
-  unless map_value('_rock_probe_loaded_pages') < 0xc000;
+  unless map_value('_rift_probe_loaded_pages') < 0xc000;
 fail('PAGE_24 map origin/size differs from 0xC000/0x2000')
   unless map_value('__PAGE_24_head') == 0xc000
       && map_value('__PAGE_24_size') == 0x2000;
@@ -97,7 +97,7 @@ if ($profile eq 'expanded') {
     unless map_value('__PAGE_96_head') == 0xc000
         && map_value('__PAGE_96_size') == 0x2000;
   fail('expanded MMU6 probe leaf is not resident below 0xC000')
-    unless map_value('_rock_probe_loaded_expanded_page') < 0xc000;
+    unless map_value('_rift_probe_loaded_expanded_page') < 0xc000;
 }
 
 print "PASS: header advertises $num_banks payload banks in loader order\n";

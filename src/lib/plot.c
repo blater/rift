@@ -2,9 +2,9 @@
 
 /* Draw mode state — read by plot.c's own asm blocks (ZXN) and by
  * draw.c's inline asm via the externed symbol. Non-static so SDCC
- * emits `_rock_draw_mode`. Default 0 (additive). Written by over()
+ * emits `_rift_draw_mode`. Default 0 (additive). Written by over()
  * in ink_paper.c; no dedicated setter in this translation unit. */
-unsigned char rock_draw_mode = 0;
+unsigned char rift_draw_mode = 0;
 
 #ifdef __SDCC
 
@@ -20,14 +20,14 @@ unsigned char rock_draw_mode = 0;
  * arguments with absolute LD A,(nn) instead of fighting the SDCC
  * calling convention. Same pattern as print_at.c / ink_paper.c. */
 
-unsigned char rock_plot_x;
-unsigned char rock_plot_y;
+unsigned char rift_plot_x;
+unsigned char rift_plot_y;
 
 static void plot_raw_or(void) {
   __asm
-    ld a, (_rock_plot_y)
+    ld a, (_rift_plot_y)
     ld d, a
-    ld a, (_rock_plot_x)
+    ld a, (_rift_plot_x)
     ld e, a
     pixelad
     setae
@@ -38,9 +38,9 @@ static void plot_raw_or(void) {
 
 static void plot_raw_xor(void) {
   __asm
-    ld a, (_rock_plot_y)
+    ld a, (_rift_plot_y)
     ld d, a
-    ld a, (_rock_plot_x)
+    ld a, (_rift_plot_x)
     ld e, a
     pixelad
     setae
@@ -51,9 +51,9 @@ static void plot_raw_xor(void) {
 
 void plot(byte x, byte y) {
   if (y >= 192) return;
-  rock_plot_x = x;
-  rock_plot_y = y;
-  if (rock_draw_mode) plot_raw_xor();
+  rift_plot_x = x;
+  rift_plot_y = y;
+  if (rift_draw_mode) plot_raw_xor();
   else                plot_raw_or();
 }
 
@@ -61,13 +61,13 @@ void plot(byte x, byte y) {
 void plot_nopresent(byte x, byte y) { plot(x, y); }
 void plot_flush(void) { }
 
-static unsigned char rock_point_result;
+static unsigned char rift_point_result;
 
 static void point_raw(void) {
   __asm
-    ld a, (_rock_plot_y)
+    ld a, (_rift_plot_y)
     ld d, a
-    ld a, (_rock_plot_x)
+    ld a, (_rift_plot_x)
     ld e, a
     pixelad
     setae
@@ -76,16 +76,16 @@ static void point_raw(void) {
     jr  z, _point_done
     ld  a, #0x01
   _point_done:
-    ld  (_rock_point_result), a
+    ld  (_rift_point_result), a
   __endasm;
 }
 
 byte point(byte x, byte y) {
   if (y >= 192) return 0;
-  rock_plot_x = x;
-  rock_plot_y = y;
+  rift_plot_x = x;
+  rift_plot_y = y;
   point_raw();
-  return rock_point_result;
+  return rift_point_result;
 }
 
 #else
@@ -155,7 +155,7 @@ static void redraw_cell(byte x, byte y) {
 void plot_nopresent(byte x, byte y) {
   if (y >= 192) return;
 
-  if (rock_draw_mode) shadow_xor(x, y);
+  if (rift_draw_mode) shadow_xor(x, y);
   else                shadow_set(x, y);
 
   if (host_caps.plot) {

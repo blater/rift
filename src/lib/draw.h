@@ -1,5 +1,5 @@
-#ifndef ROCK_DRAW_H
-#define ROCK_DRAW_H
+#ifndef RIFT_DRAW_H
+#define RIFT_DRAW_H
 
 #include "typedefs.h"
 
@@ -28,4 +28,4 @@
 
 void draw(byte x0, byte y0, byte x1, byte y1);
 
-#endif /* ROCK_DRAW_H */
+#endif /* RIFT_DRAW_H */

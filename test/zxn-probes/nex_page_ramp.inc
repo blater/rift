@@ -1,4 +1,4 @@
-MACRO ROCK_PROBE_RAMP mask
+MACRO RIFT_PROBE_RAMP mask
   REPT 32
     defb (0 ^ mask),(1 ^ mask),(2 ^ mask),(3 ^ mask),(4 ^ mask),(5 ^ mask),(6 ^ mask),(7 ^ mask)
     defb (8 ^ mask),(9 ^ mask),(10 ^ mask),(11 ^ mask),(12 ^ mask),(13 ^ mask),(14 ^ mask),(15 ^ mask)

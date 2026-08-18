@@ -1,0 +1,13 @@
+record Maker {
+  byte unused
+}
+
+sub Maker.makeSprite() returns Sprite {
+  Sprite result := Sprite(0);
+  return result;
+}
+
+sub main() {
+  Maker maker := { unused := 0 };
+  Sprite invalid := maker.makeSprite(1);
+}

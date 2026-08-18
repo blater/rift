@@ -1,5 +1,5 @@
-#ifndef ROCK_NEXTREG_H
-#define ROCK_NEXTREG_H
+#ifndef RIFT_NEXTREG_H
+#define RIFT_NEXTREG_H
 
 #include "typedefs.h"
 
@@ -34,4 +34,4 @@ byte cpu_speed_get(void);
 
 void mmu_set(byte slot, byte page);
 
-#endif /* ROCK_NEXTREG_H */
+#endif /* RIFT_NEXTREG_H */

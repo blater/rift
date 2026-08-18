@@ -1,5 +1,5 @@
-#ifndef ROCK_HELPERS_H
-#define ROCK_HELPERS_H
+#ifndef RIFT_HELPERS_H
+#define RIFT_HELPERS_H
 
 #include "typedefs.h"
 
@@ -39,4 +39,4 @@ char locase(char c);
 int  abs_int(int x);
 word abs_word(word w);
 
-#endif /* ROCK_HELPERS_H */
+#endif /* RIFT_HELPERS_H */

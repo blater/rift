@@ -1,0 +1,10 @@
+component|core|||||||||always
+component|sprite|core||||||||
+namespace|Sprite|sprite
+asset|sprite4|SpritePattern|sprite
+asset|sprite8|SpritePattern|sprite
+method|Sprite|instance|position|sprite|void|word,word|rift__im_L6_Sprite_L8_position_A2|
+method|Sprite|instance|frame|sprite|void|SpritePattern,byte|rift__im_L6_Sprite_L5_frame_A2|
+method|Sprite|instance|show|sprite|void||rift__im_L6_Sprite_L4_show_A0|
+method|Sprite|instance|hide|sprite|void||rift__im_L6_Sprite_L4_hide_A0|
+method|Sprite|type|hideall|sprite|void||rift__tm_L6_Sprite_L7_hideall_A0|

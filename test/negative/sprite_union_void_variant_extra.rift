@@ -1,0 +1,5 @@
+union Choice { Sprite Some, None }
+
+sub main() {
+  Choice invalid := None(Sprite(0));
+}

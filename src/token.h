@@ -1,5 +1,5 @@
 /*****************************************************
- * ROCKER TOKEN HEADER
+ * RIFT TOKEN HEADER
  * MIT License
  * Copyright (c) 2024 Paul Passeron
  *****************************************************/

@@ -3,14 +3,14 @@
 #ifdef __SDCC
 
 /* Shared scratch byte for the inline-asm wrapper. Kept at file scope
- * (non-static) so SDCC emits the symbol `_rock_zx_rom_byte` which the
+ * (non-static) so SDCC emits the symbol `_rift_zx_rom_byte` which the
  * inline asm block can load with an absolute LD A,(nn). This avoids
  * depending on any particular SDCC stack/register calling convention. */
-unsigned char rock_zx_rom_byte;
+unsigned char rift_zx_rom_byte;
 
 static void rst10_emit(void) {
   __asm
-    ld a, (_rock_zx_rom_byte)
+    ld a, (_rift_zx_rom_byte)
     rst 0x10
   __endasm;
 }
@@ -18,15 +18,15 @@ static void rst10_emit(void) {
 void print_at(byte x, byte y, string text) {
   /* Emit ROM AT control sequence: 22, row, col (both 0-based).
    * RST 10h on the ZX upper-screen channel interprets this natively. */
-  rock_zx_rom_byte = 22;       rst10_emit();
-  rock_zx_rom_byte = y;        rst10_emit();
-  rock_zx_rom_byte = x;        rst10_emit();
+  rift_zx_rom_byte = 22;       rst10_emit();
+  rift_zx_rom_byte = y;        rst10_emit();
+  rift_zx_rom_byte = x;        rst10_emit();
 
   if (text.data == 0) return;
   {
     size_t i;
     for (i = 0; i < text.length; i++) {
-      rock_zx_rom_byte = (unsigned char)text.data[i];
+      rift_zx_rom_byte = (unsigned char)text.data[i];
       rst10_emit();
     }
   }

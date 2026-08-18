@@ -1,0 +1,94 @@
+include "Assert.rift"
+
+Assert as;
+
+record SpriteHolder {
+  Sprite value
+}
+
+record SpriteGroup {
+  Sprite[] values
+}
+
+union MaybeSprite { Sprite SomeSprite, NoSprite }
+
+sub copySprite(Sprite value) returns Sprite {
+  return value;
+}
+
+sub chooseSprite(byte choose, Sprite first, Sprite second) returns Sprite {
+  if choose {
+    return first;
+  } else {
+    return second;
+  }
+}
+
+sub chooseSprites(byte choose, Sprite[] first, Sprite[] second) returns Sprite[] {
+  if choose {
+    return first;
+  } else {
+    return second;
+  }
+}
+
+sub matchSprite(byte choose, Sprite first, Sprite second) returns Sprite {
+  match choose {
+    0: return first;
+    default: return second;
+  }
+}
+
+sub main() {
+  Sprite first := Sprite(0);
+  Sprite last := Sprite(127);
+  Sprite copied := copySprite(first);
+  Sprite chosen := chooseSprite(1, copied, last);
+  Sprite matched := matchSprite(0, copied, last);
+  Sprite[] sprites;
+  append(sprites, first);
+  append(sprites, copied);
+  Sprite[] aliases := sprites;
+  Sprite[] chosenSprites := chooseSprites(1, sprites, aliases);
+  insert(sprites, 1, first);
+  set(sprites, 0, last);
+  sprites[1] := last;
+  Sprite fromGet := get(sprites, 0);
+  Sprite fromIndex := sprites[1];
+  Sprite fromPop := pop(sprites);
+  Sprite fromAlias := get(aliases, 0);
+  Sprite fromChosenArray := get(chosenSprites, 0);
+  for sprite in sprites {
+    Sprite iteratorCopy := sprite;
+    iteratorCopy.hide();
+  }
+  SpriteHolder holder := { value := first };
+  SpriteGroup group := { values := [] };
+  Sprite[] replacements;
+  append(replacements, first);
+  group.values := replacements;
+  Sprite[] groupAlias := group.values;
+  Sprite fromGroup := get(groupAlias, 0);
+  for fieldSprite in group.values {
+    fieldSprite.hide();
+  }
+  group.values := [];
+  holder.value := last;
+  Sprite fromField := holder.value;
+  MaybeSprite maybe := SomeSprite(copied);
+  first.position(0, 0);
+  last.position(319, 255);
+  first.show();
+  last.hide();
+  Sprite.hideall();
+  fromGet.hide();
+  fromIndex.hide();
+  fromPop.hide();
+  fromAlias.hide();
+  fromChosenArray.hide();
+  fromField.hide();
+  fromGroup.hide();
+  chosen.hide();
+  matched.hide();
+  as.AssertTrue("byte-backed Sprite methods are callable", 1);
+}

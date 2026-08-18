@@ -1,7 +1,7 @@
 /tmp/tmpYYFUZkLp.asm:
      1                          MODULE alloc_c
-     2                          LINE 0, "/Users/blater/src/rock/src/lib/alloc.c"
-/Users/blater/src/rock/src/lib/alloc.c:
+     2                          LINE 0, "/Users/blater/src/rift/src/lib/alloc.c"
+/Users/blater/src/rift/src/lib/alloc.c:
                                 
      1                          ;--------------------------------------------------------
      2                          ; File Created by SDCC : free open source ISO C Compiler

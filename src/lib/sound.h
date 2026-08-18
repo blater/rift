@@ -1,5 +1,5 @@
-#ifndef ROCK_SOUND_H
-#define ROCK_SOUND_H
+#ifndef RIFT_SOUND_H
+#define RIFT_SOUND_H
 
 #include "typedefs.h"
 
@@ -13,4 +13,4 @@
  */
 void beep(word freq, word dur);
 
-#endif /* ROCK_SOUND_H */
+#endif /* RIFT_SOUND_H */

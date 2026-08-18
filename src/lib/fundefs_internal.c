@@ -21,8 +21,8 @@ static int checked_double(size_t value, size_t *result) {
 
 static void array_size_error(const char *operation) {
   printf("Array size overflow during %s\n", operation);
-  exit_rocker(1);
-  exit(1); /* documents non-return to compilers that do not know exit_rocker */
+  exit_rift(1);
+  exit(1); /* documents non-return to compilers that do not know exit_rift */
 }
 
 static size_t dynamic_array_initial_capacity = __INTERNAL_DYNAMIC_ARRAY_CAP;
@@ -35,24 +35,24 @@ __internal_dynamic_array_t __internal_make_array_with_release(
     size_t size, size_t max_capacity, __internal_array_release_fn release_elem) {
   /* ADR-0003 Phase D extension: array header struct lives inside a
    * universal block header in the longlived pool. The handle returned to
-   * Rock code is a pointer to the payload (the struct itself); the
-   * rock_block_header sits at handle - sizeof(rock_block_header). */
+   * Rift code is a pointer to the payload (the struct itself); the
+   * rift_block_header sits at handle - sizeof(rift_block_header). */
   if (size == 0) {
     printf("Could not create dynamic array: BAD ELEMENT SIZE\n");
-    exit_rocker(1);
+    exit_rift(1);
   }
   size_t capacity = max_capacity > 0 ? max_capacity : dynamic_array_initial_capacity;
   size_t byte_size;
   if (!checked_multiply(size, capacity, &byte_size)) array_size_error("creation");
   __internal_dynamic_array_t ptr =
-      rock_longlived_alloc(sizeof(struct __internal_dynamic_array));
+      rift_longlived_alloc(sizeof(struct __internal_dynamic_array));
   (*ptr).elem_size = size;
   (*ptr).max_capacity = max_capacity;
   (*ptr).release_elem = release_elem;
   (*ptr).capacity = capacity;
 
   /* Element buffer is a separate longlived block. */
-  (*ptr).data = rock_longlived_alloc(byte_size);
+  (*ptr).data = rift_longlived_alloc(byte_size);
   (*ptr).length = 0;
   return ptr;
 }
@@ -63,10 +63,10 @@ __internal_dynamic_array_t __internal_make_array(size_t size, size_t max_capacit
 
 void __internal_free_array(__internal_dynamic_array_t arr, int is_string_array) {
   if (arr == NULL) return;
-  rock_block_header *header = ((rock_block_header *)arr) - 1;
-  if (header->refcount == ROCK_RC_STATIC) return;
-  if (header->refcount == ROCK_RC_FREE || header->refcount == ROCK_RC_MAGAZINE) {
-    fprintf(stderr, "rock: array release on already-freed block\n");
+  rift_block_header *header = ((rift_block_header *)arr) - 1;
+  if (header->refcount == RIFT_RC_STATIC) return;
+  if (header->refcount == RIFT_RC_FREE || header->refcount == RIFT_RC_MAGAZINE) {
+    fprintf(stderr, "rift: array release on already-freed block\n");
     exit(1);
   }
   if (--header->refcount != 0) return;
@@ -81,10 +81,10 @@ void __internal_free_array(__internal_dynamic_array_t arr, int is_string_array) 
     }
   }
   if (arr->data != NULL) {
-    rock_longlived_free(arr->data);
+    rift_longlived_free(arr->data);
     arr->data = NULL;
   }
-  rock_longlived_free(arr);
+  rift_longlived_free(arr);
 }
 
 void __internal_retain_array(__internal_dynamic_array_t arr) {
@@ -94,18 +94,18 @@ void __internal_retain_array(__internal_dynamic_array_t arr) {
 int __internal_push_array(__internal_dynamic_array_t arr, void *elem) {
   if (arr->data == NULL) {
     printf("Uninitialized array !\n");
-    exit_rocker(1);
+    exit_rift(1);
   }
   if (elem == NULL) {
     printf("Could not push elem to dynamic array: BAD ELEM\n");
-    exit_rocker(1);
+    exit_rift(1);
   }
 
   // Check if we can add more elements
   if (arr->max_capacity > 0 && arr->length >= arr->max_capacity) {
     printf("Error: Cannot append to fixed-size array (capacity: %zu, length: %zu)\n",
            arr->max_capacity, arr->length);
-    exit_rocker(1);
+    exit_rift(1);
   }
 
   if (arr->length >= arr->capacity) {
@@ -121,20 +121,20 @@ int __internal_push_array(__internal_dynamic_array_t arr, void *elem) {
           !checked_multiply(arr->length, arr->elem_size, &copied_byte_size)) {
         array_size_error("growth");
       }
-      void *new_data = rock_longlived_alloc(new_byte_size);
+      void *new_data = rift_longlived_alloc(new_byte_size);
       memcpy(new_data, arr->data, copied_byte_size);
-      rock_longlived_free(arr->data);
+      rift_longlived_free(arr->data);
       arr->data = new_data;
       arr->capacity = new_capacity;
     } else {
       printf("Error: Array capacity exceeded\n");
-      exit_rocker(1);
+      exit_rift(1);
     }
   }
   void *dst = (char *)arr->data + arr->length * arr->elem_size;
   if (dst == NULL) {
     printf("Could not push elem to dynamic array: BAD ARRAY\n");
-    exit_rocker(1);
+    exit_rift(1);
   }
   // memccpy(dst, elem, 1, arr->elem_size);
   for (int i = 0; i < arr->elem_size; i++) {
@@ -147,12 +147,12 @@ int __internal_push_array(__internal_dynamic_array_t arr, void *elem) {
 int __internal_pop_into(__internal_dynamic_array_t arr, void *out) {
   if (arr->length == 0) {
     printf("Could not pop elem out of dynamic array: EMPTY ARRAY\n");
-    exit_rocker(1);
+    exit_rift(1);
     return 0;
   }
   if (arr->elem_size == 0) {
     printf("Could not pop elem out of dynamic array: BAD ELEMENT SIZE\n");
-    exit_rocker(1);
+    exit_rift(1);
     return 0;
   }
   void *src = (char *)arr->data + (arr->length - 1) * arr->elem_size;
@@ -187,24 +187,24 @@ void __internal_insert(__internal_dynamic_array_t arr, size_t index,
                        void *elem) {
   if (arr->data == NULL) {
     printf("Uninitialized array!\n");
-    exit_rocker(1);
+    exit_rift(1);
   }
 
   if (elem == NULL) {
     printf("Could not insert elem into dynamic array: BAD ELEM\n");
-    exit_rocker(1);
+    exit_rift(1);
   }
 
   if (arr->elem_size == 0) {
     printf("Could not insert elem into dynamic array: BAD ELEMENT SIZE\n");
-    exit_rocker(1);
+    exit_rift(1);
   }
 
   // For insert, index can be from 0 to length (inclusive)
   if (index > arr->length) {
     printf("Could not insert elem: INDEX OUT OF BOUNDS (%zu, length: %zu)\n",
            index, arr->length);
-    exit_rocker(1);
+    exit_rift(1);
   }
 
   // Check if we have room
@@ -218,14 +218,14 @@ void __internal_insert(__internal_dynamic_array_t arr, size_t index,
           !checked_multiply(arr->length, arr->elem_size, &copied_byte_size)) {
         array_size_error("growth");
       }
-      void *new_data = rock_longlived_alloc(new_byte_size);
+      void *new_data = rift_longlived_alloc(new_byte_size);
       memcpy(new_data, arr->data, copied_byte_size);
-      rock_longlived_free(arr->data);
+      rift_longlived_free(arr->data);
       arr->data = new_data;
       arr->capacity = new_capacity;
     } else {
       printf("Error: Array capacity exceeded, cannot insert\n");
-      exit_rocker(1);
+      exit_rift(1);
     }
   }
 
@@ -245,25 +245,26 @@ void __internal_insert(__internal_dynamic_array_t arr, size_t index,
 
 void __internal_set_elem(__internal_dynamic_array_t arr, size_t index,
                          void *elem) {
-  // For fixed-size arrays, check against capacity; for dynamic, check against length
-  size_t limit = (arr->max_capacity > 0) ? arr->max_capacity : arr->length;
+  size_t limit = arr->length;
+  if (arr->max_capacity > 0)
+    limit = arr->length < arr->capacity ? arr->length + 1 : arr->capacity;
   if (index >= limit) {
     printf("Could not set elem in dynamic array: INDEX OUT OF BOUNDS (%zu, limit: %zu)\n",
            index, limit);
-    exit_rocker(1);
+    exit_rift(1);
   }
   if (arr->elem_size == 0) {
     printf("Could not set elem in dynamic array: BAD ELEMENT SIZE\n");
-    exit_rocker(1);
+    exit_rift(1);
   }
   void *dst = (char *)arr->data + index * arr->elem_size;
   if (dst == NULL) {
     printf("Could not set elem in dynamic array: BAD ARRAY\n");
-    exit_rocker(1);
+    exit_rift(1);
   }
   memcpy(dst, elem, arr->elem_size);
-  // Update length if we're setting beyond current length (for fixed-size arrays)
-  if (index >= arr->length) {
+  // Fixed arrays may be initialized sequentially up to their capacity.
+  if (index == arr->length) {
     if (index == SIZE_MAX) array_size_error("set");
     arr->length = index + 1;
   }
@@ -347,14 +348,14 @@ void string_push_array(__internal_dynamic_array_t arr, string elem) {
 
 void string_pop_array(string *out, __internal_dynamic_array_t arr) {
   if (!__internal_pop_into(arr, out)) {
-    __rock_make_string(out, "", 0);
+    __rift_make_string(out, "", 0);
   }
 }
 
 void string_get_elem(string *out, __internal_dynamic_array_t arr, size_t index) {
   string *tmp = __internal_get_elem(arr, index);
   if (tmp == NULL) {
-    __rock_make_string(out, "", 0);
+    __rift_make_string(out, "", 0);
     return;
   }
   new_string(out, *tmp);
@@ -362,10 +363,14 @@ void string_get_elem(string *out, __internal_dynamic_array_t arr, size_t index) 
 
 void string_set_elem(__internal_dynamic_array_t arr, size_t index,
                      string elem) {
-  string *old = __internal_get_elem(arr, index);
-  if (old == NULL) return;
-  __string_retain(elem);
-  __string_release(*old);
+  if (index < arr->length) {
+    string *old = __internal_get_elem(arr, index);
+    if (old == NULL) return;
+    __string_retain(elem);
+    __string_release(*old);
+  } else {
+    __string_retain(elem);
+  }
   __internal_set_elem(arr, index, &elem);
 }
 
@@ -515,18 +520,18 @@ __internal_dynamic_array_t get_args(void) {
   return cmd_args;
 }
 
-void init_rocker(int argc, char **argv) {
+void init_rift(int argc, char **argv) {
   fill_cmd_args(argc, argv);
 }
 
-void end_rocker(void) {
+void end_rift(void) {
 }
 
-void exit_rocker(int status) {
-  end_rocker();
+void exit_rift(int status) {
+  end_rift();
   exit(status);
 }
 
 void halt(byte code) {
-  exit_rocker((int)code);
+  exit_rift((int)code);
 }

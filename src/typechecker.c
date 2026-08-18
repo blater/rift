@@ -7,38 +7,38 @@
 #include "stringview.h"
 #include "token.h"
 
-rocker_type_t get_error_type(void) {
-  return (rocker_type_t){error_type, {.builtin = 1}};
+rift_type_t get_error_type(void) {
+  return (rift_type_t){error_type, {.builtin = 1}};
 }
 
-rocker_type_t type_of_ast_type(typechecker_t tc, ast_type t) {
+rift_type_t type_of_ast_type(typechecker_t tc, ast_type t) {
   string_view type_name = t.name.lexeme;
   if (svcmp(type_name, sv_from_cstr("int")) == 0)
-    return (rocker_type_t){builtin_int, {.builtin = 1}};
+    return (rift_type_t){builtin_int, {.builtin = 1}};
   if (svcmp(type_name, sv_from_cstr("char")) == 0)
-    return (rocker_type_t){builtin_char, {.builtin = 1}};
+    return (rift_type_t){builtin_char, {.builtin = 1}};
   if (svcmp(type_name, sv_from_cstr("string")) == 0)
-    return (rocker_type_t){builtin_string, {.builtin = 1}};
+    return (rift_type_t){builtin_string, {.builtin = 1}};
   if (svcmp(type_name, sv_from_cstr("bool")) == 0 ||
       svcmp(type_name, sv_from_cstr("boolean")) == 0)
-    return (rocker_type_t){builtin_bool, {.builtin = 1}};
+    return (rift_type_t){builtin_bool, {.builtin = 1}};
   // User-defined type — look up in name table
   ast_t ref = get_ref(type_name, tc.nt);
   if (ref == NULL)
     return get_error_type();
-  return (rocker_type_t){user_defined, {.user_defined_type = {type_name}}};
+  return (rift_type_t){user_defined, {.user_defined_type = {type_name}}};
 }
 
-rocker_type_t get_type_of_expr(typechecker_t tc, ast_t expr) {
+rift_type_t get_type_of_expr(typechecker_t tc, ast_t expr) {
   if (expr->tag == literal) {
     token_type_t t = expr->data.literal.lit.type;
     switch (t) {
       case TOK_STR_LIT:
-        return (rocker_type_t){builtin_string, {.builtin = 1}};
+        return (rift_type_t){builtin_string, {.builtin = 1}};
       case TOK_CHR_LIT:
-        return (rocker_type_t){builtin_char, {.builtin = 1}};
+        return (rift_type_t){builtin_char, {.builtin = 1}};
       case TOK_NUM_LIT:
-        return (rocker_type_t){builtin_int, {.builtin = 1}};
+        return (rift_type_t){builtin_int, {.builtin = 1}};
       default:
         return get_error_type();
     }
@@ -53,8 +53,8 @@ rocker_type_t get_type_of_expr(typechecker_t tc, ast_t expr) {
 }
 
 int are_types_compatibles(typechecker_t tc,
-                          rocker_type_t t1,
-                          rocker_type_t t2) {
+                          rift_type_t t1,
+                          rift_type_t t2) {
   if (t1.tag == error_type || t2.tag == error_type)
     return 0;
   if (t1.tag == user_defined || t2.tag == user_defined)
@@ -102,8 +102,8 @@ int tc_program(ast_t program) {
     ast_t stmt = prog.prog.data[i];
     if (stmt->tag == vardef) {
       ast_vardef vardef = stmt->data.vardef;
-      rocker_type_t expr_type = get_type_of_expr(tc, vardef.expr);
-      rocker_type_t expected = type_of_ast_type(tc, vardef.type->data.type);
+      rift_type_t expr_type = get_type_of_expr(tc, vardef.expr);
+      rift_type_t expected = type_of_ast_type(tc, vardef.type->data.type);
       if (!are_types_compatibles(tc, expr_type, expected))
         return 0;
     }
@@ -185,7 +185,7 @@ static int walk_tdef(name_table_t nt, ast_t tdef_node, cycle_visit_t *visited) {
             "' transitively",
             SV_Arg(origin.lexeme), SV_Arg(field_name), SV_Arg(base_name));
       error(origin.filename, origin.line, origin.col,
-            "note: Rock rejects recursive type definitions so refcount-based "
+            "note: Rift rejects recursive type definitions so refcount-based "
             "reclamation is complete; express tree- or graph-shaped data as a "
             "flat collection with index references");
       return 1;

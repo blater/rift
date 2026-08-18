@@ -1,0 +1,11 @@
+include "Assert.rift"
+Assert a;
+
+@embed c
+  int add(int a, int b) { return a + b; }
+@end c
+
+sub main() {
+  int result := add(3, 4);
+  a.AssertEQ("embedded c add(3, 4)", 7, result);
+}

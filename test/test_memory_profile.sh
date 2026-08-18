@@ -5,23 +5,23 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/rock-memory-profile.XXXXXX")
+tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/rift-memory-profile.XXXXXX")
 trap 'rm -rf "$tmpdir"' EXIT HUP INT TERM
 
 for source in \
-  test/nested_ownership_test.rkr \
-  test/aggregate_array_ownership_test.rkr \
-  test/string_array_ownership_test.rkr \
-  test/producer_ownership_test.rkr \
-  test/function_argument_ownership_test.rkr \
-  test/fluent_array_ownership_test.rkr \
-  test/module_ownership_test.rkr \
-  test/collect_test.rkr \
-  test/array_reassignment_soak_test.rkr \
-  test/mixed_memory_soak_test.rkr
+  test/nested_ownership_test.rift \
+  test/aggregate_array_ownership_test.rift \
+  test/string_array_ownership_test.rift \
+  test/producer_ownership_test.rift \
+  test/function_argument_ownership_test.rift \
+  test/fluent_array_ownership_test.rift \
+  test/module_ownership_test.rift \
+  test/collect_test.rift \
+  test/array_reassignment_soak_test.rift \
+  test/mixed_memory_soak_test.rift
 do
-  name=$(basename "$source" .rkr)
+  name=$(basename "$source" .rift)
   output="$tmpdir/$name"
-  "$root/rock" --memory-profile=zxn "$root/$source" "$output"
-  "$output"
+  "$root/rift" --target=gcc --memory-profile=zxn "$root/$source" "$output"
+  "$output.exe"
 done

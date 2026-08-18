@@ -1,9 +1,9 @@
 #!/bin/bash
 # Agent REQUIRES EXPLICIT PERMISSION TO EDIT THIS FILE
 #
-TMP=/tmp/rock$$
+TMP=/tmp/rift$$
 TESTS=./test
-COMPILER=./rock
+COMPILER=./rift
 testcnt=0
 totalpass=0;
 totalfail=0;
@@ -31,7 +31,10 @@ getTests() {
   if [ "$1" != "" ]; then
     ls -1 "$1" || fatal "file $1 not found"
   else
-    ls -1 $TESTS/*.rkr | grep -v "Assert.rkr" | grep -v "Mod.rkr"
+    find "$TESTS" -maxdepth 1 -type f \
+      \( -name '*.rift' -o -name '*.rft' \) \
+      ! -name 'Assert.rift' ! -name 'Assert.rft' \
+      ! -name 'Mod.rift' ! -name 'Mod.rft' | sort
   fi
 }
 
@@ -64,8 +67,8 @@ for test in $FILES; do
 
   # compile it...
   EXE="$TESTS/${gName}.exe"
-  echo "$COMPILER $test $EXE 2>&1 >$TMP"
-  $COMPILER $test $EXE 2>&1 >$TMP
+  echo "$COMPILER --target=gcc $test $EXE 2>&1 >$TMP"
+  $COMPILER --target=gcc $test $EXE 2>&1 >$TMP
   if [ $? -ne 0 ]; then
     # its a fail if it doesnt compile
     let totalabort=$totalabort+1

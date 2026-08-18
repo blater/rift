@@ -1,5 +1,5 @@
-#ifndef ROCK_TRIANGLE_H
-#define ROCK_TRIANGLE_H
+#ifndef RIFT_TRIANGLE_H
+#define RIFT_TRIANGLE_H
 
 #include "typedefs.h"
 
@@ -25,4 +25,4 @@
 void triangle(byte x1, byte y1, byte x2, byte y2, byte x3, byte y3);
 void trianglefill(byte x1, byte y1, byte x2, byte y2, byte x3, byte y3);
 
-#endif /* ROCK_TRIANGLE_H */
+#endif /* RIFT_TRIANGLE_H */

@@ -1,5 +1,5 @@
 /*****************************************************
- * ROCKER AST HEADER
+ * RIFT AST HEADER
  * MIT License
  * Copyright (c) 2024 Paul Passeron
  *****************************************************/
@@ -46,6 +46,7 @@ typedef struct ast_type ast_type;
 typedef struct ast_arr_index ast_arr_index;
 typedef struct ast_embed ast_embed;
 typedef struct ast_method_call ast_method_call;
+typedef struct ast_asset_decl ast_asset_decl;
 
 typedef enum method_kind_t {
   METHOD_NONE,
@@ -66,6 +67,17 @@ struct ast_embed {
   char *lang;               // "c", "asm", etc. (language name)
   char *body;               // raw source code verbatim
   int is_function;          // 1 if top-level native function, 0 if inline block
+};
+
+/* Compile-time declaration only. No asset_decl node is emitted as C data. */
+struct ast_asset_decl {
+  token_t kind;
+  token_t name;
+  token_t path;
+  token_t module;
+  char *canonical_path;
+  long byte_length;
+  int referenced;
 };
 
 struct ast_op {
@@ -108,6 +120,7 @@ struct ast_method_call {
   string_view resolved_owner;
   ast_t resolved_target;
   char *resolved_c_name;
+  ast_t resolved_asset;  // compile-time consumer operand, never a runtime value
 };
 
 struct ast_funcall {
@@ -241,6 +254,7 @@ struct node_t {
     embed,
     method_call,
     collect_stmt,
+    asset_decl,
   } tag;
   union data {
     ast_op op;
@@ -269,6 +283,7 @@ struct node_t {
     ast_arr_index arr_index;
     ast_embed embed;
     ast_method_call method_call;
+    ast_asset_decl asset_decl;
   } data;
 };
 

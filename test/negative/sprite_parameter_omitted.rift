@@ -1,0 +1,6 @@
+sub use(Sprite value) {
+}
+
+sub main() {
+  use();
+}

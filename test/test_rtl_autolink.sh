@@ -3,8 +3,8 @@
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-SOURCE="$ROOT/test/rtl_autolink_test.rkr"
-TMPDIR_AUDIT=$(mktemp -d "${TMPDIR:-/tmp}/rock-autolink.XXXXXX")
+SOURCE="$ROOT/test/rtl_autolink_test.rift"
+TMPDIR_AUDIT=$(mktemp -d "${TMPDIR:-/tmp}/rift-autolink.XXXXXX")
 trap 'rm -rf "$TMPDIR_AUDIT"' EXIT HUP INT TERM
 
 build_mode() {
@@ -12,7 +12,7 @@ build_mode() {
   output="$TMPDIR_AUDIT/$mode.exe"
   log="$TMPDIR_AUDIT/$mode.log"
 
-  if ! "$ROOT/rock" --target=zxn --zxn-test --rtl="$mode" \
+  if ! "$ROOT/rift" --debug --target=zxn --zxn-test --rtl="$mode" \
       "$SOURCE" "$output" >"$log" 2>&1; then
     cat "$log"
     echo "FAIL: --rtl=$mode build failed" >&2
@@ -25,7 +25,14 @@ build_mode() {
     exit 1
   fi
 
-  if [ ! -f "$TMPDIR_AUDIT/$mode.nex" ] || [ ! -f "$TMPDIR_AUDIT/${mode}_CODE.bin" ]; then
+  debug_dir=$(sed -n 's/^rift: debug workspace: //p' "$log" | head -1)
+  if [ -z "$debug_dir" ] || [ ! -d "$debug_dir" ]; then
+    cat "$log"
+    echo "FAIL: --rtl=$mode did not report its debug workspace" >&2
+    exit 1
+  fi
+  cp "$debug_dir/${mode}_CODE.bin" "$TMPDIR_AUDIT/${mode}_CODE.bin"
+  if [ ! -f "$TMPDIR_AUDIT/$mode.zxn" ] || [ ! -f "$TMPDIR_AUDIT/${mode}_CODE.bin" ]; then
     cat "$log"
     echo "FAIL: --rtl=$mode produced no code artifact" >&2
     exit 1
@@ -33,6 +40,7 @@ build_mode() {
 
   MODE_CODE_BYTES=$(wc -c < "$TMPDIR_AUDIT/${mode}_CODE.bin" | tr -d '[:space:]')
   MODE_BSS_END=$(awk '/ZXN layout: BSS ends at/ { value = $6; sub(/^0x/, "", value); sub(/;.*/, "", value); print value; exit }' "$log")
+  rm -rf "$debug_dir"
 }
 
 build_mode auto
@@ -65,13 +73,18 @@ echo "PASS: RTL auto-linker resolved keyboard, nextreg, random, helpers, and dra
 echo "PASS: --rtl=auto code is $AUTO_CODE_BYTES bytes (BSS end 0x$AUTO_BSS_END)"
 echo "PASS: --rtl=all code is $ALL_CODE_BYTES bytes (BSS end 0x$ALL_BSS_END)"
 
-SPRITE_SOURCE="$ROOT/test/fixtures/opaque_sprite_method_only.rkr"
-if ! "$ROOT/rock" --target=zxn "$SPRITE_SOURCE" "$TMPDIR_AUDIT/sprite.exe" \
+SPRITE_SOURCE="$ROOT/test/fixtures/sprite_type_methods.rift"
+if ! "$ROOT/rift" --target=zxn "$SPRITE_SOURCE" "$TMPDIR_AUDIT/sprite.exe" \
     >"$TMPDIR_AUDIT/sprite.log" 2>&1; then
   cat "$TMPDIR_AUDIT/sprite.log"
   echo "FAIL: auto-selected Sprite did not link for ZXN" >&2
   exit 1
 fi
-grep -q 'RTL components: .*core sprite' "$TMPDIR_AUDIT/sprite.log"
-grep -q '/lib/sprite.c' "$TMPDIR_AUDIT/sprite.log"
-echo "PASS: opaque Sprite auto-links on ZXN"
+grep -q '^RTL components: sprite ' "$TMPDIR_AUDIT/sprite.log"
+grep -q 'ZXN profile: startup=31, .*tiny-core=1' "$TMPDIR_AUDIT/sprite.log"
+grep -q '/lib/zxn/sprite.asm' "$TMPDIR_AUDIT/sprite.log"
+if grep -q '/lib/sprite_host.c' "$TMPDIR_AUDIT/sprite.log"; then
+  echo "FAIL: ZXN sprite build linked host-only state" >&2
+  exit 1
+fi
+echo "PASS: byte-backed Sprite API auto-links on ZXN"

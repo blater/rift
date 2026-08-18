@@ -1,0 +1,5 @@
+union MaybeSprite { Sprite SomeSprite, NoSprite }
+
+sub main() {
+  MaybeSprite invalid := SomeSprite();
+}

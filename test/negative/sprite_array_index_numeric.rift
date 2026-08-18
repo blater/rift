@@ -1,0 +1,5 @@
+sub main() {
+  Sprite[] sprites;
+  append(sprites, Sprite(1));
+  sprites[0] := 6;
+}

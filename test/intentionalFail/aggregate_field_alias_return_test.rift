@@ -1,0 +1,33 @@
+// Aggregate field aliasing — Shape 2.
+//
+// Returning a record whose aggregate field aliases a callee local: the
+// callee's scope cleanup releases the local, freeing the block that the
+// returned record's field still aliases. See
+// wikiroot/pages/concepts/aggregate-field-aliasing-leak.md.
+//
+// EXPECTED TO FAIL today: ret.i.x reads through a freed Inner block.
+// Will pass once record-literal field-init retains aggregate borrower
+// sources AND records carry field-walking destructors.
+
+include "../Assert.rift"
+
+Assert as;
+
+record Inner { int x }
+record Outer { Inner i, int n }
+
+sub mkInner(int v) returns Inner {
+  Inner r := {x := v};
+  return r;
+}
+
+sub mkOuter(int n) returns Outer {
+  Inner ii := mkInner(7);
+  Outer o := {i := ii, n := n};
+  return o;  // ii released by callee scope cleanup; o.i now dangles
+}
+
+sub main() {
+  Outer ret := mkOuter(99);
+  as.AssertEQ("returned record's inner field must survive callee scope", 7, ret.i.x);
+}

@@ -1,5 +1,5 @@
 /*****************************************************
- * ROCKER LEXER HEADER
+ * RIFT LEXER HEADER
  * MIT License
  * Copyright (c) 2024 Paul Passeron
  *****************************************************/

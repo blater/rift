@@ -1,7 +1,7 @@
 /tmp/tmpBBfSKfVW.asm:
      1                          MODULE fundefs_c
-     2                          LINE 0, "/Users/blater/src/rock/src/lib/fundefs.c"
-/Users/blater/src/rock/src/lib/fundefs.c:
+     2                          LINE 0, "/Users/blater/src/rift/src/lib/fundefs.c"
+/Users/blater/src/rift/src/lib/fundefs.c:
                                 
      1                          ;--------------------------------------------------------
      2                          ; File Created by SDCC : free open source ISO C Compiler
@@ -214,9 +214,9 @@
    209                          ;--------------------------------------------------------
    210                          	GLOBAL ___to_word_byte
    211                          	GLOBAL ___to_byte_word
-   212                          	GLOBAL ___rock_substr_index_base
+   212                          	GLOBAL ___rift_substr_index_base
    213                          	GLOBAL _string_to_cstr
-   214                          	GLOBAL ___rock_make_string
+   214                          	GLOBAL ___rift_make_string
    215                          	GLOBAL _get_nth_char
    216                          	GLOBAL _get_string_length
    217                          	GLOBAL _str_eq
@@ -429,9 +429,9 @@
    424                          	GLOBAL ___internal_pop_array
    425                          	GLOBAL ___internal_push_array
    426                          	GLOBAL ___internal_make_array
-   427                          	GLOBAL _exit_rocker
-   428                          	GLOBAL _end_rocker
-   429                          	GLOBAL _init_rocker
+   427                          	GLOBAL _exit_rift
+   428                          	GLOBAL _end_rift
+   429                          	GLOBAL _init_rift
    430                          	GLOBAL _reallocate_compiler_persistent
    431                          	GLOBAL _reallocate_compiler
    432                          	GLOBAL _allocate_compiler_persistent
@@ -764,7 +764,7 @@
    759                          
    760                          ; .area _INITIALIZED removed by z88dk
    761                          
-   762                          ___rock_substr_index_base:
+   762                          ___rift_substr_index_base:
    763                          	DEFS 2
    764                          
    765                          ENDIF
@@ -851,9 +851,9 @@
    846  0068  dde1              	pop	ix
    847  006a  c9                	ret
    848                          ;	---------------------------------
-   849                          ; Function __rock_make_string
+   849                          ; Function __rift_make_string
    850                          ; ---------------------------------
-   851                          ___rock_make_string:
+   851                          ___rift_make_string:
    852  006b  dde5              	push	ix
    853  006d  dd210000          	ld	ix,0
    854  0071  dd39              	add	ix,sp
@@ -1045,7 +1045,7 @@
   1040  01a4  dd6e04            	ld	l,(ix+4)
   1041  01a7  dd6605            	ld	h,(ix+5)
   1042  01aa  e5                	push	hl
-  1043  01ab  cd6b00            	call	___rock_make_string
+  1043  01ab  cd6b00            	call	___rift_make_string
   1044  01ae  f1                	pop	af
   1045  01af  f1                	pop	af
   1046  01b0  f1                	pop	af
@@ -1082,7 +1082,7 @@
   1077  01e1  dd6e04            	ld	l,(ix+4)
   1078  01e4  dd6605            	ld	h,(ix+5)
   1079  01e7  e5                	push	hl
-  1080  01e8  cd6b00            	call	___rock_make_string
+  1080  01e8  cd6b00            	call	___rift_make_string
   1081  01eb  f1                	pop	af
   1082  01ec  f1                	pop	af
   1083  01ed  f1                	pop	af
@@ -1133,7 +1133,7 @@
   1128  023c  dd6e04            	ld	l,(ix+4)
   1129  023f  dd6605            	ld	h,(ix+5)
   1130  0242  e5                	push	hl
-  1131  0243  cd6b00            	call	___rock_make_string
+  1131  0243  cd6b00            	call	___rift_make_string
   1132  0246  f1                	pop	af
   1133  0247  f1                	pop	af
   1134  0248  f1                	pop	af
@@ -1243,7 +1243,7 @@
   1238  02f1  dd6e04            	ld	l,(ix+4)
   1239  02f4  dd6605            	ld	h,(ix+5)
   1240  02f7  e5                	push	hl
-  1241  02f8  cd6b00            	call	___rock_make_string
+  1241  02f8  cd6b00            	call	___rift_make_string
   1242  02fb  ddf9              	ld	sp,ix
   1243  02fd  dde1              	pop	ix
   1244  02ff  c9                	ret
@@ -1391,7 +1391,7 @@
   1386  03e6  dd6e04            	ld	l,(ix+4)
   1387  03e9  dd6605            	ld	h,(ix+5)
   1388  03ec  e5                	push	hl
-  1389  03ed  cd6b00            	call	___rock_make_string
+  1389  03ed  cd6b00            	call	___rift_make_string
   1390  03f0  f1                	pop	af
   1391  03f1  f1                	pop	af
   1392  03f2  f1                	pop	af
@@ -1422,7 +1422,7 @@
   1417  040b  dd6e04            	ld	l,(ix+4)
   1418  040e  dd6605            	ld	h,(ix+5)
   1419  0411  e5                	push	hl
-  1420  0412  cd6b00            	call	___rock_make_string
+  1420  0412  cd6b00            	call	___rift_make_string
   1421  0415  f1                	pop	af
   1422  0416  f1                	pop	af
   1423  0417  f1                	pop	af
@@ -1447,7 +1447,7 @@
   1442  0422  dd210000          	ld	ix,0
   1443  0426  dd39              	add	ix,sp
   1444  0428  dd7e04            	ld	a,(ix+4)
-  1445  042b  210000            	ld	hl,___rock_substr_index_base
+  1445  042b  210000            	ld	hl,___rift_substr_index_base
   1446  042e  77                	ld	(hl), a
   1447  042f  dd7e05            	ld	a,(ix+5)
   1448  0432  23                	inc	hl
@@ -1458,7 +1458,7 @@
   1453                          ; Function get_string_index_base
   1454                          ; ---------------------------------
   1455                          _get_string_index_base:
-  1456  0437  2a0000            	ld	hl, (___rock_substr_index_base)
+  1456  0437  2a0000            	ld	hl, (___rift_substr_index_base)
   1457  043a  c9                	ret
   1458                          ;	---------------------------------
   1459                          ; Function __normalize_substr_idx
@@ -1478,7 +1478,7 @@
   1473  0457  180f              	jr	l___normalize_substr_idx_00103
   1474                          l___normalize_substr_idx_00102:
   1475  0459  dd7e04            	ld	a,(ix+4)
-  1476  045c  210000            	ld	hl,___rock_substr_index_base
+  1476  045c  210000            	ld	hl,___rift_substr_index_base
   1477  045f  96                	sub	a, (hl)
   1478  0460  5f                	ld	e, a
   1479  0461  dd7e05            	ld	a,(ix+5)
@@ -1532,7 +1532,7 @@
   1527  04b5  f1                	pop	af
   1528  04b6  210100            	ld	hl,0x0001
   1529  04b9  e3                	ex	(sp),hl
-  1530  04ba  cd0000            	call	_exit_rocker
+  1530  04ba  cd0000            	call	_exit_rift
   1531  04bd  f1                	pop	af
   1532                          l___substring_from_00102:
   1533  04be  dd7e08            	ld	a,(ix+8)
@@ -1580,7 +1580,7 @@
   1575  0504  dd6e04            	ld	l,(ix+4)
   1576  0507  dd6605            	ld	h,(ix+5)
   1577  050a  e5                	push	hl
-  1578  050b  cd6b00            	call	___rock_make_string
+  1578  050b  cd6b00            	call	___rift_make_string
   1579  050e  ddf9              	ld	sp,ix
   1580  0510  dde1              	pop	ix
   1581  0512  c9                	ret
@@ -1651,7 +1651,7 @@
   1639  0572  f1                	pop	af
   1640  0573  210100            	ld	hl,0x0001
   1641  0576  e3                	ex	(sp),hl
-  1642  0577  cd0000            	call	_exit_rocker
+  1642  0577  cd0000            	call	_exit_rift
   1643  057a  f1                	pop	af
   1644  057b  d1                	pop	de
   1645                          l___substring_range_00102:
@@ -1686,7 +1686,7 @@
   1674  05af  f1                	pop	af
   1675  05b0  210100            	ld	hl,0x0001
   1676  05b3  e3                	ex	(sp),hl
-  1677  05b4  cd0000            	call	_exit_rocker
+  1677  05b4  cd0000            	call	_exit_rift
   1678  05b7  f1                	pop	af
   1679  05b8  d1                	pop	de
   1680                          l___substring_range_00105:
@@ -1735,7 +1735,7 @@
   1723  05fb  dd6e04            	ld	l,(ix+4)
   1724  05fe  dd6605            	ld	h,(ix+5)
   1725  0601  e5                	push	hl
-  1726  0602  cd6b00            	call	___rock_make_string
+  1726  0602  cd6b00            	call	___rift_make_string
   1727  0605  ddf9              	ld	sp,ix
   1728  0607  dde1              	pop	ix
   1729  0609  c9                	ret
@@ -1836,7 +1836,7 @@
   1811  0674  dd6e04            	ld	l,(ix+4)
   1812  0677  dd6605            	ld	h,(ix+5)
   1813  067a  e5                	push	hl
-  1814  067b  cd6b00            	call	___rock_make_string
+  1814  067b  cd6b00            	call	___rift_make_string
   1815  067e  ddf9              	ld	sp,ix
   1816  0680  dde1              	pop	ix
   1817  0682  c9                	ret
@@ -1897,7 +1897,7 @@
   1872  06d0  dd6e04            	ld	l,(ix+4)
   1873  06d3  dd6605            	ld	h,(ix+5)
   1874  06d6  e5                	push	hl
-  1875  06d7  cd6b00            	call	___rock_make_string
+  1875  06d7  cd6b00            	call	___rift_make_string
   1876  06da  ddf9              	ld	sp,ix
   1877  06dc  dde1              	pop	ix
   1878  06de  c9                	ret
@@ -1980,7 +1980,7 @@
   1955  074e  dd6e04            	ld	l,(ix+4)
   1956  0751  dd6605            	ld	h,(ix+5)
   1957  0754  e5                	push	hl
-  1958  0755  cd6b00            	call	___rock_make_string
+  1958  0755  cd6b00            	call	___rift_make_string
   1959  0758  ddf9              	ld	sp,ix
   1960  075a  dde1              	pop	ix
   1961  075c  c9                	ret
@@ -2072,7 +2072,7 @@
   2047  07d9  dd6e04            	ld	l,(ix+4)
   2048  07dc  dd6605            	ld	h,(ix+5)
   2049  07df  e5                	push	hl
-  2050  07e0  cd6b00            	call	___rock_make_string
+  2050  07e0  cd6b00            	call	___rift_make_string
   2051  07e3  ddf9              	ld	sp,ix
   2052  07e5  dde1              	pop	ix
   2053  07e7  c9                	ret
@@ -2103,7 +2103,7 @@
   2078  0803  dde1              	pop	ix
   2079  0805  c9                	ret
   2080                          	SECTION data_compiler
-  2081                          ___rock_substr_index_base:
+  2081                          ___rift_substr_index_base:
   2082  0000  0100              	DEFW +0x0001
   2083                          	SECTION IGNORE
   2084                          

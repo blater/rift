@@ -40,7 +40,7 @@ int main(void) {
   int matches = 1;
 
   zxn_test_begin();
-  rock_print_bytes(text, 8);
+  rift_print_bytes(text, 8);
   if (!glyph_matches(0, 0, 'A')) matches = 0;
   if (!glyph_matches(1, 0, 'D')) matches = 0;
   if (!glyph_matches(1, 1, 'E')) matches = 0;
@@ -48,8 +48,8 @@ int main(void) {
 
   /* Move to the bottom, print a marker, then force a scroll. The marker must
    * move up one character row and the newly exposed bottom row must clear. */
-  for (column = 0; column < 22; column++) rock_print_bytes("\n", 1);
-  rock_print_bytes("X\n", 2);
+  for (column = 0; column < 22; column++) rift_print_bytes("\n", 1);
+  rift_print_bytes("X\n", 2);
   if (!glyph_matches(22, 0, 'X')) matches = 0;
   if (!row_is_clear(23)) matches = 0;
   if (matches)

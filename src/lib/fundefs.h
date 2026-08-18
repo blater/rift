@@ -1,5 +1,5 @@
-#ifndef ROCKER_FUNDEFS
-#define ROCKER_FUNDEFS
+#ifndef RIFT_FUNDEFS
+#define RIFT_FUNDEFS
 
 #include "typedefs.h"
 #include "asm_interop.h"
@@ -7,7 +7,7 @@
 #include "light_console.h"
 
 void print(string s);
-void rock_print_bytes(const char *data, size_t length);
+void rift_print_bytes(const char *data, size_t length);
 char *string_to_cstr(string s);
 void cstr_to_string(string *out, char *cstr);
 char charAt(string s, int n);
@@ -28,7 +28,7 @@ void __get_abs_path_impl(string *out, string path);
  *   - backing->refcount  < 0xFFFF      longlived; inc/dec
  *
  * On release dropping refcount to zero, the block returns to its
- * address-ordered free list via rock_longlived_free.
+ * address-ordered free list via rift_longlived_free.
  *
  * These helpers are call-site-safe at every site listed in §7.6:
  *   variable initialiser, slot write, scope exit, parameter entry/exit,
@@ -54,15 +54,15 @@ void __string_release(string s);
 string __return_string(string s);
 
 /* Refcount on aggregate handles (records, unions, modules). Universal
- * block header sits at `(rock_block_header *)payload - 1`. NULL payloads
- * are no-ops; static handles (ROCK_RC_STATIC) pass through. */
+ * block header sits at `(rift_block_header *)payload - 1`. NULL payloads
+ * are no-ops; static handles (RIFT_RC_STATIC) pass through. */
 void *__handle_retain(void *payload);
 void  __handle_release(void *payload);
 
 /* Return materialisation for aggregate handles. Behaviourally identical
  * to __handle_retain — kept as a distinct symbol so ADR-0003 §16.3
  * structural greps can pick out return sites from generic retains. */
-#if defined(__SDCC) && defined(ROCK_ZXN_TINY_CORE)
+#if defined(__SDCC) && defined(RIFT_ZXN_TINY_CORE)
 #define __return_handle(payload) (payload)
 #else
 static inline void *__return_handle(void *payload) {
@@ -71,19 +71,19 @@ static inline void *__return_handle(void *payload) {
 #endif
 
 // Configurable string index base (0 = zero-indexed, 1 = one-indexed)
-extern int __rock_substr_index_base;
+extern int __rift_substr_index_base;
 void set_string_index_base(int base);
 int  get_string_index_base(void);
 void __substring_from(string *out, string s, int start);
 void __substring_range(string *out, string s, int start, int end);
 
 // Helper for string construction (replaces C99 compound literals)
-void __rock_make_string(string *out, const char *data, size_t length);
+void __rift_make_string(string *out, const char *data, size_t length);
 
 /* ADR-0003 §7.1: allocate writable backing in the longlived pool and
  * populate the descriptor's `backing` field. Caller writes `length+1`
  * bytes into out->data (including the null terminator). */
-void __rock_make_longlived_string(string *out, size_t length);
+void __rift_make_longlived_string(string *out, size_t length);
 
 // byte/word/dword/float casting
 int    __to_int_byte(byte b);
@@ -144,4 +144,4 @@ static inline string get_abs_path(string path) {
 #endif
 #define to_float(x)  ((float)(x))
 
-#endif // ROCKER_FUNDEFS
+#endif // RIFT_FUNDEFS

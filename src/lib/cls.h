@@ -1,8 +1,8 @@
-#ifndef ROCK_CLS_H
-#define ROCK_CLS_H
+#ifndef RIFT_CLS_H
+#define RIFT_CLS_H
 
 /* Clear the screen. On ZXN calls ROM CLS ($0DAF); on the host clears
  * the termbox2 back buffer (or prints a form-feed in the fallback). */
 void cls(void);
 
-#endif /* ROCK_CLS_H */
+#endif /* RIFT_CLS_H */

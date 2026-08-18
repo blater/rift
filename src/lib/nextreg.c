@@ -3,8 +3,8 @@
 /* Scratch bytes for the inline-asm routines — same pattern as plot.c.
  * SDCC's calling convention is awkward to read from naked asm, so we
  * stash args in file-scope statics and load via absolute LD A,(nn). */
-static byte rock_nr_reg;
-static byte rock_nr_val;
+static byte rift_nr_reg;
+static byte rift_nr_val;
 
 #ifdef __SDCC
 
@@ -14,42 +14,42 @@ static byte rock_nr_val;
  * shorter to express here and works identically. */
 
 void next_reg_set(byte reg, byte val) {
-  rock_nr_reg = reg;
-  rock_nr_val = val;
+  rift_nr_reg = reg;
+  rift_nr_val = val;
   __asm
-    ld  a, (_rock_nr_reg)
+    ld  a, (_rift_nr_reg)
     ld  bc, #0x243B
     out (c), a
-    ld  a, (_rock_nr_val)
+    ld  a, (_rift_nr_val)
     ld  bc, #0x253B
     out (c), a
   __endasm;
 }
 
 byte next_reg_get(byte reg) {
-  rock_nr_reg = reg;
+  rift_nr_reg = reg;
   __asm
-    ld  a, (_rock_nr_reg)
+    ld  a, (_rift_nr_reg)
     ld  bc, #0x243B
     out (c), a
     ld  bc, #0x253B
     in  a, (c)
-    ld  (_rock_nr_val), a
+    ld  (_rift_nr_val), a
   __endasm;
-  return rock_nr_val;
+  return rift_nr_val;
 }
 
 #else
 
 /* Host: keep a 256-byte shadow of the Next register file. */
-static byte rock_nr_shadow[256];
+static byte rift_nr_shadow[256];
 
 void next_reg_set(byte reg, byte val) {
-  rock_nr_shadow[reg] = val;
+  rift_nr_shadow[reg] = val;
 }
 
 byte next_reg_get(byte reg) {
-  return rock_nr_shadow[reg];
+  return rift_nr_shadow[reg];
 }
 
 #endif

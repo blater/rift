@@ -1,0 +1,16 @@
+include "Assert.rift"
+
+// Host smoke test for sleep/beep/inkey/keypress. Under run_tests.sh
+// stdout is piped → termbox2 capability is off, so inkey returns 0
+// and beep is a bell char. We only assert calls return normally.
+
+sub main() {
+  Assert a;
+  byte k := -99;
+
+  sleep(1);
+  beep(440, 5);
+  k := inkey();
+  a.AssertEQ("inkey returns 0 when nothing pressed (fallback)", 0, k);
+  a.AssertEQ("tier1 smoke", 1, 1);
+}

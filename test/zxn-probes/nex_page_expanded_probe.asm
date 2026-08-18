@@ -1,11 +1,11 @@
 SECTION code_user
 
-PUBLIC _rock_probe_loaded_expanded_page
-EXTERN rock_probe_check_page
+PUBLIC _rift_probe_loaded_expanded_page
+EXTERN rift_probe_check_page
 
 INCLUDE "nex_page_ramp.inc"
 
-_rock_probe_loaded_expanded_page:
+_rift_probe_loaded_expanded_page:
   ld a, $56
   ld bc, $243b
   out (c), a
@@ -15,7 +15,7 @@ _rock_probe_loaded_expanded_page:
 
   ld a, 96
   ld d, $c3
-  call rock_probe_check_page
+  call rift_probe_check_page
   jr c, expanded_page_fail
 
   ld hl, 1
@@ -49,4 +49,4 @@ expanded_page_restore_ok:
   ret
 
 SECTION PAGE_96
-  ROCK_PROBE_RAMP $c3
+  RIFT_PROBE_RAMP $c3

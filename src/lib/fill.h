@@ -1,5 +1,5 @@
-#ifndef ROCK_FILL_H
-#define ROCK_FILL_H
+#ifndef RIFT_FILL_H
+#define RIFT_FILL_H
 
 #include "typedefs.h"
 
@@ -28,4 +28,4 @@
  */
 void fill(byte x0, byte y0, byte x1, byte y1);
 
-#endif /* ROCK_FILL_H */
+#endif /* RIFT_FILL_H */

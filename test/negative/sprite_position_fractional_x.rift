@@ -1,0 +1,4 @@
+sub main() {
+  Sprite sprite := Sprite(0);
+  sprite.position(10.5, 20);
+}

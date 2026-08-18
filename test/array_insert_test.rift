@@ -1,0 +1,101 @@
+include "Assert.rift"
+Assert a;
+
+sub testInsertIntAtBeginning() {
+  int[] arr;
+  append(arr, 1);
+  append(arr, 2);
+  append(arr, 3);
+  // arr = [1, 2, 3]
+
+  insert(arr, 0, 99);
+  // arr should be [99, 1, 2, 3]
+
+  a.AssertEQ("insert int at beginning - length", 4, length(arr));
+  a.AssertEQ("insert int at beginning - index 0", 99, get(arr, 0));
+  a.AssertEQ("insert int at beginning - index 1", 1, get(arr, 1));
+  a.AssertEQ("insert int at beginning - index 2", 2, get(arr, 2));
+  a.AssertEQ("insert int at beginning - index 3", 3, get(arr, 3));
+}
+
+sub testInsertIntInMiddle() {
+  int[] arr;
+  append(arr, 1);
+  append(arr, 2);
+  append(arr, 3);
+  // arr = [1, 2, 3]
+
+  insert(arr, 1, 99);
+  // arr should be [1, 99, 2, 3]
+
+  a.AssertEQ("insert int in middle - length", 4, length(arr));
+  a.AssertEQ("insert int in middle - index 0", 1, get(arr, 0));
+  a.AssertEQ("insert int in middle - index 1", 99, get(arr, 1));
+  a.AssertEQ("insert int in middle - index 2", 2, get(arr, 2));
+  a.AssertEQ("insert int in middle - index 3", 3, get(arr, 3));
+}
+
+sub testInsertIntAtEnd() {
+  int[] arr;
+  append(arr, 1);
+  append(arr, 2);
+  append(arr, 3);
+  // arr = [1, 2, 3]
+
+  insert(arr, 3, 99);
+  // arr should be [1, 2, 3, 99]
+
+  a.AssertEQ("insert int at end - length", 4, length(arr));
+  a.AssertEQ("insert int at end - index 0", 1, get(arr, 0));
+  a.AssertEQ("insert int at end - index 1", 2, get(arr, 1));
+  a.AssertEQ("insert int at end - index 2", 3, get(arr, 2));
+  a.AssertEQ("insert int at end - index 3", 99, get(arr, 3));
+}
+
+sub testInsertStringInMiddle() {
+  string[] arr;
+  append(arr, "Alice");
+  append(arr, "Bob");
+  append(arr, "Charlie");
+  // arr = ["Alice", "Bob", "Charlie"]
+
+  insert(arr, 1, "Zoe");
+  // arr should be ["Alice", "Zoe", "Bob", "Charlie"]
+
+  a.AssertEQ("insert string in middle - length", 4, length(arr));
+  a.AssertEquals("insert string in middle - index 0", "Alice", get(arr, 0));
+  a.AssertEquals("insert string in middle - index 1", "Zoe", get(arr, 1));
+  a.AssertEquals("insert string in middle - index 2", "Bob", get(arr, 2));
+  a.AssertEquals("insert string in middle - index 3", "Charlie", get(arr, 3));
+}
+
+sub testMultipleSequentialInserts() {
+  int[] arr;
+  append(arr, 1);
+  append(arr, 5);
+  // arr = [1, 5]
+
+  insert(arr, 1, 2);
+  // arr = [1, 2, 5]
+
+  insert(arr, 2, 3);
+  // arr = [1, 2, 3, 5]
+
+  insert(arr, 3, 4);
+  // arr = [1, 2, 3, 4, 5]
+
+  a.AssertEQ("sequential inserts - length", 5, length(arr));
+  a.AssertEQ("sequential inserts - index 0", 1, get(arr, 0));
+  a.AssertEQ("sequential inserts - index 1", 2, get(arr, 1));
+  a.AssertEQ("sequential inserts - index 2", 3, get(arr, 2));
+  a.AssertEQ("sequential inserts - index 3", 4, get(arr, 3));
+  a.AssertEQ("sequential inserts - index 4", 5, get(arr, 4));
+}
+
+sub main() {
+  testInsertIntAtBeginning();
+  testInsertIntInMiddle();
+  testInsertIntAtEnd();
+  testInsertStringInMiddle();
+  testMultipleSequentialInserts();
+}

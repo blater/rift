@@ -4,20 +4,20 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 TOOL="$ROOT/tools/maintain-zesarux-fork"
-TMP=$(mktemp -d "${TMPDIR:-/tmp}/rock-zesarux-maintenance.XXXXXX")
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/rift-zesarux-maintenance.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 
 UPSTREAM="$TMP/upstream.git"
 ORIGIN="$TMP/origin.git"
 SEED="$TMP/seed"
 CHECKOUT="$TMP/zesarux"
-FAKE_ROCK="$TMP/rock"
+FAKE_RIFT="$TMP/rift"
 
 git init --bare --initial-branch=main "$UPSTREAM" >/dev/null
 git init --bare --initial-branch=main "$ORIGIN" >/dev/null
 git init --initial-branch=main "$SEED" >/dev/null
-git -C "$SEED" config user.name "Rock test"
-git -C "$SEED" config user.email "rock-test@example.invalid"
+git -C "$SEED" config user.name "Rift test"
+git -C "$SEED" config user.email "rift-test@example.invalid"
 echo baseline >"$SEED/core.txt"
 mkdir -p "$SEED/src"
 printf 'all:\n\t@true\n' >"$SEED/src/Makefile"
@@ -31,14 +31,14 @@ git -C "$SEED" push upstream main >/dev/null
 git -C "$SEED" push origin main >/dev/null
 
 git clone "$ORIGIN" "$CHECKOUT" >/dev/null
-git -C "$CHECKOUT" config user.name "Rock test"
-git -C "$CHECKOUT" config user.email "rock-test@example.invalid"
+git -C "$CHECKOUT" config user.name "Rift test"
+git -C "$CHECKOUT" config user.email "rift-test@example.invalid"
 git -C "$CHECKOUT" remote add upstream "$UPSTREAM"
-mkdir -p "$FAKE_ROCK/tools"
+mkdir -p "$FAKE_RIFT/tools"
 printf '#!/usr/bin/env bash\nexit 0\n' \
-  >"$FAKE_ROCK/tools/test-zesarux-zrcp"
-chmod +x "$FAKE_ROCK/tools/test-zesarux-zrcp"
-printf 'test-zxn:\n\t@true\n' >"$FAKE_ROCK/Makefile"
+  >"$FAKE_RIFT/tools/test-zesarux-zrcp"
+chmod +x "$FAKE_RIFT/tools/test-zesarux-zrcp"
+printf 'test-zxn:\n\t@true\n' >"$FAKE_RIFT/Makefile"
 echo fork >"$CHECKOUT/README.md"
 git -C "$CHECKOUT" add README.md
 git -C "$CHECKOUT" commit -m "Fork README" >/dev/null
@@ -123,7 +123,7 @@ git -C "$CHECKOUT" diff --quiet main:README.md \
 PUBLISHED_MAIN=$(git -C "$CHECKOUT" rev-parse main)
 PUBLISHED_INTEGRATION=$(git -C "$CHECKOUT" \
   rev-parse integration/zrcp-automation)
-ZESARUX_SOURCE="$CHECKOUT" ZESARUX_ROCK_ROOT="$FAKE_ROCK" \
+ZESARUX_SOURCE="$CHECKOUT" ZESARUX_RIFT_ROOT="$FAKE_RIFT" \
   "$TOOL" publish validation-readme-overlay >"$TMP/publish.log"
 [[ $(git -C "$CHECKOUT" rev-parse origin/main) == "$PUBLISHED_MAIN" ]]
 [[ $(git -C "$CHECKOUT" rev-parse origin/integration/zrcp-automation) == \

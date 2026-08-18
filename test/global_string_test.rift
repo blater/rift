@@ -1,0 +1,10 @@
+include "Assert.rift"
+Assert a;
+
+string greeting := "hello";
+
+sub main() {
+  a.AssertEquals("global init", "hello", greeting);
+  greeting := "world";
+  a.AssertEquals("global reassign", "world", greeting);
+}

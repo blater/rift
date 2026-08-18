@@ -1,7 +1,7 @@
 /tmp/tmpCv7iCZeu.asm:
      1                          MODULE asm_interop_c
-     2                          LINE 0, "/Users/blater/src/rock/src/lib/asm_interop.c"
-/Users/blater/src/rock/src/lib/asm_interop.c:
+     2                          LINE 0, "/Users/blater/src/rift/src/lib/asm_interop.c"
+/Users/blater/src/rift/src/lib/asm_interop.c:
                                 
      1                          ;--------------------------------------------------------
      2                          ; File Created by SDCC : free open source ISO C Compiler

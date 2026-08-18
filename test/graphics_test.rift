@@ -1,0 +1,14 @@
+include "Assert.rift"
+
+sub main() {
+  Assert a;
+
+  graphics off;
+  print(to_byte(1), to_byte(1), "graphics off fallback");
+
+  graphics on;
+  print(to_byte(2), to_byte(2), "graphics on fallback under piped stdout");
+
+  graphics off;
+  a.AssertEQ("graphics on/off statements", 1, 1);
+}

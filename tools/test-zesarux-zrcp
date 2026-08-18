@@ -1,0 +1,173 @@
+#!/usr/bin/env python3
+"""Verify the patched ZEsarUX ZRCP contract used by Rift's ZXN tests."""
+
+import argparse
+import json
+import os
+from pathlib import Path
+import shutil
+import socket
+import subprocess
+import tempfile
+import time
+
+
+DEFAULT_ZESARUX = Path("/Users/blater/src/zesarux/src/zesarux")
+
+
+class ProbeError(RuntimeError):
+  pass
+
+
+def reserve_port():
+  with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+    listener.bind(("127.0.0.1", 0))
+    return listener.getsockname()[1]
+
+
+def zrcp_command(port, command, timeout):
+  with socket.create_connection(("127.0.0.1", port), timeout=timeout) as conn:
+    conn.settimeout(0.2)
+    greeting = b""
+    deadline = time.monotonic() + timeout
+    while b">" not in greeting and time.monotonic() < deadline:
+      try:
+        greeting += conn.recv(4096)
+      except socket.timeout:
+        continue
+    if b">" not in greeting:
+      raise ProbeError("ZRCP prompt was not received")
+
+    conn.sendall((command + "\n").encode("ascii"))
+    response = b""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+      try:
+        chunk = conn.recv(4096)
+      except socket.timeout:
+        break
+      if not chunk:
+        break
+      response += chunk
+      if b">" in response:
+        break
+    return response.decode("utf-8", errors="replace")
+
+
+def wait_for_zrcp(port, timeout):
+  deadline = time.monotonic() + timeout
+  while time.monotonic() < deadline:
+    try:
+      zrcp_command(port, "noop", timeout)
+      return
+    except (OSError, ProbeError):
+      time.sleep(0.05)
+  raise ProbeError("ZRCP listener did not become ready")
+
+
+def listener_description(process, port):
+  if not shutil.which("lsof"):
+    raise ProbeError("lsof is required to verify the listener address")
+  output = subprocess.check_output(
+      ["lsof", "-nP", "-a", "-p", str(process.pid),
+       "-iTCP:%d" % port, "-sTCP:LISTEN"],
+      text=True,
+      timeout=3)
+  expected = "127.0.0.1:%d" % port
+  if expected not in output:
+    raise ProbeError("ZRCP listener is not loopback-only:\n" + output)
+  return output.splitlines()[-1]
+
+
+def stop_process(process):
+  if process.poll() is not None:
+    return
+  try:
+    os.killpg(process.pid, 15)
+    process.wait(timeout=2)
+  except ProcessLookupError:
+    return
+  except subprocess.TimeoutExpired:
+    try:
+      os.killpg(process.pid, 9)
+    except ProcessLookupError:
+      return
+    process.wait(timeout=2)
+
+
+def probe(binary, timeout):
+  if not binary.is_file() or not os.access(binary, os.X_OK):
+    raise ProbeError("ZEsarUX binary is not executable: %s" % binary)
+  if b"--remoteprotocol-host" not in binary.read_bytes():
+    raise ProbeError("ZEsarUX does not expose --remoteprotocol-host")
+
+  artifacts = Path(tempfile.mkdtemp(prefix="rift-zesarux-zrcp-"))
+  port = reserve_port()
+  command = [
+      str(binary), "--noconfigfile", "--machine", "tbblue", "--vo", "null",
+      "--ao", "null", "--nosplash", "--nowelcomemessage", "--quickexit",
+      "--enable-remoteprotocol", "--remoteprotocol-host", "127.0.0.1",
+      "--remoteprotocol-port", str(port),
+  ]
+  stdout = (artifacts / "emulator.stdout.log").open("w", encoding="utf-8")
+  stderr = (artifacts / "emulator.stderr.log").open("w", encoding="utf-8")
+  process = subprocess.Popen(
+      command, stdout=stdout, stderr=stderr, start_new_session=True)
+  try:
+    wait_for_zrcp(port, timeout)
+    listener = listener_description(process, port)
+
+    step = zrcp_command(port, "enter-cpu-step", timeout)
+    if "command@cpu-step>" not in step:
+      raise ProbeError("headless CPU-step was not acknowledged:\n" + step)
+
+    reset = zrcp_command(port, "reset-tstates-partial-ack", timeout)
+    if "TSTATES-PARTIAL-RESET:000000000" not in reset:
+      raise ProbeError("partial t-state reset was not acknowledged:\n" + reset)
+
+    zrcp_command(port, "exit-cpu-step", timeout)
+    zrcp_command(port, "exit-emulator", timeout)
+    return_code = process.wait(timeout=timeout)
+    if return_code != 0:
+      raise ProbeError("ZEsarUX exited with status %d" % return_code)
+
+    result = {
+        "binary": str(binary),
+        "headless_cpu_step": "acknowledged",
+        "listener": listener,
+        "shutdown": "clean",
+        "status": "passed",
+        "tstate_reset": "acknowledged_zero",
+    }
+    shutil.rmtree(artifacts)
+    return result
+  except Exception as error:
+    raise ProbeError("%s\nartifacts: %s" % (error, artifacts)) from error
+  finally:
+    stdout.close()
+    stderr.close()
+    stop_process(process)
+
+
+def main():
+  parser = argparse.ArgumentParser(
+      description="Verify Rift's required ZEsarUX ZRCP patches")
+  parser.add_argument(
+      "--emulator-bin",
+      default=os.environ.get("ZESARUX_BIN", str(DEFAULT_ZESARUX)))
+  parser.add_argument("--timeout-seconds", type=float, default=5.0)
+  args = parser.parse_args()
+  if args.timeout_seconds <= 0:
+    parser.error("--timeout-seconds must be positive")
+  try:
+    result = probe(Path(args.emulator_bin).expanduser().resolve(),
+                   args.timeout_seconds)
+  except (OSError, ProbeError, subprocess.SubprocessError) as error:
+    print(json.dumps({"error": str(error), "status": "failed"}, sort_keys=True))
+    return 1
+  print(json.dumps(result, sort_keys=True))
+  return 0
+
+
+if __name__ == "__main__":
+  raise SystemExit(main())

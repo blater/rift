@@ -1,18 +1,18 @@
 #include "host_caps.h"
 
-rock_host_caps host_caps = {0};
+rift_host_caps host_caps = {0};
 
 #ifdef __SDCC
 
 /* ZXN target: we are running on the real machine. Every RTL component
  * backed by hardware / ROM is always available at full fidelity. */
-void rock_rtl_init(void) {
+void rift_rtl_init(void) {
   host_caps.print_at = 1;
   host_caps.ink      = 1;
   host_caps.plot     = 1;
 }
 
-void rock_rtl_shutdown(void) {
+void rift_rtl_shutdown(void) {
   /* Nothing to tear down on ZXN today. */
 }
 
@@ -57,7 +57,7 @@ static void host_tb_teardown(void) {
   host_caps_disable_graphics();
 }
 
-void rock_rtl_init(void) {
+void rift_rtl_init(void) {
   host_caps_disable_graphics();
 }
 
@@ -86,7 +86,7 @@ void graphics_off(void) {
   host_tb_teardown();
 }
 
-void rock_rtl_shutdown(void) {
+void rift_rtl_shutdown(void) {
   graphics_off();
 }
 

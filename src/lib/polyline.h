@@ -1,5 +1,5 @@
-#ifndef ROCK_POLYLINE_H
-#define ROCK_POLYLINE_H
+#ifndef RIFT_POLYLINE_H
+#define RIFT_POLYLINE_H
 
 #include "typedefs.h"
 
@@ -16,4 +16,4 @@
 
 void polyline(__internal_dynamic_array_t xs, __internal_dynamic_array_t ys);
 
-#endif /* ROCK_POLYLINE_H */
+#endif /* RIFT_POLYLINE_H */

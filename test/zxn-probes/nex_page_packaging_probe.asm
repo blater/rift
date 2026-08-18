@@ -1,14 +1,14 @@
 SECTION code_user
 
-PUBLIC _rock_probe_loaded_pages
-PUBLIC rock_probe_check_page
+PUBLIC _rift_probe_loaded_pages
+PUBLIC rift_probe_check_page
 
 INCLUDE "nex_page_ramp.inc"
 
 ; This leaf uses no writable globals while MMU6 is replaced.  It saves the
 ; original page on the slot-7 stack, checks every byte of each packaged 8 KiB
 ; ramp, restores and reads back MMU6, and returns 1/0 in HL.
-_rock_probe_loaded_pages:
+_rift_probe_loaded_pages:
   ld a, $56
   ld bc, $243b
   out (c), a
@@ -18,17 +18,17 @@ _rock_probe_loaded_pages:
 
   ld a, 24
   ld d, $00
-  call rock_probe_check_page
+  call rift_probe_check_page
   jr c, page_fail
 
   ld a, 25
   ld d, $a7
-  call rock_probe_check_page
+  call rift_probe_check_page
   jr c, page_fail
 
   ld a, 95
   ld d, $5a
-  call rock_probe_check_page
+  call rift_probe_check_page
   jr c, page_fail
 
   ld hl, 1
@@ -63,7 +63,7 @@ page_restore_ok:
 
 ; A = physical 8 KiB page, D = XOR mask for a repeated 0..255 ramp.
 ; Carry is set on mismatch and clear only after all 8192 bytes compare.
-rock_probe_check_page:
+rift_probe_check_page:
   ld e, a
   ld a, $56
   ld bc, $243b
@@ -93,10 +93,10 @@ check_page_fail:
   ret
 
 SECTION PAGE_24
-  ROCK_PROBE_RAMP $00
+  RIFT_PROBE_RAMP $00
 
 SECTION PAGE_25
-  ROCK_PROBE_RAMP $a7
+  RIFT_PROBE_RAMP $a7
 
 SECTION PAGE_95
-  ROCK_PROBE_RAMP $5a
+  RIFT_PROBE_RAMP $5a

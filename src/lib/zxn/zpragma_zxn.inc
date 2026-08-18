@@ -1,6 +1,6 @@
 // Keep code above the ULA and reserve a 2 KiB hardware stack at the top of
 // RAM. NEX does not need BASIC's system-variable area at 0x5b00-0x5fff, so
-// starting there gains 1,280 resident bytes for the bounded Rock pools. The
+// starting there gains 1,280 resident bytes for the bounded Rift pools. The
 // driver reads the z88dk link map and rejects any image whose BSS would enter
 // the reserved stack range.
 // The previous 24500/24481 layout placed the stack inside a larger NEX image.

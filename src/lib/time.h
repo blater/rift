@@ -1,5 +1,5 @@
-#ifndef ROCK_TIME_H
-#define ROCK_TIME_H
+#ifndef RIFT_TIME_H
+#define RIFT_TIME_H
 
 #include "typedefs.h"
 
@@ -12,9 +12,9 @@
  *
  * Host: nanosleep.
  */
-/* Rock-facing name is `sleep`; the C symbol is renamed to avoid a
+/* Rift-facing name is `sleep`; the C symbol is renamed to avoid a
  * collision with POSIX unistd.h `sleep(unsigned int)`. The generator
- * emits calls to rock_sleep directly. */
-void rock_sleep(word ms);
+ * emits calls to rift_sleep directly. */
+void rift_sleep(word ms);
 
-#endif /* ROCK_TIME_H */
+#endif /* RIFT_TIME_H */

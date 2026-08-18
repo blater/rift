@@ -1,0 +1,52 @@
+include "Assert.rift"
+
+// Smoke test for polyline(byte[], byte[]). polyline is a thin wrapper
+// over draw() — we only assert that every call returns normally. Under
+// run_tests.sh stdout is piped so host_caps.plot is 0 and the plain
+// text fallback runs.
+
+sub main() {
+  Assert a;
+
+  // Basic zig-zag — 4 points → 3 segments mixing H, V, diagonal.
+  byte[] xs := [];
+  byte[] ys := [];
+  append(xs, 10);  append(ys, 10);
+  append(xs, 50);  append(ys, 10);
+  append(xs, 50);  append(ys, 40);
+  append(xs, 90);  append(ys, 80);
+  polyline(xs, ys);
+
+  // Closed triangle outline (last point == first).
+  byte[] tx := [];
+  byte[] ty := [];
+  append(tx, 100); append(ty, 100);
+  append(tx, 150); append(ty, 100);
+  append(tx, 125); append(ty, 60);
+  append(tx, 100); append(ty, 100);
+  polyline(tx, ty);
+
+  // Length < 2 — degenerate, should be a no-op.
+  byte[] ex := [];
+  byte[] ey := [];
+  polyline(ex, ey);
+  append(ex, 5);
+  append(ey, 5);
+  polyline(ex, ey);
+
+  // Mismatched lengths — trims to the shorter.
+  byte[] mx := [];
+  byte[] my := [];
+  append(mx, 200); append(my, 10);
+  append(mx, 210); append(my, 20);
+  append(mx, 220);
+  polyline(mx, my);
+
+  // Polyline under XOR mode — draw twice, net zero.
+  over(1);
+  polyline(tx, ty);
+  polyline(tx, ty);
+  over(0);
+
+  a.AssertEQ("polyline smoke", 1, 1);
+}

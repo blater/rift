@@ -1,0 +1,4 @@
+enum Kind { Sprite, Other }
+
+sub main() {
+}

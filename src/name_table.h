@@ -1,5 +1,5 @@
 /*****************************************************
- * ROCKER NAME_TABLE HEADER
+ * RIFT NAME_TABLE HEADER
  * MIT License
  * Copyright (c) 2024 Paul Passeron
  *****************************************************/
@@ -19,6 +19,7 @@ typedef enum nt_kind {
   NT_BUILTIN_TYPE,
   NT_USER_TYPE,
   NT_OPAQUE_TYPE,
+  NT_NAMESPACE_TYPE,
   NT_ENUM_VARIANT,
 } nt_kind;
 

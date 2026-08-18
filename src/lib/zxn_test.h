@@ -1,10 +1,10 @@
-#ifndef ROCK_ZXN_TEST_H
-#define ROCK_ZXN_TEST_H
+#ifndef RIFT_ZXN_TEST_H
+#define RIFT_ZXN_TEST_H
 
 #include "typedefs.h"
 
 /* Test-only emulator result protocol. In ordinary builds these functions are
- * no-ops, so the shared Assert.rkr helper remains usable on the host. */
+ * no-ops, so the shared Assert.rift helper remains usable on the host. */
 void zxn_test_begin(void);
 void zxn_test_stage(const char *stage);
 void zxn_test_pass(void);

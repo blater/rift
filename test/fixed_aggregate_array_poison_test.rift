@@ -1,0 +1,57 @@
+include "Assert.rift"
+
+Assert as;
+
+record OwnedItem {
+  string name
+}
+
+@embed c
+  void poison_fixed_array(__internal_dynamic_array_t items) {
+    items->max_capacity = 2;
+    for (size_t i = 0; i < items->max_capacity * items->elem_size; i++) {
+      ((byte *)items->data)[i] = 0xa5;
+    }
+  }
+@end c
+
+@embed c
+  static void *tracked_handle;
+
+  void track_item(OwnedItem value) {
+    tracked_handle = value;
+  }
+@end c
+
+@embed c
+  int tracked_refs(int unused) {
+    (void)unused;
+    return (((rift_block_header *)tracked_handle) - 1)->refcount;
+  }
+@end c
+
+sub main() {
+  OwnedItem[] items;
+  poison_fixed_array(items);
+
+  OwnedItem first := {name := concat("fir", "st")};
+  OwnedItem second := {name := concat("sec", "ond")};
+  set(items, 0, first);
+  set(items, 1, second);
+  as.AssertEquals("owning fixed append ignores poisoned backing", "second",
+                  get(items, 1).name);
+
+  track_item(first);
+  int first_refs_before := tracked_refs(0);
+
+  OwnedItem replacement := {name := concat("replace", "ment")};
+  set(items, 0, replacement);
+
+  int first_refs_after := tracked_refs(0);
+  as.AssertEQ("owning replacement starts with two references", 2,
+              first_refs_before);
+  as.AssertEQ("owning replacement releases exactly one old reference", 1,
+              first_refs_after);
+  as.AssertEquals("owning replacement installs the new value", "replacement",
+                  get(items, 0).name);
+}

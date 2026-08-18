@@ -1,5 +1,5 @@
-#ifndef ROCK_BORDER_H
-#define ROCK_BORDER_H
+#ifndef RIFT_BORDER_H
+#define RIFT_BORDER_H
 
 #include "typedefs.h"
 
@@ -9,7 +9,7 @@
  * border_get()     - return the last colour written via border().
  *
  * The ZXN implementation writes to port $FE. The host implementation
- * keeps a shadow byte so Rock programs can still be tested under gcc.
+ * keeps a shadow byte so Rift programs can still be tested under gcc.
  */
 
 #define BORDER_BLACK   0
@@ -24,4 +24,4 @@
 void border(byte colour);
 byte border_get(void);
 
-#endif /* ROCK_BORDER_H */
+#endif /* RIFT_BORDER_H */

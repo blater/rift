@@ -1,7 +1,7 @@
 /tmp/tmpdYn5JbEG.asm:
      1                          MODULE fundefs_internal_c
-     2                          LINE 0, "/Users/blater/src/rock/src/lib/fundefs_internal.c"
-/Users/blater/src/rock/src/lib/fundefs_internal.c:
+     2                          LINE 0, "/Users/blater/src/rift/src/lib/fundefs_internal.c"
+/Users/blater/src/rift/src/lib/fundefs_internal.c:
                                 
      1                          ;--------------------------------------------------------
      2                          ; File Created by SDCC : free open source ISO C Compiler
@@ -266,9 +266,9 @@
    261                          	GLOBAL _dword_insert
    262                          	GLOBAL _fill_cmd_args
    263                          	GLOBAL _get_args
-   264                          	GLOBAL _init_rocker
-   265                          	GLOBAL _end_rocker
-   266                          	GLOBAL _exit_rocker
+   264                          	GLOBAL _init_rift
+   265                          	GLOBAL _end_rift
+   266                          	GLOBAL _exit_rift
    267                          ;--------------------------------------------------------
    268                          ; Externals used
    269                          ;--------------------------------------------------------
@@ -556,7 +556,7 @@
    551                          	GLOBAL ___to_string_byte
    552                          	GLOBAL ___to_byte_int
    553                          	GLOBAL ___to_int_byte
-   554                          	GLOBAL ___rock_make_string
+   554                          	GLOBAL ___rift_make_string
    555                          	GLOBAL ___substring_range
    556                          	GLOBAL ___substring_from
    557                          	GLOBAL _get_string_index_base
@@ -744,7 +744,7 @@
    739                          	GLOBAL __fmemopen_
    740                          	GLOBAL _poke
    741                          	GLOBAL _peek
-   742                          	GLOBAL ___rock_substr_index_base
+   742                          	GLOBAL ___rift_substr_index_base
    743                          	GLOBAL _stderr
    744                          	GLOBAL _stdout
    745                          	GLOBAL _stdin
@@ -985,7 +985,7 @@
    973  0118  cd0000            	call	_puts
    974  011b  210100            	ld	hl,0x0001
    975  011e  e3                	ex	(sp),hl
-   976  011f  cdc00b            	call	_exit_rocker
+   976  011f  cdc00b            	call	_exit_rift
    977  0122  f1                	pop	af
    978  0123  c1                	pop	bc
    979                          l___internal_push_array_00102:
@@ -998,7 +998,7 @@
    986  0131  cd0000            	call	_puts
    987  0134  210100            	ld	hl,0x0001
    988  0137  e3                	ex	(sp),hl
-   989  0138  cdc00b            	call	_exit_rocker
+   989  0138  cdc00b            	call	_exit_rift
    990  013b  f1                	pop	af
    991  013c  c1                	pop	bc
    992                          l___internal_push_array_00104:
@@ -1042,7 +1042,7 @@
   1030  0188  f1                	pop	af
   1031  0189  210100            	ld	hl,0x0001
   1032  018c  e3                	ex	(sp),hl
-  1033  018d  cdc00b            	call	_exit_rocker
+  1033  018d  cdc00b            	call	_exit_rift
   1034  0190  f1                	pop	af
   1035  0191  c1                	pop	bc
   1036                          l___internal_push_array_00106:
@@ -1128,7 +1128,7 @@
   1116  0211  cd0000            	call	_puts
   1117  0214  210100            	ld	hl,0x0001
   1118  0217  e3                	ex	(sp),hl
-  1119  0218  cdc00b            	call	_exit_rocker
+  1119  0218  cdc00b            	call	_exit_rift
   1120  021b  f1                	pop	af
   1121  021c  c1                	pop	bc
   1122                          l___internal_push_array_00112:
@@ -1149,7 +1149,7 @@
   1137  0236  cd0000            	call	_puts
   1138  0239  210100            	ld	hl,0x0001
   1139  023c  e3                	ex	(sp),hl
-  1140  023d  cdc00b            	call	_exit_rocker
+  1140  023d  cdc00b            	call	_exit_rift
   1141  0240  f1                	pop	af
   1142                          l___internal_push_array_00129:
   1143  0241  010000            	ld	bc,0x0000
@@ -1481,7 +1481,7 @@
   1420  03a2  cd0000            	call	_puts
   1421  03a5  210100            	ld	hl,0x0001
   1422  03a8  e3                	ex	(sp),hl
-  1423  03a9  cdc00b            	call	_exit_rocker
+  1423  03a9  cdc00b            	call	_exit_rift
   1424  03ac  f1                	pop	af
   1425  03ad  c1                	pop	bc
   1426                          l___internal_insert_00102:
@@ -1494,7 +1494,7 @@
   1433  03bb  cd0000            	call	_puts
   1434  03be  210100            	ld	hl,0x0001
   1435  03c1  e3                	ex	(sp),hl
-  1436  03c2  cdc00b            	call	_exit_rocker
+  1436  03c2  cdc00b            	call	_exit_rift
   1437  03c5  f1                	pop	af
   1438  03c6  c1                	pop	bc
   1439                          l___internal_insert_00104:
@@ -1515,7 +1515,7 @@
   1454  03e2  cd0000            	call	_puts
   1455  03e5  210100            	ld	hl,0x0001
   1456  03e8  e3                	ex	(sp),hl
-  1457  03e9  cdc00b            	call	_exit_rocker
+  1457  03e9  cdc00b            	call	_exit_rift
   1458  03ec  f1                	pop	af
   1459  03ed  c1                	pop	bc
   1460                          l___internal_insert_00106:
@@ -1545,7 +1545,7 @@
   1484  041c  f1                	pop	af
   1485  041d  210100            	ld	hl,0x0001
   1486  0420  e3                	ex	(sp),hl
-  1487  0421  cdc00b            	call	_exit_rocker
+  1487  0421  cdc00b            	call	_exit_rift
   1488  0424  f1                	pop	af
   1489  0425  c1                	pop	bc
   1490                          l___internal_insert_00108:
@@ -1617,7 +1617,7 @@
   1556  048f  cd0000            	call	_puts
   1557  0492  210100            	ld	hl,0x0001
   1558  0495  e3                	ex	(sp),hl
-  1559  0496  cdc00b            	call	_exit_rocker
+  1559  0496  cdc00b            	call	_exit_rift
   1560  0499  f1                	pop	af
   1561                          l___internal_insert_00113:
   1562  049a  dd6efa            	ld	l,(ix-6)
@@ -1779,7 +1779,7 @@
   1691  054a  f1                	pop	af
   1692  054b  210100            	ld	hl,0x0001
   1693  054e  e3                	ex	(sp),hl
-  1694  054f  cdc00b            	call	_exit_rocker
+  1694  054f  cdc00b            	call	_exit_rift
   1695  0552  f1                	pop	af
   1696  0553  c1                	pop	bc
   1697                          l___internal_set_elem_00102:
@@ -1800,7 +1800,7 @@
   1712  056f  cd0000            	call	_puts
   1713  0572  210100            	ld	hl,0x0001
   1714  0575  e3                	ex	(sp),hl
-  1715  0576  cdc00b            	call	_exit_rocker
+  1715  0576  cdc00b            	call	_exit_rift
   1716  0579  f1                	pop	af
   1717  057a  c1                	pop	bc
   1718                          l___internal_set_elem_00104:
@@ -1819,7 +1819,7 @@
   1731  058a  cd0000            	call	_puts
   1732  058d  210100            	ld	hl,0x0001
   1733  0590  e3                	ex	(sp),hl
-  1734  0591  cdc00b            	call	_exit_rocker
+  1734  0591  cdc00b            	call	_exit_rift
   1735  0594  f1                	pop	af
   1736  0595  d1                	pop	de
   1737                          l___internal_set_elem_00106:
@@ -2211,7 +2211,7 @@
   2104  07a7  dd6e04            	ld	l,(ix+4)
   2105  07aa  dd6605            	ld	h,(ix+5)
   2106  07ad  e5                	push	hl
-  2107  07ae  cd0000            	call	___rock_make_string
+  2107  07ae  cd0000            	call	___rift_make_string
   2108  07b1  f1                	pop	af
   2109  07b2  f1                	pop	af
   2110  07b3  f1                	pop	af
@@ -2235,7 +2235,7 @@
   2128  07c7  dd6e04            	ld	l,(ix+4)
   2129  07ca  dd6605            	ld	h,(ix+5)
   2130  07cd  e5                	push	hl
-  2131  07ce  cd0000            	call	___rock_make_string
+  2131  07ce  cd0000            	call	___rift_make_string
   2132  07d1  f1                	pop	af
   2133  07d2  f1                	pop	af
   2134  07d3  f1                	pop	af
@@ -2874,9 +2874,9 @@
   2767  0b99  dde1              	pop	ix
   2768  0b9b  c9                	ret
   2769                          ;	---------------------------------
-  2770                          ; Function init_rocker
+  2770                          ; Function init_rift
   2771                          ; ---------------------------------
-  2772                          _init_rocker:
+  2772                          _init_rift:
   2773  0b9c  dde5              	push	ix
   2774  0b9e  dd210000          	ld	ix,0
   2775  0ba2  dd39              	add	ix,sp
@@ -2893,18 +2893,18 @@
   2786  0bba  dde1              	pop	ix
   2787  0bbc  c9                	ret
   2788                          ;	---------------------------------
-  2789                          ; Function end_rocker
+  2789                          ; Function end_rift
   2790                          ; ---------------------------------
-  2791                          _end_rocker:
+  2791                          _end_rift:
   2792  0bbd  c30000            	jp	_kill_compiler_stack
   2793                          ;	---------------------------------
-  2794                          ; Function exit_rocker
+  2794                          ; Function exit_rift
   2795                          ; ---------------------------------
-  2796                          _exit_rocker:
+  2796                          _exit_rift:
   2797  0bc0  dde5              	push	ix
   2798  0bc2  dd210000          	ld	ix,0
   2799  0bc6  dd39              	add	ix,sp
-  2800  0bc8  cdbd0b            	call	_end_rocker
+  2800  0bc8  cdbd0b            	call	_end_rift
   2801  0bcb  dd6e04            	ld	l,(ix+4)
   2802  0bce  dd6605            	ld	h,(ix+5)
   2803  0bd1  dde1              	pop	ix

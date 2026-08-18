@@ -1,0 +1,16 @@
+include "Assert.rift"
+
+// Host-target smoke test for print_at. The host stub writes to stdout
+// so we cannot assert on screen contents; we only assert that the call
+// returns normally for a range of inputs.
+
+sub main() {
+  Assert a;
+
+  print(0, 0, "top left");
+  print(10, 5, "middle");
+  print(31, 23, "br");
+  print(0, 0, "");
+
+  a.AssertEQ("print_at smoke", 1, 1);
+}

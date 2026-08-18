@@ -1,0 +1,4 @@
+sub main() {
+  Sprite[] sprites;
+  append(sprites, 4);
+}

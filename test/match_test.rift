@@ -1,0 +1,205 @@
+include "Assert.rift"
+Assert a;
+
+enum Colour { Red, Green, Blue }
+union Shape { int Circle, int Square, Triangle }
+
+sub main() {
+  int result := 0;
+
+  // =========================================================================
+  // Group 1: Integer match basics
+  // =========================================================================
+
+  // 1a: First matching arm
+  int x := 1;
+  match x {
+    1 : result := 10;
+    2 : result := 20;
+    3 : result := 30;
+  }
+  a.AssertEQ("int match 1 -> 10", 10, result);
+
+  // 1b: Second matching arm
+  x := 2;
+  result := 0;
+  match x {
+    1 : result := 10;
+    2 : result := 20;
+    3 : result := 30;
+  }
+  a.AssertEQ("int match 2 -> 20", 20, result);
+
+  // 1c: No matching arm
+  x := 99;
+  result := 0;
+  match x {
+    1 : result := 10;
+    2 : result := 20;
+  }
+  a.AssertEQ("int no match", 0, result);
+
+  // 1d: Default arm
+  x := 99;
+  result := 0;
+  match x {
+    1 : result := 10;
+    default: result := 42;
+  }
+  a.AssertEQ("int default", 42, result);
+
+  // =========================================================================
+  // Group 2: String match
+  // =========================================================================
+
+  // 2a: String match second arm
+  string s := "hello";
+  result := 0;
+  match s {
+    "world" : result := 1;
+    "hello" : result := 2;
+    default: result := 3;
+  }
+  a.AssertEQ("string match", 2, result);
+
+  // 2b: String default
+  s := "unknown";
+  result := 0;
+  match s {
+    "hello" : result := 1;
+    "world" : result := 2;
+    default: result := 99;
+  }
+  a.AssertEQ("string default", 99, result);
+
+  // =========================================================================
+  // Group 3: Plain enum match
+  // =========================================================================
+
+  // 3a: Enum first variant
+  Colour c := Red;
+  result := 0;
+  match c {
+    Red   : result := 1;
+    Green : result := 2;
+    Blue  : result := 3;
+  }
+  a.AssertEQ("enum Red", 1, result);
+
+  // 3b: Enum last variant
+  c := Blue;
+  result := 0;
+  match c {
+    Red   : result := 1;
+    Green : result := 2;
+    Blue  : result := 3;
+  }
+  a.AssertEQ("enum Blue", 3, result);
+
+  // 3c: Enum with default
+  c := Green;
+  result := 0;
+  match c {
+    Red : result := 1;
+    default: result := 99;
+  }
+  a.AssertEQ("enum default", 99, result);
+
+  // =========================================================================
+  // Group 4: Union match
+  // =========================================================================
+
+  // 4a: Union variant with payload
+  Shape sh := Circle(5);
+  result := 0;
+  match sh {
+    Circle   : result := 1;
+    Square   : result := 2;
+    Triangle : result := 3;
+  }
+  a.AssertEQ("union Circle", 1, result);
+
+  // 4b: Union no-payload variant
+  sh := Triangle();
+  result := 0;
+  match sh {
+    Circle   : result := 1;
+    Square   : result := 2;
+    Triangle : result := 3;
+  }
+  a.AssertEQ("union Triangle", 3, result);
+
+  // 4c: Union default
+  sh := Square(10);
+  result := 0;
+  match sh {
+    Circle : result := 1;
+    default: result := 99;
+  }
+  a.AssertEQ("union default", 99, result);
+
+  // =========================================================================
+  // Group 5: Compound body
+  // =========================================================================
+
+  // 5a: Compound body with multiple statements
+  x := 2;
+  result := 0;
+  int extra := 0;
+  match x {
+    1 : result := 10;
+    2 : {
+      result := 20;
+      extra := 1;
+    }
+    3 : result := 30;
+  }
+  a.AssertEQ("compound body result", 20, result);
+  a.AssertEQ("compound body extra", 1, extra);
+
+  // 5b: String operation inside compound body
+  x := 1;
+  string msg := "";
+  match x {
+    1 : {
+      msg := concat("matched-", "one");
+    }
+    default: msg := "other";
+  }
+  a.AssertEquals("compound string body", "matched-one", msg);
+
+  // =========================================================================
+  // Group 6: Nested match
+  // =========================================================================
+
+  // 6a: Match inside a match body
+  x := 2;
+  int y := 3;
+  result := 0;
+  match x {
+    1 : result := 10;
+    2 : {
+      match y {
+        1 : result := 21;
+        2 : result := 22;
+        3 : result := 23;
+      }
+    }
+    3 : result := 30;
+  }
+  a.AssertEQ("nested match", 23, result);
+
+  // =========================================================================
+  // Group 7: Variable pattern
+  // =========================================================================
+
+  // 7a: Match against a variable value
+  int target := 42;
+  x := 42;
+  result := 0;
+  match x {
+    target : result := 1;
+    default: result := 2;
+  }
+  a.AssertEQ("variable pattern", 1, result);
+}

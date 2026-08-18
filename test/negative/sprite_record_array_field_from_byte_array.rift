@@ -1,0 +1,9 @@
+record Group {
+  Sprite[] values
+}
+
+sub main() {
+  Group group := { values := [] };
+  byte[] bytes;
+  group.values := bytes;
+}

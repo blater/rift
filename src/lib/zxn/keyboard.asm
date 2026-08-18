@@ -1,6 +1,6 @@
 SECTION code_user
 
-; Rock RTL - ZX Spectrum keyboard scanner
+; Rift RTL - ZX Spectrum keyboard scanner
 ; Reads the 8x5 key matrix and maintains a per-key press-strength buffer.
 ; C-callable entry point: _scan_keyboard
 ; The 40-byte press buffer is exposed as ZK_BUFFER for keyboard.c.

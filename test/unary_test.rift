@@ -1,0 +1,9 @@
+include "Assert.rift"
+Assert as;
+
+sub main() returns void {
+  int a := -1;
+  as.AssertEQ("negative numbers", -1, a);
+  int b := -(-2);
+  as.AssertEQ("double negative", 2, b);
+}

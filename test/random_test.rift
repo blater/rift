@@ -1,0 +1,42 @@
+include "Assert.rift"
+
+// Host test for random component.
+
+sub main() {
+  Assert a;
+  int i := 0;
+  int n := 0;
+  byte b := 0;
+  word w := 0;
+
+  // max == 0 must return 0 for both.
+  a.AssertEQ("random_byte(0)", 0, to_int(random_byte(0)));
+  a.AssertEQ("random_word(0)", 0, to_int(random_word(0)));
+
+  // Values stay within bounds across many draws.
+  for i := 0 to 499 {
+    b := random_byte(10);
+    n := to_int(b);
+    if n < 0 ||n >= 10 {
+      a.AssertEQ("byte out of bounds", 1, 0);
+    }
+  }
+
+  for i := 0 to 499 {
+    w := random_word(1000);
+    n := to_int(w);
+    if n < 0 ||n >= 1000 {
+      a.AssertEQ("word out of bounds", 1, 0);
+    }
+  }
+
+  // randomize() must not crash.
+  randomize();
+  b := random_byte(5);
+  n := to_int(b);
+  if n < 0 ||n >= 5 {
+    a.AssertEQ("post-randomize out of bounds", 1, 0);
+  }
+
+  a.AssertEQ("random smoke", 1, 1);
+}

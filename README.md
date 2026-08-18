@@ -1,11 +1,10 @@
+![Rift title](docs/rift-title.png)
+
 # Rift
 
 Rift is a statically typed language written in C and targeted at the ZX Next retro system.
-
 Its designed so that you develop on your pc/laptop and deploy to an emulator or real hardware.
 A Rift program can also be directly run locally.
-
-![Rift title](docs/rift-title.png)
 
 ## Language at a glance
 

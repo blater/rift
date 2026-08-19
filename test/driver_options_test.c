@@ -37,7 +37,8 @@ int main(void) {
             options.memory_mode == DRIVER_MEMORY_COMPACT &&
             options.zxn_bump_pool == 256 &&
             options.zxn_longlived_pool == 1024 &&
-            !options.zxn_pool_overrides,
+            !options.zxn_pool_overrides &&
+            !options.zxn_bump_pool_override,
         "compact memory selects example-sized capacities");
 
   char *standard_argv[] = {"rift", "--memory=standard", "program.rift"};
@@ -52,7 +53,8 @@ int main(void) {
   check(driver_parse_options(4, custom_after_argv, &options) &&
             options.zxn_bump_pool == 256 &&
             options.zxn_longlived_pool == 2048 &&
-            options.zxn_pool_overrides,
+            options.zxn_pool_overrides &&
+            !options.zxn_bump_pool_override,
         "expert capacity overrides the corresponding compact value");
 
   char *custom_before_argv[] = {"rift", "--zxn-bump-pool=512",
@@ -60,7 +62,8 @@ int main(void) {
   check(driver_parse_options(4, custom_before_argv, &options) &&
             options.zxn_bump_pool == 512 &&
             options.zxn_longlived_pool == 1024 &&
-            options.zxn_pool_overrides,
+            options.zxn_pool_overrides &&
+            options.zxn_bump_pool_override,
         "expert capacity precedence is independent of argument order");
 
   char *invalid_argv[] = {"rift", "--memory=small", "program.rift"};

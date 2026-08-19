@@ -1,4 +1,5 @@
 RIFT_COMPONENTS_V1
 @pools=none
+@bump=none
 @profile=tiny-31
 sprite

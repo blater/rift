@@ -1,0 +1,5 @@
+sub main() {
+  string path := get_abs_path(".");
+  string contents := read_file(path);
+  write_string_to_file(contents, path);
+}

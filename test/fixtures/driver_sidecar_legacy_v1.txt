@@ -1,0 +1,3 @@
+RIFT_COMPONENTS_V1
+@profile=full
+core

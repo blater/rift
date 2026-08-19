@@ -44,6 +44,7 @@ int main(int argc, char *argv[]) {
   int zxn_test = 0;
   int zxn_memory_profile = 0;
   int select_all_components = 0;
+  int force_bump_pool = 0;
   char *manifest_path = NULL;
 
   for (int i = 1; i < argc; i++) {
@@ -78,6 +79,9 @@ int main(int argc, char *argv[]) {
       }
       else if (strcmp(arg, "--components=all") == 0) {
         select_all_components = 1;
+      }
+      else if (strcmp(arg, "--force-bump-pool") == 0) {
+        force_bump_pool = 1;
       }
       //  else if (*(arg + 1) == 't' && !print_tree)
       //   print_tree = 1;
@@ -171,6 +175,7 @@ int main(int argc, char *argv[]) {
       .zxn_test = zxn_test,
       .zxn_memory_profile = zxn_memory_profile,
       .select_all_components = select_all_components,
+      .force_bump_pool = force_bump_pool,
   };
   generator_t *g = new_generator(cout, output, components, generator_config);
   transpile(g, p.prog);

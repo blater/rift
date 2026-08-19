@@ -19,6 +19,11 @@ static int set_profile(const char *value, driver_profile *profile) {
 int driver_read_requirements(const char *path, component_manifest *manifest,
                              driver_requirements *requirements) {
   memset(requirements, 0, sizeof(*requirements));
+  /* V1 sidecars predate the explicit pool and bump directives. Treat missing
+   * requirements conservatively so older compiler output can never cause the
+   * driver to omit allocator storage that the program may need. */
+  requirements->pools_required = 1;
+  requirements->bump_required = 1;
   FILE *file = fopen(path, "r");
   if (!file) {
     fprintf(stderr,
@@ -30,6 +35,7 @@ int driver_read_requirements(const char *path, component_manifest *manifest,
   int line_number = 0;
   int profile_seen = 0;
   int pools_seen = 0;
+  int bump_seen = 0;
   while (fgets(line, sizeof(line), file)) {
     line_number++;
     size_t length = strlen(line);
@@ -68,6 +74,19 @@ int driver_read_requirements(const char *path, component_manifest *manifest,
       pools_seen = 1;
       continue;
     }
+    if (strncmp(line, "@bump=", 6) == 0) {
+      const char *value = line + 6;
+      if (bump_seen ||
+          (strcmp(value, "none") != 0 && strcmp(value, "required") != 0)) {
+        fprintf(stderr, "build failed: invalid bump requirement '%s'\n",
+                value);
+        fclose(file);
+        return 0;
+      }
+      requirements->bump_required = strcmp(value, "required") == 0;
+      bump_seen = 1;
+      continue;
+    }
     if (line[0] == '@') {
       fprintf(stderr, "build failed: unknown component directive '%s'\n", line);
       fclose(file);
@@ -95,9 +114,8 @@ int driver_read_requirements(const char *path, component_manifest *manifest,
     requirements->components[requirements->component_count++] = component;
   }
   fclose(file);
-  if (line_number == 0 || !profile_seen || !pools_seen) {
-    fprintf(stderr,
-            "build failed: component sidecar has no profile or pool requirement\n");
+  if (line_number == 0 || !profile_seen) {
+    fprintf(stderr, "build failed: component sidecar has no profile\n");
     return 0;
   }
   return 1;

@@ -1,4 +1,5 @@
 #include "components.h"
+#include "semantic/resolve.h"
 #include "stringview.h"
 #include "type_info.h"
 #include <stdio.h>
@@ -30,6 +31,7 @@ void record_fundef_component(generator_t *g, ast_t ref) {
 static void mark_opaque_type_usage(generator_t *g, ast_t type_node) {
   if (!type_node || type_node->tag != type) return;
   ast_type declared = type_node->data.type;
+  if (declared.is_array) record_component(g, "arrays");
   char *name = string_of_sv(declared.name.lexeme);
   for (int i = 0; i < g->components->interface_count; i++) {
     component_interface_spec *entry = &g->components->interfaces[i];
@@ -70,6 +72,26 @@ static void collect_component_uses(generator_t *g, ast_t node) {
     int intrinsic_print =
         !call.resolved_target || call.resolved_target->tag != fundef ||
         call.resolved_target->data.fundef.body == NULL;
+    if (intrinsic_print &&
+        (svcmp(call.name.lexeme, sv_from_cstr("append")) == 0 ||
+         svcmp(call.name.lexeme, sv_from_cstr("get")) == 0 ||
+         svcmp(call.name.lexeme, sv_from_cstr("set")) == 0 ||
+         svcmp(call.name.lexeme, sv_from_cstr("pop")) == 0 ||
+         svcmp(call.name.lexeme, sv_from_cstr("insert")) == 0))
+      record_component(g, "arrays");
+    if (intrinsic_print &&
+        (svcmp(call.name.lexeme, sv_from_cstr("to_byte")) == 0 ||
+         svcmp(call.name.lexeme, sv_from_cstr("to_word")) == 0 ||
+         svcmp(call.name.lexeme, sv_from_cstr("to_dword")) == 0 ||
+         svcmp(call.name.lexeme, sv_from_cstr("to_int")) == 0 ||
+         svcmp(call.name.lexeme, sv_from_cstr("to_float")) == 0))
+      record_component(g, "scalar_casts");
+    if (intrinsic_print &&
+        svcmp(call.name.lexeme, sv_from_cstr("length")) == 0 &&
+        call.args.length == 1 &&
+        svcmp(infer_expr_type(call.args.data[0], g->table),
+              sv_from_cstr("string")) != 0)
+      record_component(g, "arrays");
     if (intrinsic_print &&
         (svcmp(call.name.lexeme, sv_from_cstr("print")) == 0 ||
          svcmp(call.name.lexeme, sv_from_cstr("println")) == 0)) {
@@ -119,6 +141,8 @@ static void collect_component_uses(generator_t *g, ast_t node) {
   }
   case method_call:
     record_fundef_component(g, node->data.method_call.resolved_target);
+    if (node->data.method_call.resolved_kind == METHOD_ARRAY_INSTANCE)
+      record_component(g, "arrays");
     collect_component_uses(g, node->data.method_call.receiver);
     for (int i = 0; i < node->data.method_call.args.length; i++)
       collect_component_uses(g, node->data.method_call.args.data[i]);
@@ -160,6 +184,7 @@ static void collect_component_uses(generator_t *g, ast_t node) {
     end_nt_scope(&g->table);
     return;
   case iter_loop:
+    record_component(g, "arrays");
     collect_component_uses(g, node->data.iter_loop.iterable);
     new_nt_scope(&g->table);
     push_nt(&g->table, node->data.iter_loop.variable.lexeme, NT_VAR, node);
@@ -171,6 +196,7 @@ static void collect_component_uses(generator_t *g, ast_t node) {
     collect_component_uses(g, node->data.sub.expr);
     return;
   case arr_index:
+    record_component(g, "arrays");
     collect_component_uses(g, node->data.arr_index.array);
     collect_component_uses(g, node->data.arr_index.index);
     collect_component_uses(g, node->data.arr_index.field_expr);
@@ -189,6 +215,12 @@ static void collect_component_uses(generator_t *g, ast_t node) {
     collect_component_uses(g, node->data.matchcase.body);
     return;
   case tdef:
+    if (!is_asset_only_module(g, node)) {
+      /* Every generated aggregate uses managed handles and currently gets
+       * type-specific array wrappers in the generated C. */
+      record_component(g, "handles");
+      record_component(g, "arrays");
+    }
     for (int i = 0; i < node->data.tdef.module_fields.length; i++)
       collect_component_uses(g, node->data.tdef.module_fields.data[i]);
     for (int i = 0; i < node->data.tdef.constructors.length; i++) {
@@ -199,6 +231,9 @@ static void collect_component_uses(generator_t *g, ast_t node) {
     return;
   case embed:
     g->zxn_light_core_eligible = 0;
+    /* Embedded C can call the public bump allocator without an AST-visible
+     * call site, so omission is only safe for programs without embeds. */
+    g->zxn_bump_required = 1;
     return;
   default:
     return;
@@ -260,6 +295,7 @@ void generator_write_component_output(generator_t *g) {
   }
   fprintf(file, "RIFT_COMPONENTS_V1\n");
   fprintf(file, "@pools=%s\n", g->zxn_pools_required ? "required" : "none");
+  fprintf(file, "@bump=%s\n", g->zxn_bump_required ? "required" : "none");
   fprintf(file, "@profile=%s\n",
           g->zxn_tiny_eligible
               ? (g->zxn_tiny_uses_stdout

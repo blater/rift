@@ -1,0 +1,5 @@
+sub main() {
+  word address := to_word(32768);
+  poke(address, to_byte(1));
+  byte value := peek(address);
+}

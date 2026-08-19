@@ -86,6 +86,8 @@ static int invoke_compiler(const driver_paths *paths,
     argument_push(&arguments, "--memory-profile=zxn");
   if (options->rtl_mode == DRIVER_RTL_ALL)
     argument_push(&arguments, "--components=all");
+  if (options->zxn_bump_pool_override)
+    argument_push(&arguments, "--force-bump-pool");
   int result = driver_run_process(arguments.items, NULL);
   free(arguments.items);
   free(manifest_option);
@@ -212,7 +214,7 @@ static int build_zxn(const driver_paths *paths,
            pragma_path);
   snprintf(include_option, sizeof(include_option), "-I%s", include_path);
   fprintf(stdout,
-          "ZXN profile: startup=%d, memory=%s, bump-pool=%u, "
+          "ZXN profile: startup=%d, memory=%s, bump-pool=%u%s, "
           "longlived-pool=%u, "
           "tiny-core=%d, light-core=%d\n",
           plan->startup,
@@ -221,6 +223,7 @@ static int build_zxn(const driver_paths *paths,
               : options->memory_mode == DRIVER_MEMORY_COMPACT ? "compact"
                                                               : "standard",
           options->zxn_bump_pool,
+          plan->bump_required ? "" : " (omitted)",
           options->zxn_longlived_pool, plan->tiny_core, plan->light_core);
   argument_vector arguments = {0};
   argument_push(&arguments, "zcc");
@@ -237,6 +240,8 @@ static int build_zxn(const driver_paths *paths,
     argument_push(&arguments, "-DRIFT_ALLOCATOR_STATS");
   if (!plan->pools_required)
     argument_push(&arguments, "-DRIFT_ZXN_NO_POOLS");
+  else if (!plan->bump_required)
+    argument_push(&arguments, "-DRIFT_ZXN_NO_BUMP_POOL");
   argument_push(&arguments, bump_define);
   argument_push(&arguments, longlived_define);
   if (plan->tiny_core) argument_push(&arguments, "-DRIFT_ZXN_TINY_CORE");

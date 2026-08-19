@@ -29,6 +29,7 @@ typedef struct {
   int debug;
   int run;
   int zxn_pool_overrides;
+  int zxn_bump_pool_override;
   unsigned zxn_bump_pool;
   unsigned zxn_longlived_pool;
   const char *source_arg;

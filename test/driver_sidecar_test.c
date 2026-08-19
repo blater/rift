@@ -16,8 +16,9 @@ static void check(int condition, const char *message) {
 }
 
 int main(int argc, char **argv) {
-  if (argc != 5) {
-    fprintf(stderr, "usage: driver_sidecar_test MANIFEST VALID BAD DUPLICATE\n");
+  if (argc != 6) {
+    fprintf(stderr,
+            "usage: driver_sidecar_test MANIFEST VALID LEGACY BAD DUPLICATE\n");
     return 2;
   }
   init_compiler_stack();
@@ -29,12 +30,20 @@ int main(int argc, char **argv) {
         "tiny compiler profile is preserved");
   check(!requirements.pools_required,
         "pool requirement is preserved independently of startup profile");
+  check(!requirements.bump_required,
+        "bump requirement is preserved independently of pool selection");
   check(requirements.component_count == 1 &&
             strcmp(requirements.components[0]->id, "sprite") == 0,
         "selected component order is preserved");
-  check(!driver_read_requirements(argv[3], manifest, &requirements),
-        "unknown compiler profile is rejected");
+  check(driver_read_requirements(argv[3], manifest, &requirements),
+        "legacy V1 sidecar without pool metadata is accepted");
+  check(requirements.pools_required,
+        "legacy V1 sidecar conservatively requires pools");
+  check(requirements.bump_required,
+        "legacy V1 sidecar conservatively requires bump storage");
   check(!driver_read_requirements(argv[4], manifest, &requirements),
+        "unknown compiler profile is rejected");
+  check(!driver_read_requirements(argv[5], manifest, &requirements),
         "duplicate component is rejected");
   kill_compiler_stack();
   return failures ? 1 : 0;

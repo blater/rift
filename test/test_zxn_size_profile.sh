@@ -35,6 +35,8 @@ build_debug embedded "$FIXTURES/zxn_size_embedded_stdio.rift"
 build_debug sprite "$FIXTURES/sprite_type_methods.rift"
 build_debug hello_all "$FIXTURES/zxn_size_hello.rift" --rtl=all
 build_debug compact "$FIXTURES/zxn_size_general_string.rift" --memory=compact
+build_debug clock "$ROOT/examples/clock.rift"
+build_debug clock_bump "$ROOT/examples/clock.rift" --zxn-bump-pool=512
 
 EMPTY_NEX_BYTES=$(wc -c <"$TMPDIR_SIZE/empty.nex" | tr -d '[:space:]')
 EMPTY_PREWRAP_BYTES=$(wc -c <"$TMPDIR_SIZE/empty_CODE.bin" | tr -d '[:space:]')
@@ -74,8 +76,28 @@ if grep -q '^#define RIFT_ZXN_TINY_CORE' "$TMPDIR_SIZE/hello_all.exe.c"; then
   exit 1
 fi
 grep -q 'rift_pools_init(RIFT_ZXN_BUMP_POOL_CAPACITY' "$TMPDIR_SIZE/hello_all.exe.c"
-grep -q 'memory=compact, bump-pool=256, longlived-pool=1024' \
+grep -q 'memory=compact, bump-pool=256 (omitted), longlived-pool=1024' \
   "$TMPDIR_SIZE/compact.log"
+grep -q 'ZXN profile: startup=1, .*tiny-core=0, light-core=0' \
+  "$TMPDIR_SIZE/clock.log"
+grep -q -- '-DRIFT_ZXN_NO_POOLS' "$TMPDIR_SIZE/clock.log"
+if grep -q '/lib/pools.c' "$TMPDIR_SIZE/clock.log"; then
+  echo "FAIL: pool-free Clock build retained the pool runtime source" >&2
+  exit 1
+fi
+if grep -qE 'zxn_(bump|longlived)_pool_storage' "$TMPDIR_SIZE/clock.map"; then
+  echo "FAIL: pool-free Clock build retained static pool storage" >&2
+  exit 1
+fi
+grep -q 'bump-pool=512, longlived-pool=6144' "$TMPDIR_SIZE/clock_bump.log"
+grep -q '/lib/pools.c' "$TMPDIR_SIZE/clock_bump.log"
+if grep -q -- '-DRIFT_ZXN_NO_POOLS\|-DRIFT_ZXN_NO_BUMP_POOL' \
+    "$TMPDIR_SIZE/clock_bump.log"; then
+  echo "FAIL: explicit bump override was disabled by a no-pool target define" >&2
+  exit 1
+fi
+grep -q 'zxn_bump_pool_storage' "$TMPDIR_SIZE/clock_bump.map"
+grep -q 'zxn_longlived_pool_storage' "$TMPDIR_SIZE/clock_bump.map"
 
 grep -q 'rift_print_bytes("hello world", 11)' "$TMPDIR_SIZE/hello.exe.c"
 grep -q 'RIFT_PROFILE:ZXN_TINY_CORE:STARTUP=31' "$TMPDIR_SIZE/hello.exe.c"
@@ -105,6 +127,11 @@ if grep -q '/lib/pools.c' "$TMPDIR_SIZE/hello.log"; then
 fi
 grep -q '/lib/pools.c' "$TMPDIR_SIZE/general.log"
 grep -q '/lib/fundefs.c' "$TMPDIR_SIZE/general.log"
+grep -q -- '-DRIFT_ZXN_NO_BUMP_POOL' "$TMPDIR_SIZE/general.log"
+if grep -q 'zxn_bump_pool_storage' "$TMPDIR_SIZE/general.map"; then
+  echo "FAIL: bump-free managed string build retained static bump storage" >&2
+  exit 1
+fi
 
 EMPTY_BYTES=$(wc -c <"$TMPDIR_SIZE/empty_CODE.bin" | tr -d '[:space:]')
 SPRITE_BYTES=$(wc -c <"$TMPDIR_SIZE/sprite_CODE.bin" | tr -d '[:space:]')
@@ -112,6 +139,7 @@ HELLO_BYTES=$(wc -c <"$TMPDIR_SIZE/hello_CODE.bin" | tr -d '[:space:]')
 CONTROL_BYTES=$(wc -c <"$TMPDIR_SIZE/control_CODE.bin" | tr -d '[:space:]')
 GENERAL_BYTES=$(wc -c <"$TMPDIR_SIZE/general_CODE.bin" | tr -d '[:space:]')
 COMPACT_BYTES=$(wc -c <"$TMPDIR_SIZE/compact_CODE.bin" | tr -d '[:space:]')
+CLOCK_BYTES=$(wc -c <"$TMPDIR_SIZE/clock_CODE.bin" | tr -d '[:space:]')
 
 if [ "$HELLO_BYTES" -ge "$GENERAL_BYTES" ]; then
   echo "FAIL: tiny hello ($HELLO_BYTES) is not smaller than full string build ($GENERAL_BYTES)" >&2
@@ -129,8 +157,12 @@ if [ $((CONTROL_BYTES - EMPTY_BYTES)) -gt 1400 ]; then
   echo "FAIL: lightweight console overhead exceeds 1400 bytes ($CONTROL_BYTES vs $EMPTY_BYTES)" >&2
   exit 1
 fi
-if [ $((GENERAL_BYTES - COMPACT_BYTES)) -ne 5888 ]; then
-  echo "FAIL: compact memory reclaimed $((GENERAL_BYTES - COMPACT_BYTES)) resident bytes, expected 5888" >&2
+if [ $((GENERAL_BYTES - COMPACT_BYTES)) -ne 5120 ]; then
+  echo "FAIL: compact memory reclaimed $((GENERAL_BYTES - COMPACT_BYTES)) resident bytes, expected 5120 when bump storage is omitted" >&2
+  exit 1
+fi
+if [ "$CLOCK_BYTES" -ge 12000 ]; then
+  echo "FAIL: pool-free Clock resident size is $CLOCK_BYTES bytes, expected less than 12000" >&2
   exit 1
 fi
 
@@ -190,3 +222,4 @@ echo "PASS: assetless byte-backed Sprite adds $((SPRITE_BYTES - EMPTY_BYTES)) re
 echo "PASS: literal hello resident size is $HELLO_BYTES bytes"
 echo "PASS: escaped literal resident size is $CONTROL_BYTES bytes with the lightweight console"
 echo "PASS: dynamic-string lightweight core is $GENERAL_BYTES bytes; compact memory reduces it to $COMPACT_BYTES bytes (saving $((GENERAL_BYTES - COMPACT_BYTES)) bytes)"
+echo "PASS: pool-free full-profile Clock resident size is $CLOCK_BYTES bytes"

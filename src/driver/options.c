@@ -244,5 +244,6 @@ int driver_parse_options(int argc, char **argv, driver_options *options) {
   if (longlived_override_set)
     options->zxn_longlived_pool = longlived_override;
   options->zxn_pool_overrides = bump_override_set || longlived_override_set;
+  options->zxn_bump_pool_override = bump_override_set;
   return validate_options(options, memory_option_set);
 }

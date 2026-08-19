@@ -72,9 +72,7 @@ void  __handle_release(void *payload);
     (defined(RIFT_ZXN_NO_POOLS) || defined(RIFT_ZXN_TINY_CORE))
 #define __return_handle(payload) (payload)
 #else
-static inline void *__return_handle(void *payload) {
-  return __handle_retain(payload);
-}
+#define __return_handle(payload) __handle_retain(payload)
 #endif
 
 // Configurable string index base (0 = zero-indexed, 1 = one-indexed)

@@ -276,10 +276,6 @@ size_t __length_array(__internal_dynamic_array_t arr) {
   return arr->length;
 }
 
-size_t __length_string(string s) {
-  return s.length;
-}
-
 __internal_dynamic_array_t int_make_array(void) {
   return __internal_make_array(sizeof(int), 0);
 }
@@ -497,41 +493,4 @@ void float_set_elem(__internal_dynamic_array_t arr, size_t index, float elem) {
 }
 void float_insert(__internal_dynamic_array_t arr, size_t index, float elem) {
   __internal_insert(arr, index, &elem);
-}
-
-int global_argc;
-char **global_argv;
-
-void fill_cmd_args(int argc, char **argv) {
-  global_argc = argc;
-  global_argv = argv;
-}
-
-__internal_dynamic_array_t get_args(void) {
-  __internal_dynamic_array_t cmd_args = string_make_array();
-  for (int i = 1; i < global_argc; i++) {
-    string arg;
-    cstr_to_string(&arg, global_argv[i]);
-    string_push_array(cmd_args, arg);
-    // printf("Pushing arg \'");
-    // print(arg);
-    // printf("\'\n");
-  }
-  return cmd_args;
-}
-
-void init_rift(int argc, char **argv) {
-  fill_cmd_args(argc, argv);
-}
-
-void end_rift(void) {
-}
-
-void exit_rift(int status) {
-  end_rift();
-  exit(status);
-}
-
-void halt(byte code) {
-  exit_rift((int)code);
 }

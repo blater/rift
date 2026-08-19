@@ -271,13 +271,18 @@ smaller resident image without knowing how Rift's allocators are divided:
 ./rift --memory=compact hello.rift
 ```
 
-`--memory=compact` provides 1.25 KiB of managed dynamic memory and saves 5,888
-bytes when the selected runtime uses the allocator. The default
-`--memory=standard` provides 7 KiB. An undersized configuration fails with a
-named out-of-memory error instead of overwriting other target memory. Advanced
-users can tune one or both capacities with `--zxn-bump-pool=BYTES` and
-`--zxn-longlived-pool=BYTES`; those options override the corresponding preset
-value regardless of their position on the command line.
+`--memory=compact` reserves 1.25 KiB across the managed pools and saves up to
+5,888 bytes when the selected runtime uses the allocator. The default
+`--memory=standard` reserves 7 KiB across those pools. An undersized
+configuration fails with a named out-of-memory error instead of overwriting
+other target memory. Independently of this preset, the compiler automatically
+omits the bump pool when the program has no bump-lifetime allocation path; in
+that common case compact saves 5,120 bytes, and the build profile reports the
+unused pool as `bump-pool=... (omitted)`. Advanced users can
+tune one or both capacities with
+`--zxn-bump-pool=BYTES` and `--zxn-longlived-pool=BYTES`; those options override
+the corresponding preset value regardless of their position on the command
+line.
 
 
 ## Test

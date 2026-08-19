@@ -14,7 +14,7 @@
  * right after `fill_cmd_args`. It is the single place where host terminals
  * are opened, capability probes run, and atexit hooks installed.
  *
- * On ZXN the init is trivial: every capability is set to 1.
+ * On ZXN these host-only lifecycle entry points are compile-time no-ops.
  * On the host target the init does real work (isatty check, tb_init, etc.).
  *
  * Components are forbidden from calling `tb_init`, `atexit`, or any other
@@ -30,14 +30,16 @@ typedef struct rift_host_caps {
 
 extern rift_host_caps host_caps;
 
-#if defined(__SDCC) && defined(RIFT_ZXN_TINY_CORE)
+#ifdef __SDCC
 #define rift_rtl_init() ((void)0)
 #define rift_rtl_shutdown() ((void)0)
+#define graphics_on() ((void)0)
+#define graphics_off() ((void)0)
 #else
 void rift_rtl_init(void);
 void rift_rtl_shutdown(void);
-#endif
 void graphics_on(void);
 void graphics_off(void);
+#endif
 
 #endif /* RIFT_HOST_CAPS_H */

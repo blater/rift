@@ -37,6 +37,13 @@ void zxn_test_stage(const char *stage) {
   emit_char('\n');
 }
 
+void zxn_test_stage_string(string stage) {
+  size_t i;
+  emit_text("RIFTTEST:STAGE:");
+  for (i = 0; i < stage.length; i++) emit_char(stage.data[i]);
+  emit_char('\n');
+}
+
 void zxn_test_pass(void) {
   pass_count++;
   emit_text("RIFTTEST:PASS\n");
@@ -79,6 +86,7 @@ void zxn_test_finish(void) {
 
 void zxn_test_begin(void) {}
 void zxn_test_stage(const char *stage) { (void)stage; }
+void zxn_test_stage_string(string stage) { (void)stage; }
 void zxn_test_pass(void) {}
 void zxn_test_fail(void) {}
 void zxn_test_assert_pass(string description) { (void)description; }

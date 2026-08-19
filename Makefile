@@ -64,8 +64,10 @@ $(BUILD)verify-zxn-assets: tools/verify-zxn-assets.c | $(BUILD)
 
 # Phase A.2 — pool runtime test harness.
 # Standalone C test, no Rift language integration yet.
-$(BUILD)pools_test: test/pools_test.c $(BUILD)pools.o | $(BUILD)
-	$(CC) $(CFLAGS) -o $@ test/pools_test.c $(BUILD)pools.o
+$(BUILD)pools_test: test/pools_test.c $(BUILD)pools.o \
+                     $(BUILD)error_sink_for_test.o | $(BUILD)
+	$(CC) $(CFLAGS) -o $@ test/pools_test.c $(BUILD)pools.o \
+		$(BUILD)error_sink_for_test.o
 
 test-pools: $(BUILD)pools_test
 	$(BUILD)pools_test
@@ -96,6 +98,7 @@ $(BUILD)driver_sidecar_test: test/driver_sidecar_test.c \
 test-driver-sidecar: $(BUILD)driver_sidecar_test
 	$(BUILD)driver_sidecar_test src/lib/components.manifest \
 		test/fixtures/driver_sidecar_valid.txt \
+		test/fixtures/driver_sidecar_legacy_v1.txt \
 		test/fixtures/driver_sidecar_bad_profile.txt \
 		test/fixtures/driver_sidecar_duplicate.txt
 
@@ -122,23 +125,40 @@ test-negative: riftc
 # relaxed flags the `rift` script uses for runtime sources (the strict
 # riftc flags would catch pre-existing sign-compare warnings unrelated
 # to ADR-0003 work).
-RUNTIME_CFLAGS = -Wall -Wno-unused-variable -I src
+RUNTIME_CFLAGS = -Wall -Wno-unused-variable -I src -I src/ext/lib
 $(BUILD)fundefs_for_test.o: $(LIB)fundefs.c $(LIB)fundefs.h $(LIB)pools.h | $(BUILD)
 	$(CC) $(RUNTIME_CFLAGS) -c $< -o $@
 $(BUILD)fundefs_internal_for_test.o: $(LIB)fundefs_internal.c $(LIB)fundefs_internal.h | $(BUILD)
 	$(CC) $(RUNTIME_CFLAGS) -c $< -o $@
+$(BUILD)handle_runtime_for_test.o: $(LIB)handle_runtime.c $(LIB)fundefs.h $(LIB)pools.h | $(BUILD)
+	$(CC) $(RUNTIME_CFLAGS) -c $< -o $@
+$(BUILD)termination_for_test.o: $(LIB)termination.c $(LIB)fundefs_internal.h | $(BUILD)
+	$(CC) $(RUNTIME_CFLAGS) -c $< -o $@
 $(BUILD)print_bytes_for_test.o: $(LIB)print_bytes.c $(LIB)fundefs.h | $(BUILD)
 	$(CC) $(RUNTIME_CFLAGS) -c $< -o $@
+$(BUILD)error_sink_for_test.o: $(LIB)error_sink.c $(LIB)error_sink.h | $(BUILD)
+	$(CC) $(RUNTIME_CFLAGS) -c $< -o $@
+$(BUILD)host_caps_for_test.o: $(LIB)host_caps.c $(LIB)host_caps.h | $(BUILD)
+	$(CC) $(RUNTIME_CFLAGS) -c $< -o $@
+$(BUILD)termbox2_for_test.o: $(LIB)host/termbox2_impl.c | $(BUILD)
+	$(CC) $(RUNTIME_CFLAGS) -c $< -o $@
+RUNTIME_TEST_SUPPORT_OBJECTS = $(BUILD)error_sink_for_test.o \
+                               $(BUILD)host_caps_for_test.o \
+                               $(BUILD)handle_runtime_for_test.o \
+                               $(BUILD)termination_for_test.o \
+                               $(BUILD)termbox2_for_test.o
 $(BUILD)string_refcount_test: test/string_refcount_test.c $(BUILD)pools.o \
                               $(BUILD)fundefs_for_test.o \
                               $(BUILD)fundefs_internal_for_test.o \
-                              $(BUILD)print_bytes_for_test.o | $(BUILD)
+                              $(BUILD)print_bytes_for_test.o \
+                              $(RUNTIME_TEST_SUPPORT_OBJECTS) | $(BUILD)
 	$(CC) $(RUNTIME_CFLAGS) -o $@ $^
 
 $(BUILD)fixed_array_set_test: test/fixed_array_set_test.c $(BUILD)pools.o \
                               $(BUILD)fundefs_for_test.o \
                               $(BUILD)fundefs_internal_for_test.o \
-                              $(BUILD)print_bytes_for_test.o | $(BUILD)
+                              $(BUILD)print_bytes_for_test.o \
+                              $(RUNTIME_TEST_SUPPORT_OBJECTS) | $(BUILD)
 	$(CC) $(RUNTIME_CFLAGS) -o $@ $^
 
 test-refcount: riftc $(BUILD)string_refcount_test $(BUILD)fixed_array_set_test

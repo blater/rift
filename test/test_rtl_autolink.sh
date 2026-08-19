@@ -9,10 +9,12 @@ trap 'rm -rf "$TMPDIR_AUDIT"' EXIT HUP INT TERM
 
 build_mode() {
   mode=$1
+  memory=${2:-standard}
   output="$TMPDIR_AUDIT/$mode.exe"
   log="$TMPDIR_AUDIT/$mode.log"
 
   if ! "$ROOT/rift" --debug --target=zxn --zxn-test --rtl="$mode" \
+      --memory="$memory" \
       "$SOURCE" "$output" >"$log" 2>&1; then
     cat "$log"
     echo "FAIL: --rtl=$mode build failed" >&2
@@ -60,9 +62,18 @@ if grep -q 'lib/fmath.c' "$TMPDIR_AUDIT/auto.log"; then
   exit 1
 fi
 
-build_mode all
+# The compatibility closure intentionally links every target source. Use the
+# public compact preset so that exhaustive diagnostic build fits the 48K
+# packaging window; the auto build above continues to exercise defaults.
+build_mode all compact
 ALL_CODE_BYTES=$MODE_CODE_BYTES
 ALL_BSS_END=$MODE_BSS_END
+
+grep -q 'bump-pool=256,' "$TMPDIR_AUDIT/all.log" || {
+  cat "$TMPDIR_AUDIT/all.log"
+  echo "FAIL: --rtl=all did not conservatively retain bump storage" >&2
+  exit 1
+}
 
 if [ "$AUTO_CODE_BYTES" -ge "$ALL_CODE_BYTES" ]; then
   echo "FAIL: auto-linked code ($AUTO_CODE_BYTES bytes) is not smaller than all-RTL code ($ALL_CODE_BYTES bytes)" >&2

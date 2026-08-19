@@ -1,9 +1,16 @@
 # Rift runtime component manifest v1.
 # Lists are comma-separated paths relative to src/lib. Empty fields are valid.
 # component|id|dependencies|headers|host_sources|zxn_sources|host_asm|zxn_asm|init|shutdown|always?|zxn-capabilities
-component|core|tiny_print,tiny_test,error_sink|pools.h,fundefs.h,fundefs_internal.h,typedefs.h,host_caps.h,zxn_test.h|pools.c,print_bytes.c,fundefs.c,fundefs_internal.c,asm_interop.c,host_caps.c,zxn_test.c,host/termbox2_impl.c|pools.c,fundefs.c,fundefs_internal.c,asm_interop.c,host_caps.c|||rift_rtl_init|rift_rtl_shutdown|always|startup31,pools
-component|tiny_print||console.h||print_bytes.c||||||startup31
-component|tiny_test||||zxn_test.c||||||startup31
+component|core|tiny_print,error_sink,host_ui|pools.h,fundefs.h,fundefs_internal.h,typedefs.h|pools.c,fundefs.c,termination.c|pools.c,fundefs.c,termination.c|||||always|startup31,pools
+component|handles|core||handle_runtime.c|handle_runtime.c||||||startup31,pools
+component|arrays|core,handles||fundefs_internal.c|fundefs_internal.c||||||startup31,pools
+component|process_args|arrays||process_args.c|process_args.c||||||startup31,pools
+component|file_io|core||file_io.c|file_io.c||||||pools
+component|scalar_casts|||scalar_casts.c|||||||startup31
+component|tiny_print||console.h|print_bytes.c|print_bytes.c||||||startup31
+component|tiny_test||zxn_test.h|zxn_test.c|zxn_test.c||||||startup31
+component|host_ui||host_caps.h|host_caps.c,host/termbox2_impl.c||||rift_rtl_init|rift_rtl_shutdown||startup31
+component|asm_interop||asm_interop.h|asm_interop.c|asm_interop.c||||||startup31
 component|error_sink|tiny_print|error_sink.h|error_sink.c|error_sink.c||||||startup31
 component|number_format|tiny_print|number_format.h|number_format.c|number_format.c||||||startup31
 component|dword_format|tiny_print|dword_format.h|dword_format.c|dword_format.c||||||startup31
@@ -18,20 +25,20 @@ component|over|plot|over.h|over.c|over.c||||||startup31
 component|cls|tiny_print|cls.h|cls.c|cls.c||||||startup31
 component|time||time.h|time.c|time.c||||||startup31
 component|clock||clock.h|clock.c|clock.c||zxn/clock.asm|rift_clock_init|rift_clock_shutdown||
-component|sound|core|sound.h|sound.c|sound.c||||||
+component|sound||sound.h|sound.c|sound.c||||||
 component|input|keyboard|input.h|input.c|input.c||||||startup31
 component|line_input|core,input,tiny_print||line_input.c|line_input.c||||||startup31
 component|print_at|tiny_print,ink_paper|print_at.h|print_at.c|print_at.c||||||startup31
 component|plot||plot.h|plot.c|plot.c||||||startup31
 component|draw|plot|draw.h|draw.c|draw.c||||||startup31
-component|polyline|draw|polyline.h|polyline.c|polyline.c||||||startup31
+component|polyline|draw,arrays|polyline.h|polyline.c|polyline.c||||||startup31
 component|circle|plot|circle.h|circle.c|circle.c||||||startup31
 component|fill|draw|fill.h|fill.c|fill.c||||||startup31
 component|triangle|draw|triangle.h|triangle.c|triangle.c||||||startup31
-component|random|core|random.h|random.c|random.c||||||startup31
+component|random||random.h|random.c|random.c||||||startup31
 component|nextreg||nextreg.h|nextreg.c|nextreg.c||||||startup31
-component|helpers|core|helpers.h|helpers.c|helpers.c||||||startup31
-component|fmath|core|fmath.h|fmath.c|fmath.c||||||startup31
+component|helpers||helpers.h|helpers.c|helpers.c||||||startup31
+component|fmath||fmath.h|fmath.c|fmath.c||||||startup31
 component|trig||trig.h|trig.c|trig.c||||||startup31
 component|sprite||sprite.h|sprite_host.c|||zxn/sprite.asm||||startup31
 
@@ -46,8 +53,8 @@ builtin|bright|ink_paper|void|byte|bright|
 builtin|flash|ink_paper|void|byte|flash|
 builtin|inverse|ink_paper|void|byte|inverse|
 builtin|over|over|void|byte|over|
-builtin|graphics_on|core|void||graphics_on|
-builtin|graphics_off|core|void||graphics_off|
+builtin|graphics_on|host_ui|void||graphics_on|
+builtin|graphics_off|host_ui|void||graphics_off|
 builtin|cls|cls|void||cls|
 builtin|plot|plot|void|byte,byte|plot|
 builtin|point|plot|byte|byte,byte|point|
@@ -87,6 +94,19 @@ builtin|beep|sound|void|word,word|beep|
 builtin|inkey|input|byte||inkey|
 builtin|keypress|input|byte||keypress|
 builtin|input|line_input|string||input|
+builtin|read_file|file_io|string|string|read_file|
+builtin|write_string_to_file|file_io|void|string,string|write_string_to_file|
+builtin|get_abs_path|file_io|string|string|get_abs_path|
+builtin|get_args|process_args|string[]||get_args|
+builtin|zxn_test_begin|tiny_test|void||zxn_test_begin|
+builtin|zxn_test_stage|tiny_test|void|string|zxn_test_stage_string|
+builtin|zxn_test_pass|tiny_test|void||zxn_test_pass|
+builtin|zxn_test_fail|tiny_test|void||zxn_test_fail|
+builtin|zxn_test_assert_pass|tiny_test|void|string|zxn_test_assert_pass|
+builtin|zxn_test_assert_fail|tiny_test|void|string,string,string|zxn_test_assert_fail|
+builtin|zxn_test_finish|tiny_test|void||zxn_test_finish|
+builtin|poke|asm_interop|void|word,byte|poke|
+builtin|peek|asm_interop|byte|word|peek|
 lowered|print|core|void|printable|print|
 lowered|print|print_at|void|byte,byte,printable|print_at|
 lowered|println|core|void||rift_println|

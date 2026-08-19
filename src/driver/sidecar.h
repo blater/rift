@@ -13,6 +13,7 @@ typedef enum {
 typedef struct {
   driver_profile profile;
   int pools_required;
+  int bump_required;
   component_spec *components[COMPONENT_MANIFEST_MAX_COMPONENTS];
   int component_count;
 } driver_requirements;

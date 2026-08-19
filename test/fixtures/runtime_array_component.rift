@@ -1,0 +1,5 @@
+sub main() {
+  byte[] values;
+  append(values, 7);
+  byte value := get(values, 0);
+}

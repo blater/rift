@@ -23,6 +23,7 @@ typedef struct generator_options {
   int zxn_test;
   int zxn_memory_profile;
   int select_all_components;
+  int force_bump_pool;
 } generator_options;
 
 generator_t *new_generator(char *filename, const char *output_base,

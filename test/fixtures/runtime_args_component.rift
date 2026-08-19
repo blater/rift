@@ -1,0 +1,4 @@
+sub main() {
+  string[] args := get_args();
+  int count := length(args);
+}

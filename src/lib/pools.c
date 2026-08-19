@@ -31,7 +31,9 @@
 #define RIFT_BUDDY_MAX_ROOTS 2
 /* Z88DK does not guarantee that a global union is placed at its member's
  * alignment. Reserve one byte and align the usable base ourselves. */
+#ifndef RIFT_ZXN_NO_BUMP_POOL
 static char zxn_bump_pool_storage[RIFT_ZXN_BUMP_POOL_CAPACITY + 1];
+#endif
 static char zxn_longlived_pool_storage[RIFT_ZXN_LONGLIVED_POOL_CAPACITY + 1];
 #else
 #define RIFT_BUDDY_MAX_ORDERS (sizeof(size_t) * CHAR_BIT)
@@ -294,14 +296,25 @@ void rift_pools_init(size_t bump_capacity, size_t longlived_capacity) {
   size_t units;
   size_t root_offset = 0;
 #ifdef __SDCC
-  if (bump_capacity > RIFT_ZXN_BUMP_POOL_CAPACITY ||
-      longlived_capacity > RIFT_ZXN_LONGLIVED_POOL_CAPACITY) {
+  if (longlived_capacity > RIFT_ZXN_LONGLIVED_POOL_CAPACITY) {
     rift_error_text("rift_pools: requested ZXN pool capacity exceeds static budget\n");
     exit(1);
   }
+#ifndef RIFT_ZXN_NO_BUMP_POOL
+  if (bump_capacity > RIFT_ZXN_BUMP_POOL_CAPACITY) {
+    rift_error_text("rift_pools: requested ZXN bump capacity exceeds static budget\n");
+    exit(1);
+  }
   bump_base = align_pool_base(zxn_bump_pool_storage, alignment);
+#else
+  (void)bump_capacity;
+  bump_base = NULL;
+#endif
   ll_base = align_pool_base(zxn_longlived_pool_storage, alignment);
-  if (((uintptr_t)bump_base % alignment) != 0 ||
+  if (
+#ifndef RIFT_ZXN_NO_BUMP_POOL
+      ((uintptr_t)bump_base % alignment) != 0 ||
+#endif
       ((uintptr_t)ll_base % alignment) != 0) {
     rift_error_text("rift_pools: target pool alignment failure\n");
     exit(1);
@@ -327,7 +340,11 @@ void rift_pools_init(size_t bump_capacity, size_t longlived_capacity) {
     exit(1);
   }
 #endif
+#ifdef RIFT_ZXN_NO_BUMP_POOL
+  bump_cap = 0;
+#else
   bump_cap = bump_capacity - (bump_capacity % alignment);
+#endif
   ll_cap = longlived_capacity - (longlived_capacity % ll_quantum);
   if (!offset_fits(ll_cap) || ll_cap < ll_quantum) {
     rift_error_text("rift_pools: invalid longlived pool capacity\n");

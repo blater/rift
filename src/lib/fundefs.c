@@ -2,9 +2,6 @@
 #include "fundefs_internal.h"
 #include "error_sink.h"
 #include "pools.h"
-#ifndef __SDCC
-#include <stdio.h>
-#endif
 #include <stdlib.h>
 #include <string.h>
 
@@ -63,6 +60,8 @@ int equals(string s1, string s2) {
     return 0;
   return memcmp(s1.data, s2.data, s1.length) == 0;
 }
+
+size_t __length_string(string s) { return s.length; }
 
 // ============================================================================
 // STRING OPERATIONS (available everywhere with out-param convention)
@@ -194,74 +193,6 @@ void setCharAt(string s, int n, char c) {
   s.data[n] = c;
 }
 
-// ============================================================================
-// FILE I/O (host-only, requires POSIX APIs)
-// ============================================================================
-
-#ifdef __SDCC
-void __read_file_impl(string *out, string filename) {
-  (void)filename;
-  __rift_make_string(out, "", 0);
-}
-
-void write_string_to_file(string s, string filename) {
-  (void)s;
-  (void)filename;
-}
-
-void __get_abs_path_impl(string *out, string path) {
-  (void)path;
-  __rift_make_string(out, "", 0);
-}
-#else
-void __read_file_impl(string *out, string filename) {
-  FILE *f = fopen(string_to_cstr(filename), "r");
-  if (f == NULL) {
-    printf("Unable to open file \"%s\" for reading: ",
-           string_to_cstr(filename));
-    perror("");
-    exit_rift(1);
-  }
-  fseek(f, 0, SEEK_END);
-  size_t length = ftell(f);
-  fseek(f, 0, SEEK_SET);
-  __rift_make_longlived_string(out, length);
-  fread(out->data, 1, length, f);
-  out->data[length] = 0;
-  fclose(f);
-}
-
-void write_string_to_file(string s, string filename) {
-  /* ADR-0003 §13: length-aware write. Substring views are not
-   * null-terminated, so fprintf("%s", s.data) would over-read into the
-   * source's bytes. fwrite uses the descriptor's length explicitly. */
-  char *fname = string_to_cstr(filename);
-  FILE *f = fopen(fname, "wb");
-  if (f == NULL) {
-    printf("Unable to open file \"%s\" for writing: ",
-           string_to_cstr(filename));
-    perror("");
-    exit_rift(1);
-  }
-  if (s.data != NULL && s.length > 0) {
-    fwrite(s.data, 1, s.length, f);
-  }
-  fclose(f);
-}
-
-void __get_abs_path_impl(string *out, string path) {
-  char *abs_path_tmp = realpath(path.data, NULL);
-  if (abs_path_tmp == NULL) {
-    printf("Could not get absolute path of file \'%s\'\n", path.data);
-    exit(1);
-  }
-  size_t abs_len = strlen(abs_path_tmp);
-  __rift_make_longlived_string(out, abs_len);
-  memcpy(out->data, abs_path_tmp, abs_len + 1);
-  free(abs_path_tmp);
-}
-#endif
-
 /* Retain/release on string backing. NULL backing denotes a borrowed view;
  * static literal backing is immortal; all produced mutable strings live in
  * the long-lived pool. */
@@ -321,35 +252,6 @@ string __return_string(string s) {
   return s;
 }
 
-void *__handle_retain(void *payload) {
-  if (!payload) return payload;
-  rift_block_header *h = ((rift_block_header *)payload) - 1;
-  if (h->refcount == RIFT_RC_STATIC) return payload;
-  if (h->refcount == RIFT_RC_FREE || h->refcount == RIFT_RC_MAGAZINE) {
-    rift_error_text("rift: __handle_retain on already-freed block\n");
-    exit(1);
-  }
-  if (h->refcount >= RIFT_RC_FREE - 1) {
-    rift_error_text("rift: __handle_retain refcount overflow\n");
-    exit(1);
-  }
-  h->refcount++;
-  return payload;
-}
-
-void __handle_release(void *payload) {
-  if (!payload) return;
-  rift_block_header *h = ((rift_block_header *)payload) - 1;
-  if (h->refcount == RIFT_RC_STATIC) return;
-  if (h->refcount == RIFT_RC_FREE || h->refcount == RIFT_RC_MAGAZINE) {
-    rift_error_text("rift: __handle_release on already-freed block\n");
-    exit(1);
-  }
-  if (--h->refcount == 0) {
-    rift_longlived_free(payload);
-  }
-}
-
 // ============================================================================
 // STRING SLICING
 // ============================================================================
@@ -402,29 +304,3 @@ void __substring_range(string *out, string s, int start, int end) {
   out->backing  = s.backing;
   __string_retain(*out);
 }
-
-// ============================================================================
-// TYPE CONVERSIONS
-// ============================================================================
-
-int __to_int_byte(byte b) {
-  return (int)b;
-}
-
-byte __to_byte_int(int n) {
-  return (byte)n;
-}
-
-int  __to_int_word(word w)  { return (int)w; }
-word __to_word_int(int n)   { return (word)n; }
-
-int   __to_int_dword(dword d)  { return (int)d; }
-dword __to_dword_int(int n)    { return (dword)n; }
-int   __to_int_float(float f)  { return (int)f; }
-
-// ============================================================================
-// ALWAYS-AVAILABLE CASTING FUNCTIONS (safe for sccz80)
-// ============================================================================
-
-byte __to_byte_word(word w) { return (byte)w; }
-word __to_word_byte(byte b) { return (word)b; }

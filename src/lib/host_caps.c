@@ -2,30 +2,6 @@
 
 rift_host_caps host_caps = {0};
 
-#ifdef __SDCC
-
-/* ZXN target: we are running on the real machine. Every RTL component
- * backed by hardware / ROM is always available at full fidelity. */
-void rift_rtl_init(void) {
-  host_caps.print_at = 1;
-  host_caps.ink      = 1;
-  host_caps.plot     = 1;
-}
-
-void rift_rtl_shutdown(void) {
-  /* Nothing to tear down on ZXN today. */
-}
-
-void graphics_on(void) {
-  /* ZXN target: graphics-capable runtime is already active. */
-}
-
-void graphics_off(void) {
-  /* ZXN target: no host terminal mode to disable. */
-}
-
-#else
-
 /* Host target: probe real capabilities at startup and install any
  * teardown hooks that the rest of the RTL relies on. */
 
@@ -89,5 +65,3 @@ void graphics_off(void) {
 void rift_rtl_shutdown(void) {
   graphics_off();
 }
-
-#endif

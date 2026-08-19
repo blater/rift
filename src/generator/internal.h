@@ -61,6 +61,7 @@ struct generator_t {
   int in_main_body;
   int main_needs_epilogue;
   int select_all_components;
+  int force_bump_pool;
   unsigned char opaque_value_used[COMPONENT_MANIFEST_MAX_INTERFACES];
   unsigned char opaque_array_used[COMPONENT_MANIFEST_MAX_INTERFACES];
   int zxn_tiny_eligible;
@@ -68,6 +69,7 @@ struct generator_t {
   int zxn_tiny_simple_stdout;
   int zxn_light_core_eligible;
   int zxn_pools_required;
+  int zxn_bump_required;
 };
 
 #endif

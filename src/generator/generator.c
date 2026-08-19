@@ -257,20 +257,6 @@ static void register_builtin_typed(name_table_t *table, const char *name,
   push_nt(table, sv_from_cstr((char*)name), NT_FUN, new_ast(fn));
 }
 
-// Helper: Register a builtin that returns an array type (e.g. get_args → string[])
-static void register_builtin_array(name_table_t *table, const char *name,
-                                   const char *elem_type) {
-  node_t rt = {0};
-  rt.tag = type;
-  rt.data.type.name.lexeme = sv_from_cstr((char*)elem_type);
-  rt.data.type.is_array = 1;
-  node_t fn = {0};
-  fn.tag = fundef;
-  fn.data.fundef.name.lexeme = sv_from_cstr((char*)name);
-  fn.data.fundef.ret_type = new_ast(rt);
-  push_nt(table, sv_from_cstr((char*)name), NT_FUN, new_ast(fn));
-}
-
 // Count top-level user fundefs (non-methods) sharing a name. Used to decide
 // whether to mangle a name for arity-based overload dispatch. Only user fundefs
 // are counted — builtins are not overloaded in Phase 1.
@@ -715,6 +701,7 @@ generator_t *new_generator(char *filename, const char *output_base,
            output_base);
   res->asset_decls = new_ast_array();
   res->select_all_components = options.select_all_components;
+  res->force_bump_pool = options.force_bump_pool;
 
   register_builtin_type(&res->table, "int");
   register_builtin_type(&res->table, "byte");
@@ -741,10 +728,6 @@ generator_t *new_generator(char *filename, const char *output_base,
   register_builtin(&res->table, "string_to_cstr",       "void");
   register_builtin(&res->table, "cstr_to_string",       "string");
   register_builtin(&res->table, "new_string",           "string");
-  // File operations
-  register_builtin(&res->table, "read_file",            "string");
-  register_builtin(&res->table, "write_string_to_file", "void");
-  register_builtin(&res->table, "get_abs_path",         "string");
   // Numeric conversions
   register_builtin(&res->table, "to_int",               "int");
   register_builtin(&res->table, "to_byte",              "byte");
@@ -756,26 +739,15 @@ generator_t *new_generator(char *filename, const char *output_base,
   register_builtin(&res->table, "substring",            "string");
   register_builtin(&res->table, "concat",               "string");
   register_builtin(&res->table, "toString",             "string");
-  // Command-line argument access
-  register_builtin_array(&res->table, "get_args",       "string");
   // Core compiler functions - always available
   register_builtin(&res->table, "exit",                 "void");
   register_builtin(&res->table, "halt",                 "void");
   register_builtin(&res->table, "putchar",              "void");
   register_builtin(&res->table, "putchar_at",           "void");
   register_builtin(&res->table, "putchar_addr",         "void");
-  register_builtin(&res->table, "fill_cmd_args",        "void");
-  register_builtin(&res->table, "zxn_test_begin",       "void");
+  /* Generated startup markers use the compiler-private C-string stage ABI.
+   * Rift-visible target-test helpers are declared by the manifest. */
   register_builtin(&res->table, "zxn_test_stage",       "void");
-  register_builtin(&res->table, "zxn_test_pass",        "void");
-  register_builtin(&res->table, "zxn_test_fail",        "void");
-  register_builtin_typed(&res->table, "zxn_test_assert_pass", "void", 1, "string");
-  register_builtin_typed(&res->table, "zxn_test_assert_fail", "void", 3,
-                         "string", "string", "string");
-  register_builtin(&res->table, "zxn_test_finish",      "void");
-  // Memory operations
-  register_builtin(&res->table, "poke",                 "void");
-  register_builtin(&res->table, "peek",                 "byte");
   register_builtin_typed(&res->table, "Sprite",         "Sprite", 1, "byte");
 
   /* Component-backed built-ins are registered from components.manifest by
@@ -2687,13 +2659,19 @@ void generate_fundef(generator_t *g, ast_t fun) {
         fprintf(f, "zxn_test_stage(\"pools\");\n");
       fprintf(f, "rift_pools_init(RIFT_ZXN_BUMP_POOL_CAPACITY, "
                  "RIFT_ZXN_LONGLIVED_POOL_CAPACITY);\n");
-      fprintf(f, "__internal_set_dynamic_array_initial_capacity(8);\n");
+      int arrays = component_index(g, "arrays");
+      if (arrays >= 0 && g->closed_components[arrays])
+        fprintf(f, "__internal_set_dynamic_array_initial_capacity(8);\n");
     } else {
       fprintf(f, "rift_pools_init(4u * 1024u * 1024u, 4u * 1024u * 1024u);\n");
     }
     if (g->zxn_test)
       fprintf(f, "zxn_test_stage(\"arguments\");\n");
-    fprintf(f, "fill_cmd_args(argc, argv);\n");
+    int process_args = component_index(g, "process_args");
+    if (process_args >= 0 && g->closed_components[process_args])
+      fprintf(f, "fill_cmd_args(argc, argv);\n");
+    else
+      fprintf(f, "(void)argc; (void)argv;\n");
     if (g->zxn_test)
       fprintf(f, "zxn_test_stage(\"rtl\");\n");
     generator_emit_component_init(g);
@@ -3025,12 +3003,20 @@ void transpile(generator_t *g, ast_t program) {
   g->zxn_tiny_uses_stdout = tiny.uses_stdout;
   g->zxn_tiny_simple_stdout = tiny.simple_stdout;
   g->zxn_light_core_eligible = g->target == TARGET_ZXN;
+  g->zxn_bump_required = g->select_all_components || g->force_bump_pool;
   generator_collect_component_uses(g, program);
+  if (g->zxn_test) record_component(g, "tiny_test");
+  if (g->force_bump_pool) {
+    /* An explicit expert capacity request is a request for real allocator
+     * storage even when the program would otherwise qualify as pool-free. */
+    tiny.eligible = 0;
+    g->zxn_tiny_eligible = 0;
+    record_component(g, "core");
+  }
   if (tiny.eligible) {
     int core = component_index(g, "core");
     if (core >= 0) g->direct_components[core] = 0;
     if (tiny.uses_stdout) record_component(g, "tiny_print");
-    if (g->zxn_test) record_component(g, "tiny_test");
   }
   generator_compute_component_closure(g);
   int closure_startup31_safe = 1;

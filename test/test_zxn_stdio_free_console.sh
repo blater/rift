@@ -116,9 +116,10 @@ build_case() {
 
 run_case() {
   name=$1
+  shift
   "$ROOT/tools/rift-emu" --target zxn --emulator-bin "$EMULATOR" \
     --timeout-seconds 8 --artifacts "$WORK/$name-artifacts" \
-    --require-emulator test "$WORK/$name.nex"
+    --require-emulator "$@" test "$WORK/$name.nex"
 }
 
 build_case typed zxn_console_typed_output.rift
@@ -127,6 +128,7 @@ build_case scroll_cls zxn_console_scroll_cls.rift
 build_case concat_order zxn_console_concat_order.rift
 build_case input_profile zxn_console_input_profile.rift
 build_case input_behavior zxn_console_input_behavior.rift full
+build_case keyboard_matrix zxn_keyboard_matrix_input.rift
 build_case tiny_loop zxn_console_tiny_loop_scroll.rift
 build_case aggregate zxn_console_aggregate_helper.rift
 
@@ -149,7 +151,9 @@ run_case positioned
 run_case scroll_cls
 run_case concat_order
 run_case input_behavior
+run_case keyboard_matrix --send-keys-after-memory 16384:165 --send-keys-ascii \
+  49,50,51,52,53,54,55,56,57,48,113,119,101,114,116,121,117,105,111,112,97,115,100,102,103,104,106,107,108,122,120,99,118,98,110,109,32,13
 run_case tiny_loop
 run_case aggregate
 
-echo 'PASS: typed output, positioning, black cls, scrolling, concat order, keyboard decoding, and line input passed in ZEsarUX'
+echo 'PASS: typed output, positioning, black cls, scrolling, concat order, keyboard matrix/input decoding, and line input passed in ZEsarUX'

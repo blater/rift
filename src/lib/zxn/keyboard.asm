@@ -52,88 +52,33 @@ _scan_keyboard:
 	ret
 
 scan_half_row:
-        in a, (c)
-        xor $FF        ; flip the bits. so 1 is pressed
-        and $1F        ; 00011111b -  are any bits on?
-	jr z, nopress  ; no keys pressed
+	in a, (c)
+	xor $FF
+	and $1F
 
-; start checking the 5 key press bits one by one...
-; key5
-	rr a           ; rotate right most bit into carry
-	jr nc, not5    ; is the rightmost bit zero
-	ld e,(hl)      ; it is one, so key must be pressed
-	inc e          ; inc key strength
-	jr z, key4     ; if we have gone over 255 dont store
-	ld (hl),e      ; else store key strength
-	jr key4
-not5:
-	ld (hl), 0     ; set to not pressed
+	; KEY_* IDs follow the labels above from bit 4 to bit 0. Move bit 4
+	; into bit 7 so each SLA presents the next key in carry.
+	add a, a
+	add a, a
+	add a, a
+	ld d, 5
 
-; --------------------------
-key4:
-	inc hl 		; next key
-	rr a		; rotate keypress bits right
-	jr nc, not4	; if rightmost bit 0 then nothing pressed
-	ld e,(hl)	; else key pressed, load the current press strength
-	inc e 		; increment key press strength (use for debounce)
-	jr z, key3	; if we went over 255 then dont store it
-	ld (hl),e 	; store press strength
-	jr key3
-not4:
-	ld (hl), 0 	; not pressed. Turn key off
-
-; --------------------------
-key3:
-	inc hl
-	rr a
-	jr nc, not3
-	ld e,(hl)
+scan_key:
+	sla a
+	jr nc, key_not_pressed
+	ld e, (hl)
 	inc e
-	jr z, key2
-	ld (hl),e
-	jr key2
-not3:
+	jr z, next_key       ; saturate press strength at 255
+	ld (hl), e
+	jr next_key
+
+key_not_pressed:
 	ld (hl), 0
 
-; --------------------------
-key2:
-	inc hl
-	rr a
-	jr nc, not2
-	ld e,(hl)
-	inc e
-	jr z, key1
-	ld (hl),e
-	jr key1
-not2:
-	ld (hl), 0
-
-; --------------------------
-key1:
-	inc hl
-	rr a
-	jr nc, not1
-	ld e,(hl)
-	inc e
-	ret z
-	ld (hl),e
-	ret
-not1:
-	ld (hl), 0
-	ret
-
-nopress:
-	ld (hl), a  ; set key press indicators for the half row to zero
-		    ; using A as reg assign is faster (A is implicitly 0)
-	inc hl
-	ld (hl), a
-	inc hl
-	ld (hl), a
-	inc hl
-	ld (hl), a
-	inc hl
-	ld (hl), a
-	inc hl
+next_key:
+	inc hl               ; always leave HL at the following buffer slot
+	dec d
+	jr nz, scan_key
 	ret
 
 ; key row IO addresses

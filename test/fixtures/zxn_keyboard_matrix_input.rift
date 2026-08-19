@@ -1,0 +1,22 @@
+sub check_key(int expected) {
+  if (to_int(keypress()) = expected) {
+    zxn_test_pass();
+  } else {
+    zxn_test_fail();
+  }
+}
+
+sub main() {
+  string expected := "1234567890qwertyuiopasdfghjklzxcvbnm";
+  poke(to_word(16384), to_byte(165));
+
+  for index := 0 to length(expected) - 1 {
+    check_key(to_int(charAt(expected, index)));
+  }
+
+  check_key(to_int(' '));
+  check_key(13);
+
+  // Keep the target alive until ZRCP has acknowledged the final key batch.
+  sleep(2000);
+}

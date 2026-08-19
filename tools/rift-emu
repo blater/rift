@@ -48,7 +48,7 @@ def wait_for_bmp(path, timeout=2.0):
   raise OSError("timed out waiting for complete BMP: %s" % path)
 
 
-def zrcp_command(port, command, timeout=1.0):
+def zrcp_command(port, command, timeout=1.0, require_prompt=False):
   with socket.create_connection(("127.0.0.1", port), timeout=timeout) as conn:
     conn.settimeout(0.5)
     # Wait for the initial prompt before sending a command. Otherwise a slow
@@ -72,13 +72,18 @@ def zrcp_command(port, command, timeout=1.0):
       try:
         data = conn.recv(4096)
       except socket.timeout:
-        break
+        continue
       if not data:
         break
       chunks.append(data)
       if b"command>" in b"".join(chunks):
         break
-    return b"".join(chunks).decode("utf-8", errors="replace")
+    response = b"".join(chunks).decode("utf-8", errors="replace")
+    if require_prompt and "command>" not in response:
+      raise LauncherError("ZRCP command did not complete: %s" % command)
+    if require_prompt and re.search(r"(^|\n)ERROR", response, re.IGNORECASE):
+      raise LauncherError("ZRCP command failed: %s" % response.strip())
+    return response
 
 
 class ZesaruxAdapter:
@@ -210,6 +215,10 @@ def parse_args():
                       help="stop after this many hits of the measurement breakpoint")
   parser.add_argument("--capture-memory", action="append", default=[], metavar="ADDRESS:LENGTH",
                       help="read target memory after a measurement breakpoint (repeatable)")
+  parser.add_argument("--send-keys-ascii", metavar="CODES",
+                      help="after loading, send comma-separated ASCII key codes through ZEsarUX")
+  parser.add_argument("--send-keys-after-memory", metavar="ADDRESS:VALUE",
+                      help="wait for a target byte before sending ASCII keys")
   return parser.parse_args()
 
 
@@ -224,6 +233,26 @@ def main():
         raise ValueError
     except ValueError:
       raise SystemExit("--capture-memory must be ADDRESS:LENGTH")
+  key_codes = []
+  if args.send_keys_ascii is not None:
+    try:
+      key_codes = [int(value) for value in args.send_keys_ascii.split(",")]
+    except ValueError:
+      raise SystemExit("--send-keys-ascii must contain comma-separated integers")
+    if not key_codes or any(value < 0 or value > 127 for value in key_codes):
+      raise SystemExit("--send-keys-ascii values must be in the range 0..127")
+  key_ready = None
+  if args.send_keys_after_memory is not None:
+    if not key_codes:
+      raise SystemExit("--send-keys-after-memory requires --send-keys-ascii")
+    try:
+      ready_address, ready_value = args.send_keys_after_memory.split(":", 1)
+      key_ready = (int(ready_address, 0), int(ready_value, 0))
+      if key_ready[0] < 0 or key_ready[0] > 0xffff or \
+          key_ready[1] < 0 or key_ready[1] > 0xff:
+        raise ValueError
+    except ValueError:
+      raise SystemExit("--send-keys-after-memory requires address 0..65535 and value 0..255")
   started = time.monotonic()
   result = {"target": args.target, "emulator": args.emulator, "mode": args.mode}
   adapter_class = ADAPTERS.get((args.target, args.emulator))
@@ -271,6 +300,31 @@ def main():
               raise LauncherError("ZRCP did not become ready")
             time.sleep(0.1)
       write_text(artifacts / "load.txt", adapter.load(artifact))
+      if key_codes:
+        if key_ready:
+          ready_address, ready_value = key_ready
+          ready_deadline = time.monotonic() + args.timeout_seconds
+          while time.monotonic() < ready_deadline:
+            ready_state = zrcp_command(
+                adapter.port, "read-memory %d 1" % ready_address)
+            if re.search(r"\b%02X\b" % ready_value, ready_state,
+                         re.IGNORECASE):
+              break
+            if process.poll() is not None:
+              raise LauncherError("emulator exited before keyboard input was ready")
+            time.sleep(0.01)
+          else:
+            raise LauncherError("timed out waiting for keyboard input readiness")
+        sent_keys = []
+        # ZRCP accepts at most 20 parameters, including the delay. Send long
+        # sequences in-order as batches of 19 keys.
+        for offset in range(0, len(key_codes), 19):
+          batch = key_codes[offset:offset + 19]
+          sent_keys.append(zrcp_command(
+              adapter.port,
+              "send-keys-ascii 80 " + " ".join(str(value) for value in batch),
+              timeout=len(batch) * 0.16 + 1, require_prompt=True))
+        write_text(artifacts / "send-keys-ascii.txt", "".join(sent_keys))
       if args.mode == "measure":
         # Verify the program is spinning at its gate, then stop it on a real
         # breakpoint before resetting the counter. Sampling PC alone is not a

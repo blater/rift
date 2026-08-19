@@ -108,6 +108,14 @@ tools/rift-emu test --target=zxn /private/tmp/simple.nex
 `--zxn-test` is test-only. It activates `zxn_test.c`, has `Assert.rift` emit
 PASS/FAIL markers, and asks ZEsarUX to exit once the generated `main` returns.
 
+For an input-waiting test, pass `--send-keys-ascii` a comma-separated list of
+ASCII codes. The launcher injects them through ZEsarUX after the NEX has loaded
+and batches long sequences within ZRCP's parameter limit. For example,
+`--send-keys-ascii 49,50,51,13` types `123` followed by Enter. Deterministic
+tests should write a ready byte immediately before waiting for input and name
+it with `--send-keys-after-memory ADDRESS:VALUE` so the first press cannot race
+startup.
+
 `--allocator-stats` enables per-operation allocator counters for target
 diagnostics. They are intentionally disabled in ordinary ZXN builds so timing
 measurements represent the runtime fast path rather than instrumentation.

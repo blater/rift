@@ -12,4 +12,5 @@ test/array_test.rift        # dynamic/fixed arrays, records and returns
 test/format_test.rift       # function arguments and formatted strings
 test/keyboard_test.rift     # keyboard builtin/link path and bounds handling
 test/plot_test.rift         # ULA pixel drawing and clipping smoke
+test/clock_test.rift        # ROM FRAMES clock and fixed-point trig
 test/zxn-probes/paper_cls_probe.rift # paper sysvar and full ULA clear

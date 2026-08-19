@@ -1,0 +1,79 @@
+include "Assert.rift"
+
+sub main() {
+  Assert a;
+
+  a.AssertEQ("sin 0", 0, sin(0));
+  a.AssertEQ("sin quarter turn", 256, sin(64));
+  a.AssertEQ("sin half turn", 0, sin(128));
+  a.AssertEQ("sin three-quarter turn", 0 - 256, sin(192));
+
+  a.AssertEQ("cos 0", 256, cos(0));
+  a.AssertEQ("cos quarter turn", 0, cos(64));
+  a.AssertEQ("cos half turn", 0 - 256, cos(128));
+  a.AssertEQ("cos three-quarter turn", 0, cos(192));
+  a.AssertEQ("sin diagonal", 181, sin(32));
+  a.AssertEQ("cos diagonal", 181, cos(32));
+
+  int first_quadrant_sum := 0;
+  for p := 1 to 63 {
+    first_quadrant_sum := first_quadrant_sum + sin(p);
+  }
+  a.AssertEQ("sin first-quadrant table checksum", 10271,
+             first_quadrant_sum);
+
+  int bounded := 1;
+  int antisymmetric := 1;
+  int cosine_shifted := 1;
+  for p := 0 to 255 {
+    byte phase := p;
+    byte opposite := phase + 128;
+    byte quarter_later := phase + 64;
+    int value := sin(phase);
+    if value < 0 - 256 || value > 256 {
+      bounded := 0;
+    }
+    if value != 0 - sin(opposite) {
+      antisymmetric := 0;
+    }
+    if cos(phase) != sin(quarter_later) {
+      cosine_shifted := 0;
+    }
+  }
+  a.AssertTrue("fixed trig remains bounded", bounded);
+  a.AssertTrue("sin has half-turn antisymmetry", antisymmetric);
+  a.AssertTrue("cos is quarter-shifted sin", cosine_shifted);
+
+  byte second := 0;
+  byte hand_phase := second * 256 / 60;
+  int dx := sin(hand_phase) * 72 / 256;
+  int dy := cos(hand_phase) * 72 / 256;
+  a.AssertEQ("second 0 x", 0, dx);
+  a.AssertEQ("second 0 y", 72, dy);
+
+  second := 15;
+  hand_phase := second * 256 / 60;
+  dx := sin(hand_phase) * 72 / 256;
+  dy := cos(hand_phase) * 72 / 256;
+  a.AssertEQ("second 15 x", 72, dx);
+  a.AssertEQ("second 15 y", 0, dy);
+
+  second := 30;
+  hand_phase := second * 256 / 60;
+  dx := sin(hand_phase) * 72 / 256;
+  dy := cos(hand_phase) * 72 / 256;
+  a.AssertEQ("second 30 x", 0, dx);
+  a.AssertEQ("second 30 y", 0 - 72, dy);
+
+  second := 45;
+  hand_phase := second * 256 / 60;
+  dx := sin(hand_phase) * 72 / 256;
+  dy := cos(hand_phase) * 72 / 256;
+  a.AssertEQ("second 45 x", 0 - 72, dx);
+  a.AssertEQ("second 45 y", 0, dy);
+
+  dword first_tick := clock_ticks();
+  sleep(200);
+  dword later_tick := clock_ticks();
+  a.AssertTrue("ROM clock advances", later_tick != first_tick);
+}

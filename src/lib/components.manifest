@@ -17,6 +17,7 @@ component|ink_paper|tiny_print|ink_paper.h|ink_paper.c|ink_paper.c||||||startup3
 component|over|plot|over.h|over.c|over.c||||||startup31
 component|cls|tiny_print|cls.h|cls.c|cls.c||||||startup31
 component|time||time.h|time.c|time.c||||||startup31
+component|clock||clock.h|clock.c|clock.c||zxn/clock.asm|rift_clock_init|rift_clock_shutdown||
 component|sound|core|sound.h|sound.c|sound.c||||||
 component|input|keyboard|input.h|input.c|input.c||||||startup31
 component|line_input|core,input,tiny_print||line_input.c|line_input.c||||||startup31
@@ -31,6 +32,7 @@ component|random|core|random.h|random.c|random.c||||||startup31
 component|nextreg||nextreg.h|nextreg.c|nextreg.c||||||startup31
 component|helpers|core|helpers.h|helpers.c|helpers.c||||||startup31
 component|fmath|core|fmath.h|fmath.c|fmath.c||||||startup31
+component|trig||trig.h|trig.c|trig.c||||||startup31
 component|sprite||sprite.h|sprite_host.c|||zxn/sprite.asm||||startup31
 
 # builtin|rift-name|component|return-type|parameter-types|C-symbol|reserved
@@ -77,6 +79,9 @@ builtin|fcos|fmath|float|float|fcos|
 builtin|fsqrt|fmath|float|float|fsqrt|
 builtin|fabs_float|fmath|float|float|fabs_float|
 builtin|fpi|fmath|float||fpi|
+builtin|sin|trig|int|byte|rift_sin|
+builtin|cos|trig|int|byte|rift_cos|
+builtin|clock_ticks|clock|dword||rift_clock_ticks|
 builtin|sleep|time|void|word|rift_sleep|
 builtin|beep|sound|void|word,word|beep|
 builtin|inkey|input|byte||inkey|

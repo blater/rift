@@ -131,6 +131,24 @@ grep -q "undefined function printf" "$WORK/printf-undefined.log" || \
 grep -q '^@profile=full$' "$WORK/beep.components" || \
   fail "ROM BEEPER was incorrectly admitted to a startup-31 profile"
 
+for target in gcc zxn; do
+  "$ROOT/riftc" "$FIXTURES/clock_trig_components.rift" \
+    "$WORK/clock-trig-$target" --target="$target" \
+    "--component-manifest=$ROOT/src/lib/components.manifest"
+  expected_clock_trig=$'RIFT_COMPONENTS_V1\n@profile=full\ntiny_print\ntiny_test\nerror_sink\ncore\nclock\ntrig'
+  [ "$(cat "$WORK/clock-trig-$target.components")" = "$expected_clock_trig" ] || \
+    fail "clock/trig selected the wrong $target component closure"
+  grep -q 'rift_sin(phase)' "$WORK/clock-trig-$target.c" || \
+    fail "fixed sin did not lower to its collision-safe C symbol"
+  grep -q 'rift_cos(phase)' "$WORK/clock-trig-$target.c" || \
+    fail "fixed cos did not lower to its collision-safe C symbol"
+  grep -q 'rift_clock_ticks()' "$WORK/clock-trig-$target.c" || \
+    fail "clock_ticks did not lower to its runtime symbol"
+  if grep -q '^fmath$' "$WORK/clock-trig-$target.components"; then
+    fail "fixed trig unnecessarily selected floating-point math"
+  fi
+done
+
 "$ROOT/riftc" "$FIXTURES/zxn_graphics_core_profile.rift" "$WORK/graphics-core" \
   --target=zxn "--component-manifest=$ROOT/src/lib/components.manifest"
 grep -q '^@profile=core-31$' "$WORK/graphics-core.components" || \

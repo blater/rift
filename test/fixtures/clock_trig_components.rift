@@ -1,0 +1,5 @@
+sub main() {
+  byte phase := 0;
+  int value := sin(phase) + cos(phase);
+  dword ticks := clock_ticks();
+}

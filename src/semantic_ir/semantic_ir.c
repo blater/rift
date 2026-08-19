@@ -158,8 +158,11 @@ static int effects_equal(sir_effects left, sir_effects right) {
 
 static int call_arguments_valid(const sir_function *function,
                                 const sir_operation *operation,
-                                const sir_signature *signature) {
+                                const sir_signature *signature,
+                                size_t block_index, size_t operation_index) {
   size_t index;
+  size_t previous_preparation = 0;
+  int has_previous_preparation = 0;
   if (signature->parameter_count != operation->operand_count) {
     return 0;
   }
@@ -170,6 +173,27 @@ static int call_arguments_valid(const sir_function *function,
         value->representation != parameter->representation ||
         value->ownership != parameter->ownership) {
       return 0;
+    }
+    if (signature->kind == SIR_CALLEE_USER &&
+        parameter->mode == SIR_ARGUMENT_CONSUME) {
+      const sir_block *block = &function->blocks[block_index];
+      size_t definition_index;
+      int prepared = 0;
+      for (definition_index = 0; definition_index < operation_index;
+           definition_index++) {
+        const sir_operation *definition = &block->operations[definition_index];
+        if (definition->result == operation->operands[index]) {
+          prepared = definition->kind == SIR_OP_PREPARE_ARGUMENT &&
+                     definition->callee == operation->callee &&
+                     definition->parameter_index == index;
+          break;
+        }
+      }
+      if (!prepared || (has_previous_preparation &&
+                        definition_index <= previous_preparation))
+        return 0;
+      previous_preparation = definition_index;
+      has_previous_preparation = 1;
     }
   }
   return 1;
@@ -219,6 +243,7 @@ static int environment_valid(const sir_environment *environment,
     if (signature->kind <= SIR_CALLEE_UNKNOWN ||
         signature->kind > SIR_CALLEE_INTRINSIC ||
         (signature->parameter_count != 0 && signature->parameters == NULL) ||
+        signature->c_symbol.data == NULL || signature->c_symbol.length == 0 ||
         !effects_valid(signature->effects) ||
         (signature->effects.flags & SIR_EFFECT_CALL) == 0 ||
         !type_metadata_valid(signature->return_type,
@@ -615,6 +640,7 @@ static int validate_operation_contract(const sir_function *function,
   }
   if (operation->kind != SIR_OP_CALL &&
       operation->kind != SIR_OP_TERMINAL_CALL &&
+      operation->kind != SIR_OP_PREPARE_ARGUMENT &&
       operation->callee != SIR_INVALID_ID) {
     set_diagnostic(diagnostic, SIR_DIAGNOSTIC_INVALID_OPERATION, block_index,
                    operation_index,
@@ -654,6 +680,40 @@ static int validate_operation_contract(const sir_function *function,
         value_matches_slot(function, operation->operands[0], operation->slot) &&
         effects_are_pure(operation->effects)) {
       return 1;
+    }
+    break;
+  case SIR_OP_PREPARE_ARGUMENT:
+    if (environment == NULL ||
+        operation->callee >= environment->signature_count || result == NULL ||
+        operation->operand_count != 1 || operation->target_count != 0 ||
+        operation->slot != SIR_INVALID_ID ||
+        !effects_are_pure(operation->effects)) {
+      break;
+    }
+    {
+      const sir_signature *signature =
+          &environment->signatures[operation->callee];
+      const sir_value *source = &function->values[operation->operands[0]];
+      const sir_signature_parameter *parameter;
+      const sir_operation *previous;
+      if (signature->kind != SIR_CALLEE_USER ||
+          operation->parameter_index >= signature->parameter_count ||
+          operation_index == 0) {
+        break;
+      }
+      parameter = &signature->parameters[operation->parameter_index];
+      previous = &function->blocks[block_index].operations[operation_index - 1];
+      if (parameter->mode == SIR_ARGUMENT_CONSUME &&
+          previous->result == operation->operands[0] &&
+          sir_type_equal(source->type, parameter->type) &&
+          source->representation == parameter->representation &&
+          (source->ownership == SIR_OWNERSHIP_BORROWED ||
+           source->ownership == SIR_OWNERSHIP_OWNED) &&
+          sir_type_equal(result->type, parameter->type) &&
+          result->representation == parameter->representation &&
+          result->ownership == parameter->ownership) {
+        return 1;
+      }
     }
     break;
   case SIR_OP_PRIMITIVE:
@@ -713,7 +773,8 @@ static int validate_operation_contract(const sir_function *function,
       if ((signature->effects.flags & SIR_EFFECT_NONRETURNING) == 0 &&
           operation->target_count == 0 && result_matches &&
           effects_equal(operation->effects, signature->effects) &&
-          call_arguments_valid(function, operation, signature)) {
+          call_arguments_valid(function, operation, signature, block_index,
+                               operation_index)) {
         return 1;
       }
       set_diagnostic(diagnostic, SIR_DIAGNOSTIC_CALL_ABI_MISMATCH, block_index,
@@ -736,7 +797,8 @@ static int validate_operation_contract(const sir_function *function,
           signature->return_type.kind == SIR_TYPE_VOID &&
           (signature->effects.flags & SIR_EFFECT_NONRETURNING) != 0 &&
           effects_equal(operation->effects, signature->effects) &&
-          call_arguments_valid(function, operation, signature)) {
+          call_arguments_valid(function, operation, signature, block_index,
+                               operation_index)) {
         return 1;
       }
       set_diagnostic(
@@ -744,6 +806,24 @@ static int validate_operation_contract(const sir_function *function,
           operation_index,
           "terminal call does not match its authoritative signature");
       return 0;
+    }
+    break;
+  case SIR_OP_EXPRESSION_END:
+    if (result == NULL && operation->operand_count == 1 &&
+        operation->target_count == 0 && operation->slot == SIR_INVALID_ID &&
+        operation->callee == SIR_INVALID_ID &&
+        effects_are_pure(operation->effects)) {
+      const sir_value *discarded = &function->values[operation->operands[0]];
+      const sir_operation *definition =
+          operation_index == 0
+              ? NULL
+              : &function->blocks[block_index].operations[operation_index - 1];
+      if (definition != NULL && definition->result == operation->operands[0] &&
+          definition->kind == SIR_OP_CALL &&
+          discarded->ownership == SIR_OWNERSHIP_OWNED &&
+          discarded->representation == SIR_REP_STRING_DESCRIPTOR) {
+        return 1;
+      }
     }
     break;
   case SIR_OP_JUMP:
@@ -786,6 +866,56 @@ static int validate_operation_contract(const sir_function *function,
                  operation_index,
                  "operation does not satisfy its primitive contract");
   return 0;
+}
+
+static int validate_prepared_argument_uses(const sir_function *function,
+                                           sir_diagnostic *diagnostic) {
+  size_t block_index;
+  for (block_index = 0; block_index < function->block_count; block_index++) {
+    const sir_block *block = &function->blocks[block_index];
+    size_t operation_index;
+    for (operation_index = 0; operation_index < block->operation_count;
+         operation_index++) {
+      const sir_operation *preparation = &block->operations[operation_index];
+      size_t use_count = 0;
+      size_t use_block;
+      if (preparation->kind != SIR_OP_PREPARE_ARGUMENT)
+        continue;
+      for (use_block = 0; use_block < function->block_count; use_block++) {
+        const sir_block *candidate_block = &function->blocks[use_block];
+        size_t use_operation;
+        for (use_operation = 0;
+             use_operation < candidate_block->operation_count;
+             use_operation++) {
+          const sir_operation *candidate =
+              &candidate_block->operations[use_operation];
+          size_t operand_index;
+          for (operand_index = 0; operand_index < candidate->operand_count;
+               operand_index++) {
+            if (candidate->operands[operand_index] != preparation->result)
+              continue;
+            use_count++;
+            if (candidate->kind != SIR_OP_CALL ||
+                candidate->callee != preparation->callee ||
+                operand_index != preparation->parameter_index) {
+              set_diagnostic(
+                  diagnostic, SIR_DIAGNOSTIC_CALL_ABI_MISMATCH, block_index,
+                  operation_index,
+                  "prepared argument is used outside its resolved call slot");
+              return 0;
+            }
+          }
+        }
+      }
+      if (use_count != 1) {
+        set_diagnostic(diagnostic, SIR_DIAGNOSTIC_CALL_ABI_MISMATCH,
+                       block_index, operation_index,
+                       "prepared argument must be consumed exactly once");
+        return 0;
+      }
+    }
+  }
+  return 1;
 }
 
 int sir_verify_function(const sir_function *function,
@@ -897,6 +1027,9 @@ int sir_verify_function(const sir_function *function,
   }
   if (!verify_value_dominance(function, definition_blocks,
                               definition_operations, diagnostic)) {
+    goto cleanup;
+  }
+  if (!validate_prepared_argument_uses(function, diagnostic)) {
     goto cleanup;
   }
   valid = 1;

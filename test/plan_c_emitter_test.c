@@ -1,4 +1,4 @@
-#include "ownership_plan/ownership_plan.h"
+#include "ownership_plan/internal.h"
 #include "plan_c_emitter/plan_c_emitter.h"
 #include "semantic_ir/lower.h"
 
@@ -24,6 +24,121 @@ static token_t named_token(char *name) {
   token.lexeme.data = name;
   token.lexeme.length = strlen(name);
   return token;
+}
+
+static string_view named_view(char *name) { return named_token(name).lexeme; }
+
+static sir_operation sir_test_operation(sir_op_kind kind) {
+  sir_operation operation;
+  memset(&operation, 0, sizeof(operation));
+  operation.kind = kind;
+  operation.primitive = SIR_PRIMITIVE_UNKNOWN;
+  operation.effects = sir_effects_none();
+  operation.result = SIR_INVALID_ID;
+  operation.slot = SIR_INVALID_ID;
+  operation.callee = SIR_INVALID_ID;
+  operation.parameter_index = SIZE_MAX;
+  operation.targets[0] = SIR_INVALID_ID;
+  operation.targets[1] = SIR_INVALID_ID;
+  return operation;
+}
+
+static ownership_plan *build_call_plan(void) {
+  sir_function semantic;
+  sir_signature_parameter parameter;
+  sir_signature signature;
+  sir_environment environment;
+  sir_slot slot;
+  sir_value value;
+  sir_operation operation;
+  sir_diagnostic semantic_diagnostic;
+  ownership_diagnostic ownership_diagnostic;
+  ownership_plan *plan;
+  sir_id block;
+  sir_id slot_id;
+  sir_id borrowed;
+  sir_id prepared;
+  sir_id call_result;
+  sir_id returned;
+
+  sir_function_init(&semantic);
+  semantic.name = named_view("caller");
+  semantic.external_symbol = named_view("rift_plan_fn_0");
+  semantic.c_symbol = named_view("rift_plan_body_0");
+  semantic.return_type = sir_builtin_type(SIR_TYPE_STRING);
+  semantic.return_representation = SIR_REP_STRING_DESCRIPTOR;
+  semantic.return_ownership = SIR_OWNERSHIP_OWNED;
+  memset(&slot, 0, sizeof(slot));
+  slot.name = named_view("value");
+  slot.type = semantic.return_type;
+  slot.representation = semantic.return_representation;
+  slot.ownership = semantic.return_ownership;
+  slot.is_parameter = 1;
+  slot_id = sir_function_add_slot(&semantic, slot);
+  value.type = slot.type;
+  value.representation = slot.representation;
+  value.ownership = SIR_OWNERSHIP_BORROWED;
+  borrowed = sir_function_add_value(&semantic, value);
+  value.ownership = SIR_OWNERSHIP_OWNED;
+  prepared = sir_function_add_value(&semantic, value);
+  call_result = sir_function_add_value(&semantic, value);
+  value.ownership = SIR_OWNERSHIP_BORROWED;
+  returned = sir_function_add_value(&semantic, value);
+  parameter.type = slot.type;
+  parameter.representation = slot.representation;
+  parameter.ownership = SIR_OWNERSHIP_OWNED;
+  parameter.mode = SIR_ARGUMENT_CONSUME;
+  memset(&signature, 0, sizeof(signature));
+  signature.kind = SIR_CALLEE_USER;
+  signature.c_symbol = named_view("rift_plan_body_1");
+  signature.parameters = &parameter;
+  signature.parameter_count = 1;
+  signature.return_type = slot.type;
+  signature.return_representation = slot.representation;
+  signature.return_ownership = slot.ownership;
+  signature.effects = sir_effects_none();
+  signature.effects.flags = SIR_EFFECT_CALL;
+  environment.signatures = &signature;
+  environment.signature_count = 1;
+  block = sir_function_add_block(&semantic);
+  semantic.entry_block = block;
+  operation = sir_test_operation(SIR_OP_BORROW_SLOT);
+  operation.slot = slot_id;
+  operation.result = borrowed;
+  (void)sir_block_add_operation(&semantic, block, &operation);
+  operation = sir_test_operation(SIR_OP_PREPARE_ARGUMENT);
+  operation.callee = 0;
+  operation.parameter_index = 0;
+  operation.operands = &borrowed;
+  operation.operand_count = 1;
+  operation.result = prepared;
+  (void)sir_block_add_operation(&semantic, block, &operation);
+  operation = sir_test_operation(SIR_OP_CALL);
+  operation.callee = 0;
+  operation.effects = signature.effects;
+  operation.operands = &prepared;
+  operation.operand_count = 1;
+  operation.result = call_result;
+  (void)sir_block_add_operation(&semantic, block, &operation);
+  operation = sir_test_operation(SIR_OP_EXPRESSION_END);
+  operation.operands = &call_result;
+  operation.operand_count = 1;
+  (void)sir_block_add_operation(&semantic, block, &operation);
+  operation = sir_test_operation(SIR_OP_BORROW_SLOT);
+  operation.slot = slot_id;
+  operation.result = returned;
+  (void)sir_block_add_operation(&semantic, block, &operation);
+  operation = sir_test_operation(SIR_OP_RETURN);
+  operation.operands = &returned;
+  operation.operand_count = 1;
+  (void)sir_block_add_operation(&semantic, block, &operation);
+  if (!sir_verify_function(&semantic, &environment, &semantic_diagnostic)) {
+    sir_function_destroy(&semantic);
+    return NULL;
+  }
+  plan = ownership_plan_build(&semantic, &environment, &ownership_diagnostic);
+  sir_function_destroy(&semantic);
+  return plan;
 }
 
 static ast_t build_copy_function(node_t *nodes, token_t *arguments,
@@ -90,6 +205,7 @@ static ownership_plan *build_named_plan_with_symbol(char *function_name,
   }
   semantic.c_symbol.data = c_symbol;
   semantic.c_symbol.length = strlen(c_symbol);
+  semantic.external_symbol = semantic.c_symbol;
   plan = ownership_plan_build(&semantic, NULL, &ownership_diagnostic);
   sir_function_destroy(&semantic);
   return plan;
@@ -277,9 +393,59 @@ static void test_preflight_is_output_free(void) {
   ownership_plan_destroy(plan);
 }
 
+static ownership_operation *mutable_call_operation(ownership_plan *plan) {
+  size_t index;
+  ownership_block *block = &plan->blocks[plan->entry_block];
+  for (index = 0; index < block->operation_count; index++) {
+    if (block->operations[index].kind == OWNERSHIP_OP_CALL)
+      return &block->operations[index];
+  }
+  return NULL;
+}
+
+static void test_malformed_call_preflight_is_output_free(void) {
+  ownership_plan *plan = build_call_plan();
+  ownership_operation *call = mutable_call_operation(plan);
+  plan_c_diagnostic diagnostic;
+  char *text = NULL;
+  size_t size = 0;
+  FILE *output = open_memstream(&text, &size);
+  expect(plan != NULL && call != NULL && output != NULL,
+         "call-shape preflight fixture is valid before corruption");
+  call->callee = OWNERSHIP_INVALID_ID;
+  expect(!plan_c_emit_function_body(output, plan, plan_c_rift_abi(),
+                                    &diagnostic) &&
+             diagnostic.code == PLAN_C_DIAGNOSTIC_UNSUPPORTED_PLAN,
+         "emitter rejects a sealed call with no resolved target");
+  fflush(output);
+  expect(size == 0, "bad call target writes no output bytes");
+  fclose(output);
+  free(text);
+  ownership_plan_destroy(plan);
+
+  plan = build_call_plan();
+  call = mutable_call_operation(plan);
+  text = NULL;
+  size = 0;
+  output = open_memstream(&text, &size);
+  expect(plan != NULL && call != NULL && output != NULL,
+         "call-operand preflight fixture is valid before corruption");
+  call->operands[0] = OWNERSHIP_INVALID_ID;
+  expect(!plan_c_emit_function_body(output, plan, plan_c_rift_abi(),
+                                    &diagnostic) &&
+             diagnostic.code == PLAN_C_DIAGNOSTIC_UNSUPPORTED_PLAN,
+         "emitter rejects a sealed call with an invalid operand");
+  fflush(output);
+  expect(size == 0, "bad call operand writes no output bytes");
+  fclose(output);
+  free(text);
+  ownership_plan_destroy(plan);
+}
+
 int main(void) {
   test_plan_only_emission();
   test_slot_name_encoding();
   test_preflight_is_output_free();
+  test_malformed_call_preflight_is_output_free();
   return failures == 0 ? 0 : 1;
 }

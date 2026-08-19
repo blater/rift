@@ -99,6 +99,7 @@ typedef struct sir_signature_parameter {
 typedef struct sir_signature {
   sir_callee_kind kind;
   uint32_t symbol_id;
+  string_view c_symbol;
   const sir_signature_parameter *parameters;
   size_t parameter_count;
   sir_type return_type;
@@ -129,8 +130,10 @@ typedef enum sir_op_kind {
   SIR_OP_LOAD_SLOT,
   SIR_OP_BORROW_SLOT,
   SIR_OP_INIT_SLOT,
+  SIR_OP_PREPARE_ARGUMENT,
   SIR_OP_PRIMITIVE,
   SIR_OP_CALL,
+  SIR_OP_EXPRESSION_END,
   SIR_OP_TERMINAL_CALL,
   SIR_OP_JUMP,
   SIR_OP_BRANCH,
@@ -159,6 +162,7 @@ typedef struct sir_operation {
   sir_id result;
   sir_id slot;
   sir_id callee;
+  size_t parameter_index;
   sir_id *operands;
   size_t operand_count;
   sir_id targets[2];
@@ -173,6 +177,7 @@ typedef struct sir_block {
 
 typedef struct sir_function {
   string_view name;
+  string_view external_symbol;
   string_view c_symbol;
   sir_type return_type;
   sir_representation return_representation;

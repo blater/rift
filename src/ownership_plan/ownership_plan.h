@@ -27,6 +27,7 @@ typedef enum ownership_token_origin_kind {
 typedef enum ownership_op_kind {
   OWNERSHIP_OP_UNKNOWN,
   OWNERSHIP_OP_ACQUIRE,
+  OWNERSHIP_OP_ADOPT,
   OWNERSHIP_OP_DEFINE_SCALAR,
   OWNERSHIP_OP_COPY_SCALAR,
   OWNERSHIP_OP_BORROW,
@@ -34,6 +35,7 @@ typedef enum ownership_op_kind {
   OWNERSHIP_OP_MOVE,
   OWNERSHIP_OP_RELEASE,
   OWNERSHIP_OP_END_BORROW,
+  OWNERSHIP_OP_CALL,
   OWNERSHIP_OP_JUMP,
   OWNERSHIP_OP_BRANCH,
   OWNERSHIP_OP_RETURN,
@@ -78,6 +80,7 @@ typedef struct ownership_token_view {
 
 typedef struct ownership_function_view {
   const char *name;
+  const char *external_symbol;
   const char *c_symbol;
   sir_type return_type;
   sir_representation return_representation;
@@ -97,6 +100,10 @@ typedef struct ownership_operation_view {
   ownership_op_kind kind;
   ownership_id result;
   ownership_id operand;
+  ownership_id callee;
+  size_t parameter_index;
+  const ownership_id *operands;
+  size_t operand_count;
   ownership_id targets[2];
   size_t target_count;
 } ownership_operation_view;
@@ -112,6 +119,8 @@ int ownership_plan_function(const ownership_plan *plan,
 size_t ownership_plan_slot_count(const ownership_plan *plan);
 int ownership_plan_slot_at(const ownership_plan *plan, ownership_id slot,
                            ownership_slot_view *view);
+const char *ownership_plan_callee_symbol(const ownership_plan *plan,
+                                         ownership_id callee);
 size_t ownership_plan_token_count(const ownership_plan *plan);
 size_t ownership_plan_block_count(const ownership_plan *plan);
 ownership_id ownership_plan_entry_block(const ownership_plan *plan);

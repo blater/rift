@@ -67,6 +67,8 @@ static ownership_operation operation(ownership_op_kind kind) {
   result.kind = kind;
   result.result = OWNERSHIP_INVALID_ID;
   result.operand = OWNERSHIP_INVALID_ID;
+  result.callee = OWNERSHIP_INVALID_ID;
+  result.parameter_index = SIZE_MAX;
   result.targets[0] = OWNERSHIP_INVALID_ID;
   result.targets[1] = OWNERSHIP_INVALID_ID;
   return result;
@@ -80,6 +82,7 @@ static sir_operation semantic_operation(sir_op_kind kind) {
   result.result = SIR_INVALID_ID;
   result.slot = SIR_INVALID_ID;
   result.callee = SIR_INVALID_ID;
+  result.parameter_index = SIZE_MAX;
   result.targets[0] = SIR_INVALID_ID;
   result.targets[1] = SIR_INVALID_ID;
   return result;
@@ -105,6 +108,25 @@ static ownership_token bool_token(void) {
   token.origin_kind = OWNERSHIP_ORIGIN_SYNTHETIC;
   token.origin = OWNERSHIP_INVALID_ID;
   return token;
+}
+
+static int add_test_callees(ownership_plan *plan, size_t count) {
+  size_t index;
+  plan->callee_symbols = calloc(count, sizeof(*plan->callee_symbols));
+  if (plan->callee_symbols == NULL)
+    return 0;
+  plan->callee_count = count;
+  for (index = 0; index < count; index++) {
+    char name[32];
+    size_t length;
+    snprintf(name, sizeof(name), "rift_plan_body_%zu", index);
+    length = strlen(name);
+    plan->callee_symbols[index] = malloc(length + 1);
+    if (plan->callee_symbols[index] == NULL)
+      return 0;
+    memcpy(plan->callee_symbols[index], name, length + 1);
+  }
+  return 1;
 }
 
 static void test_representative_plan(void) {
@@ -290,6 +312,115 @@ static void test_use_after_move_rejected(void) {
   ownership_plan_internal_destroy(&plan);
 }
 
+static void test_malformed_call_frames_rejected(void) {
+  ownership_plan plan;
+  ownership_diagnostic diagnostic;
+  ownership_operation op;
+  ownership_id operands[2];
+  ownership_id block;
+  ownership_id source;
+  ownership_id prepared;
+  ownership_id result;
+
+  ownership_plan_internal_init(&plan);
+  expect(add_test_callees(&plan, 2), "malformed-call test creates callees");
+  source = ownership_plan_internal_add_token(&plan, managed_string_token());
+  prepared = ownership_plan_internal_add_token(&plan, managed_string_token());
+  result = ownership_plan_internal_add_token(&plan, managed_string_token());
+  block = ownership_plan_internal_add_block(&plan);
+  plan.entry_block = block;
+  op = operation(OWNERSHIP_OP_ACQUIRE);
+  op.result = source;
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  op = operation(OWNERSHIP_OP_MOVE);
+  op.operand = source;
+  op.result = prepared;
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  operands[0] = prepared;
+  op = operation(OWNERSHIP_OP_CALL);
+  op.callee = 0;
+  op.operands = operands;
+  op.operand_count = 1;
+  op.result = result;
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  op = operation(OWNERSHIP_OP_RELEASE);
+  op.operand = result;
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  op = operation(OWNERSHIP_OP_RETURN);
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  expect(!ownership_plan_internal_verify_and_seal(&plan, &diagnostic) &&
+             diagnostic.code == OWNERSHIP_DIAGNOSTIC_INVALID_OPERATION,
+         "ownership verifier rejects an unprepared call operand");
+  ownership_plan_internal_destroy(&plan);
+
+  ownership_plan_internal_init(&plan);
+  expect(add_test_callees(&plan, 2), "wrong-callee test creates callees");
+  source = ownership_plan_internal_add_token(&plan, managed_string_token());
+  prepared = ownership_plan_internal_add_token(&plan, managed_string_token());
+  result = ownership_plan_internal_add_token(&plan, managed_string_token());
+  block = ownership_plan_internal_add_block(&plan);
+  plan.entry_block = block;
+  op = operation(OWNERSHIP_OP_ACQUIRE);
+  op.result = source;
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  op = operation(OWNERSHIP_OP_MOVE);
+  op.operand = source;
+  op.result = prepared;
+  op.callee = 0;
+  op.parameter_index = 0;
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  operands[0] = prepared;
+  op = operation(OWNERSHIP_OP_CALL);
+  op.callee = 1;
+  op.operands = operands;
+  op.operand_count = 1;
+  op.result = result;
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  op = operation(OWNERSHIP_OP_RELEASE);
+  op.operand = result;
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  op = operation(OWNERSHIP_OP_RETURN);
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  expect(!ownership_plan_internal_verify_and_seal(&plan, &diagnostic) &&
+             diagnostic.code == OWNERSHIP_DIAGNOSTIC_INVALID_OPERATION,
+         "ownership verifier rejects a prepared share for the wrong callee");
+  ownership_plan_internal_destroy(&plan);
+
+  ownership_plan_internal_init(&plan);
+  expect(add_test_callees(&plan, 1), "duplicate-operand test creates callee");
+  source = ownership_plan_internal_add_token(&plan, managed_string_token());
+  prepared = ownership_plan_internal_add_token(&plan, managed_string_token());
+  result = ownership_plan_internal_add_token(&plan, managed_string_token());
+  block = ownership_plan_internal_add_block(&plan);
+  plan.entry_block = block;
+  op = operation(OWNERSHIP_OP_ACQUIRE);
+  op.result = source;
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  op = operation(OWNERSHIP_OP_MOVE);
+  op.operand = source;
+  op.result = prepared;
+  op.callee = 0;
+  op.parameter_index = 0;
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  operands[0] = prepared;
+  operands[1] = prepared;
+  op = operation(OWNERSHIP_OP_CALL);
+  op.callee = 0;
+  op.operands = operands;
+  op.operand_count = 2;
+  op.result = result;
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  op = operation(OWNERSHIP_OP_RELEASE);
+  op.operand = result;
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  op = operation(OWNERSHIP_OP_RETURN);
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  expect(!ownership_plan_internal_verify_and_seal(&plan, &diagnostic) &&
+             diagnostic.code == OWNERSHIP_DIAGNOSTIC_INVALID_OPERATION,
+         "ownership verifier rejects duplicate consumption in one call");
+  ownership_plan_internal_destroy(&plan);
+}
+
 static void test_unsupported_semantic_op_rejected(void) {
   sir_function semantic;
   sir_diagnostic semantic_diagnostic;
@@ -334,6 +465,7 @@ int main(void) {
   test_double_release_rejected();
   test_unbalanced_join_rejected();
   test_use_after_move_rejected();
+  test_malformed_call_frames_rejected();
   test_unsupported_semantic_op_rejected();
   if (failures != 0) {
     fprintf(stderr, "%d ownership plan test(s) failed\n", failures);

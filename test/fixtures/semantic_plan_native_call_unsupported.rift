@@ -1,0 +1,7 @@
+sub native_call(string value) returns string {
+  print(value);
+  return value;
+}
+
+sub main() {
+}

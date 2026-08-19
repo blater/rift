@@ -33,6 +33,9 @@ int plan_c_validate(const ownership_plan *plan, const plan_c_abi *abi,
 int plan_c_emit_function_signature(FILE *output, const ownership_plan *plan,
                                    const plan_c_abi *abi,
                                    plan_c_diagnostic *diagnostic);
+int plan_c_emit_body_signature(FILE *output, const ownership_plan *plan,
+                               const plan_c_abi *abi,
+                               plan_c_diagnostic *diagnostic);
 int plan_c_emit_function_body(FILE *output, const ownership_plan *plan,
                               const plan_c_abi *abi,
                               plan_c_diagnostic *diagnostic);

@@ -1,0 +1,7 @@
+sub nonreturning_call(string value) returns string {
+  halt(1);
+  return value;
+}
+
+sub main() {
+}

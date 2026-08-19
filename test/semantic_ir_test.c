@@ -33,6 +33,7 @@ static sir_operation operation(sir_op_kind kind) {
   result.result = SIR_INVALID_ID;
   result.slot = SIR_INVALID_ID;
   result.callee = SIR_INVALID_ID;
+  result.parameter_index = SIZE_MAX;
   result.targets[0] = SIR_INVALID_ID;
   result.targets[1] = SIR_INVALID_ID;
   return result;
@@ -162,8 +163,8 @@ static void test_lowerer_hard_errors(void) {
   nodes[1].tag = funcall;
   expect(sir_lower_function(ast, &options, &function, &diagnostic) ==
                  SIR_LOWER_ERROR &&
-             diagnostic.code == SIR_DIAGNOSTIC_UNSUPPORTED_AST,
-         "lowerer hard-errors instead of hiding an unsupported expression");
+             diagnostic.code == SIR_DIAGNOSTIC_UNRESOLVED_CALLEE,
+         "lowerer hard-errors instead of hiding an unresolved call");
   sir_function_destroy(&function);
 
   sir_function_init(&function);
@@ -213,6 +214,8 @@ static void build_borrow_call_function(sir_function *function,
   memset(signature, 0, sizeof(*signature));
   signature->kind = SIR_CALLEE_NATIVE;
   signature->symbol_id = 17;
+  signature->c_symbol.data = "native_probe";
+  signature->c_symbol.length = strlen("native_probe");
   signature->parameters = parameter;
   signature->parameter_count = 1;
   signature->return_type = sir_builtin_type(SIR_TYPE_VOID);
@@ -312,6 +315,99 @@ static void test_authoritative_call_abi(void) {
   expect(!sir_verify_function(&function, &environment, &diagnostic) &&
              diagnostic.code == SIR_DIAGNOSTIC_CALL_ABI_MISMATCH,
          "semantic verifier rejects nonreturning callee as an ordinary call");
+  sir_function_destroy(&function);
+}
+
+static void test_consuming_user_call_requires_prepared_arguments(void) {
+  sir_function function;
+  sir_signature_parameter parameter;
+  sir_signature signature;
+  sir_environment environment;
+  sir_diagnostic diagnostic;
+  sir_slot slot;
+  sir_value value;
+  sir_operation op;
+  sir_id block;
+  sir_id slot_id;
+  sir_id borrowed;
+  sir_id prepared;
+  sir_id result;
+
+  sir_function_init(&function);
+  function.return_type = sir_builtin_type(SIR_TYPE_VOID);
+  function.return_representation = SIR_REP_NONE;
+  function.return_ownership = SIR_OWNERSHIP_NONE;
+  slot.type = sir_builtin_type(SIR_TYPE_STRING);
+  slot.representation = SIR_REP_STRING_DESCRIPTOR;
+  slot.ownership = SIR_OWNERSHIP_OWNED;
+  slot.is_parameter = 1;
+  slot.name.data = "value";
+  slot.name.length = strlen("value");
+  slot_id = sir_function_add_slot(&function, slot);
+  value.type = slot.type;
+  value.representation = slot.representation;
+  value.ownership = SIR_OWNERSHIP_BORROWED;
+  borrowed = sir_function_add_value(&function, value);
+  value.ownership = SIR_OWNERSHIP_OWNED;
+  prepared = sir_function_add_value(&function, value);
+  result = sir_function_add_value(&function, value);
+  parameter.type = value.type;
+  parameter.representation = value.representation;
+  parameter.ownership = SIR_OWNERSHIP_OWNED;
+  parameter.mode = SIR_ARGUMENT_CONSUME;
+  memset(&signature, 0, sizeof(signature));
+  signature.kind = SIR_CALLEE_USER;
+  signature.c_symbol.data = "rift_plan_body_1";
+  signature.c_symbol.length = strlen("rift_plan_body_1");
+  signature.parameters = &parameter;
+  signature.parameter_count = 1;
+  signature.return_type = value.type;
+  signature.return_representation = value.representation;
+  signature.return_ownership = value.ownership;
+  signature.effects = sir_effects_none();
+  signature.effects.flags = SIR_EFFECT_CALL;
+  environment.signatures = &signature;
+  environment.signature_count = 1;
+  block = sir_function_add_block(&function);
+  function.entry_block = block;
+  op = operation(SIR_OP_BORROW_SLOT);
+  op.slot = slot_id;
+  op.result = borrowed;
+  (void)sir_block_add_operation(&function, block, &op);
+  op = operation(SIR_OP_PREPARE_ARGUMENT);
+  op.callee = 0;
+  op.parameter_index = 0;
+  op.operands = &borrowed;
+  op.operand_count = 1;
+  op.result = prepared;
+  (void)sir_block_add_operation(&function, block, &op);
+  op = operation(SIR_OP_CALL);
+  op.callee = 0;
+  op.effects = signature.effects;
+  op.operands = &prepared;
+  op.operand_count = 1;
+  op.result = result;
+  (void)sir_block_add_operation(&function, block, &op);
+  op = operation(SIR_OP_EXPRESSION_END);
+  op.operands = &result;
+  op.operand_count = 1;
+  (void)sir_block_add_operation(&function, block, &op);
+  op = operation(SIR_OP_RETURN);
+  (void)sir_block_add_operation(&function, block, &op);
+
+  expect(sir_verify_function(&function, &environment, &diagnostic),
+         "semantic verifier accepts an explicitly prepared consuming call");
+  function.blocks[0].operations[2].operands[0] = borrowed;
+  expect(!sir_verify_function(&function, &environment, &diagnostic) &&
+             diagnostic.code == SIR_DIAGNOSTIC_CALL_ABI_MISMATCH,
+         "semantic verifier rejects a consuming call without its prepared "
+         "owned argument");
+  function.blocks[0].operations[2].operands[0] = prepared;
+  function.blocks[0].operations[1].parameter_index = 1;
+  expect(!sir_verify_function(&function, &environment, &diagnostic) &&
+             diagnostic.code == SIR_DIAGNOSTIC_INVALID_OPERATION,
+         "semantic verifier rejects argument preparation for the wrong "
+         "parameter");
   sir_function_destroy(&function);
 }
 
@@ -421,6 +517,7 @@ int main(void) {
   test_representative_function();
   test_lowerer_hard_errors();
   test_authoritative_call_abi();
+  test_consuming_user_call_requires_prepared_arguments();
   test_unknown_type_rejected();
   test_unknown_effect_rejected();
   test_hidden_expression_rejected();

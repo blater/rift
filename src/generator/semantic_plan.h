@@ -30,6 +30,9 @@ const char *semantic_plan_function_symbol(const semantic_plan_program *program,
 int semantic_plan_emit_signature(const semantic_plan_program *program,
                                  ast_t function, FILE *output,
                                  semantic_plan_diagnostic *diagnostic);
+int semantic_plan_emit_body_signature(const semantic_plan_program *program,
+                                      ast_t function, FILE *output,
+                                      semantic_plan_diagnostic *diagnostic);
 int semantic_plan_emit_body(const semantic_plan_program *program,
                             ast_t function, FILE *output,
                             semantic_plan_diagnostic *diagnostic);

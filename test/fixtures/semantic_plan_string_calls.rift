@@ -1,0 +1,27 @@
+sub pass(string value) returns string {
+  return value;
+}
+
+sub choose(string first, string second) returns string {
+  return first;
+}
+
+sub exercise(string source, string later) returns string {
+  string borrowed_then_producer := choose(source, pass(later));
+  string producer_then_borrowed := choose(pass(source), later);
+  pass(source);
+  return pass(borrowed_then_producer);
+}
+
+sub entry(string source) returns string {
+  return exercise(source, source);
+}
+
+sub main() {
+  string result := "seed";
+  for i := 1 to 200 {
+    result := entry(concat("le", "ft"));
+    result := entry(substring("left!", 1, 4));
+  }
+  print(result);
+}

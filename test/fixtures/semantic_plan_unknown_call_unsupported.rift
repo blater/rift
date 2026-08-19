@@ -1,0 +1,7 @@
+sub unknown_call(string value) returns string {
+  missing(value);
+  return value;
+}
+
+sub main() {
+}

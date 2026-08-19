@@ -11,12 +11,16 @@
 typedef struct semantic_plan_function {
   ast_t ast;
   ownership_plan *plan;
+  char *external_symbol;
+  char *body_symbol;
 } semantic_plan_function;
 
 struct semantic_plan_program {
   semantic_plan_function *functions;
   size_t function_count;
-  size_t function_capacity;
+  sir_signature *signatures;
+  sir_lower_callee *callees;
+  sir_environment environment;
 };
 
 static void set_diagnostic(semantic_plan_diagnostic *diagnostic,
@@ -40,25 +44,12 @@ static int selected_function(ast_t statement) {
          !view_is(statement->data.fundef.name.lexeme, "main");
 }
 
-static int reserve_functions(semantic_plan_program *program, size_t required) {
-  semantic_plan_function *functions;
-  size_t capacity;
-  if (program->function_capacity >= required)
-    return 1;
-  capacity = program->function_capacity == 0 ? 4 : program->function_capacity;
-  while (capacity < required) {
-    if (capacity > SIZE_MAX / 2)
-      return 0;
-    capacity *= 2;
-  }
-  if (capacity > SIZE_MAX / sizeof(*functions))
-    return 0;
-  functions = realloc(program->functions, capacity * sizeof(*functions));
-  if (functions == NULL)
-    return 0;
-  program->functions = functions;
-  program->function_capacity = capacity;
-  return 1;
+static char *make_symbol(const char *prefix, size_t index) {
+  char buffer[64];
+  int length = snprintf(buffer, sizeof(buffer), "%s%zu", prefix, index);
+  if (length < 0 || (size_t)length >= sizeof(buffer))
+    return NULL;
+  return strdup(buffer);
 }
 
 static const semantic_plan_function *
@@ -78,6 +69,8 @@ semantic_plan_prepare(ast_t program_ast, semantic_plan_diagnostic *diagnostic) {
   semantic_plan_program *planned;
   ast_array_t statements;
   size_t index;
+  size_t selected_count = 0;
+  size_t selected_index = 0;
   set_diagnostic(diagnostic, SEMANTIC_PLAN_STAGE_NONE, NULL, NULL);
   if (program_ast == NULL || program_ast->tag != program) {
     set_diagnostic(diagnostic, SEMANTIC_PLAN_STAGE_SELECTION, NULL,
@@ -93,14 +86,6 @@ semantic_plan_prepare(ast_t program_ast, semantic_plan_diagnostic *diagnostic) {
   statements = program_ast->data.program.prog;
   for (index = 0; index < (size_t)statements.length; index++) {
     ast_t function = statements.data[index];
-    sir_function semantic;
-    sir_lower_options options;
-    sir_diagnostic semantic_diagnostic;
-    ownership_diagnostic ownership_diagnostic;
-    plan_c_diagnostic emitter_diagnostic;
-    ownership_plan *plan;
-    char symbol[64];
-    int symbol_length;
     if (!selected_function(function))
       continue;
     if (function->data.fundef.method_kind != METHOD_NONE) {
@@ -108,9 +93,65 @@ semantic_plan_prepare(ast_t program_ast, semantic_plan_diagnostic *diagnostic) {
                      "semantic-plan checkpoint does not select methods");
       goto failure;
     }
+    selected_count++;
+  }
+  if (selected_count != 0) {
+    planned->functions = calloc(selected_count, sizeof(*planned->functions));
+    planned->signatures = calloc(selected_count, sizeof(*planned->signatures));
+    planned->callees = calloc(selected_count, sizeof(*planned->callees));
+    if (planned->functions == NULL || planned->signatures == NULL ||
+        planned->callees == NULL) {
+      set_diagnostic(diagnostic, SEMANTIC_PLAN_STAGE_SELECTION, NULL,
+                     "could not allocate semantic-plan function table");
+      goto failure;
+    }
+  }
+  planned->function_count = selected_count;
+  for (index = 0; index < (size_t)statements.length; index++) {
+    ast_t function = statements.data[index];
+    semantic_plan_function *entry;
+    sir_diagnostic semantic_diagnostic;
+    string_view body_symbol;
+    if (!selected_function(function))
+      continue;
+    entry = &planned->functions[selected_index];
+    entry->ast = function;
+    entry->external_symbol = make_symbol("rift_plan_fn_", index);
+    entry->body_symbol = make_symbol("rift_plan_body_", index);
+    if (entry->external_symbol == NULL || entry->body_symbol == NULL) {
+      set_diagnostic(diagnostic, SEMANTIC_PLAN_STAGE_SELECTION, function,
+                     "could not assign semantic-plan function symbols");
+      goto failure;
+    }
+    body_symbol = sv_from_cstr(entry->body_symbol);
+    if (!sir_lower_signature(function, (uint32_t)selected_index, body_symbol,
+                             &planned->signatures[selected_index],
+                             &semantic_diagnostic)) {
+      set_diagnostic(diagnostic, SEMANTIC_PLAN_STAGE_LOWERING, function,
+                     semantic_diagnostic.message);
+      goto failure;
+    }
+    planned->callees[selected_index].definition = function;
+    planned->callees[selected_index].signature = (sir_id)selected_index;
+    selected_index++;
+  }
+  planned->environment.signatures = planned->signatures;
+  planned->environment.signature_count = selected_count;
+  for (selected_index = 0; selected_index < selected_count; selected_index++) {
+    semantic_plan_function *entry = &planned->functions[selected_index];
+    ast_t function = entry->ast;
+    sir_function semantic;
+    sir_lower_options options;
+    sir_diagnostic semantic_diagnostic;
+    ownership_diagnostic ownership_diagnostic;
+    plan_c_diagnostic emitter_diagnostic;
+    ownership_plan *plan;
     sir_function_init(&semantic);
     options = sir_lower_default_options();
     options.enabled = 1;
+    options.environment = &planned->environment;
+    options.callees = planned->callees;
+    options.callee_count = selected_count;
     if (sir_lower_function(function, &options, &semantic,
                            &semantic_diagnostic) != SIR_LOWER_OK) {
       set_diagnostic(diagnostic, SEMANTIC_PLAN_STAGE_LOWERING, function,
@@ -118,15 +159,10 @@ semantic_plan_prepare(ast_t program_ast, semantic_plan_diagnostic *diagnostic) {
       sir_function_destroy(&semantic);
       goto failure;
     }
-    symbol_length = snprintf(symbol, sizeof(symbol), "rift_plan_fn_%zu", index);
-    if (symbol_length < 0 || (size_t)symbol_length >= sizeof(symbol)) {
-      set_diagnostic(diagnostic, SEMANTIC_PLAN_STAGE_SELECTION, function,
-                     "could not assign semantic-plan function symbol");
-      sir_function_destroy(&semantic);
-      goto failure;
-    }
-    semantic.c_symbol = sv_from_parts(symbol, (size_t)symbol_length);
-    plan = ownership_plan_build(&semantic, NULL, &ownership_diagnostic);
+    semantic.external_symbol = sv_from_cstr(entry->external_symbol);
+    semantic.c_symbol = sv_from_cstr(entry->body_symbol);
+    plan = ownership_plan_build(&semantic, &planned->environment,
+                                &ownership_diagnostic);
     sir_function_destroy(&semantic);
     if (plan == NULL) {
       set_diagnostic(diagnostic, SEMANTIC_PLAN_STAGE_OWNERSHIP, function,
@@ -139,15 +175,7 @@ semantic_plan_prepare(ast_t program_ast, semantic_plan_diagnostic *diagnostic) {
       ownership_plan_destroy(plan);
       goto failure;
     }
-    if (!reserve_functions(planned, planned->function_count + 1)) {
-      set_diagnostic(diagnostic, SEMANTIC_PLAN_STAGE_SELECTION, function,
-                     "could not allocate semantic-plan function table");
-      ownership_plan_destroy(plan);
-      goto failure;
-    }
-    planned->functions[planned->function_count].ast = function;
-    planned->functions[planned->function_count].plan = plan;
-    planned->function_count++;
+    entry->plan = plan;
   }
   return planned;
 
@@ -161,7 +189,14 @@ void semantic_plan_destroy(semantic_plan_program *program) {
   if (program == NULL)
     return;
   for (index = 0; index < program->function_count; index++)
+    sir_lower_signature_destroy(&program->signatures[index]);
+  for (index = 0; index < program->function_count; index++) {
     ownership_plan_destroy(program->functions[index].plan);
+    free(program->functions[index].external_symbol);
+    free(program->functions[index].body_symbol);
+  }
+  free(program->callees);
+  free(program->signatures);
   free(program->functions);
   free(program);
 }
@@ -179,7 +214,7 @@ const char *semantic_plan_function_symbol(const semantic_plan_program *program,
       !ownership_plan_function(selected->plan, &declaration)) {
     return NULL;
   }
-  return declaration.c_symbol;
+  return declaration.external_symbol;
 }
 
 int semantic_plan_emit_signature(const semantic_plan_program *program,
@@ -195,6 +230,26 @@ int semantic_plan_emit_signature(const semantic_plan_program *program,
   }
   if (!plan_c_emit_function_signature(output, selected->plan, plan_c_rift_abi(),
                                       &emitter_diagnostic)) {
+    set_diagnostic(diagnostic, SEMANTIC_PLAN_STAGE_EMISSION, function,
+                   emitter_diagnostic.message);
+    return 0;
+  }
+  return 1;
+}
+
+int semantic_plan_emit_body_signature(const semantic_plan_program *program,
+                                      ast_t function, FILE *output,
+                                      semantic_plan_diagnostic *diagnostic) {
+  const semantic_plan_function *selected = find_function(program, function);
+  plan_c_diagnostic emitter_diagnostic;
+  set_diagnostic(diagnostic, SEMANTIC_PLAN_STAGE_NONE, function, NULL);
+  if (selected == NULL) {
+    set_diagnostic(diagnostic, SEMANTIC_PLAN_STAGE_SELECTION, function,
+                   "function is not selected by the semantic plan");
+    return 0;
+  }
+  if (!plan_c_emit_body_signature(output, selected->plan, plan_c_rift_abi(),
+                                  &emitter_diagnostic)) {
     set_diagnostic(diagnostic, SEMANTIC_PLAN_STAGE_EMISSION, function,
                    emitter_diagnostic.message);
     return 0;

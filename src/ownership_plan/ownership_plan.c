@@ -55,6 +55,8 @@ static ownership_operation empty_operation(ownership_op_kind kind) {
   operation.kind = kind;
   operation.result = OWNERSHIP_INVALID_ID;
   operation.operand = OWNERSHIP_INVALID_ID;
+  operation.callee = OWNERSHIP_INVALID_ID;
+  operation.parameter_index = SIZE_MAX;
   operation.targets[0] = OWNERSHIP_INVALID_ID;
   operation.targets[1] = OWNERSHIP_INVALID_ID;
   return operation;
@@ -66,29 +68,52 @@ static int is_terminator(ownership_op_kind kind) {
 }
 
 static int operation_defines_token(ownership_op_kind kind) {
-  return kind == OWNERSHIP_OP_ACQUIRE || kind == OWNERSHIP_OP_DEFINE_SCALAR ||
+  return kind == OWNERSHIP_OP_ACQUIRE || kind == OWNERSHIP_OP_ADOPT ||
+         kind == OWNERSHIP_OP_DEFINE_SCALAR ||
          kind == OWNERSHIP_OP_COPY_SCALAR || kind == OWNERSHIP_OP_BORROW ||
-         kind == OWNERSHIP_OP_HOLD || kind == OWNERSHIP_OP_MOVE;
+         kind == OWNERSHIP_OP_HOLD || kind == OWNERSHIP_OP_MOVE ||
+         kind == OWNERSHIP_OP_CALL;
 }
 
 static int static_operation_contract(const ownership_operation *operation) {
   switch (operation->kind) {
   case OWNERSHIP_OP_ACQUIRE:
+  case OWNERSHIP_OP_ADOPT:
   case OWNERSHIP_OP_DEFINE_SCALAR:
     return operation->result != OWNERSHIP_INVALID_ID &&
            operation->operand == OWNERSHIP_INVALID_ID &&
-           operation->target_count == 0;
+           operation->callee == OWNERSHIP_INVALID_ID &&
+           operation->parameter_index == SIZE_MAX &&
+           operation->operand_count == 0 && operation->target_count == 0;
   case OWNERSHIP_OP_COPY_SCALAR:
   case OWNERSHIP_OP_BORROW:
+    return operation->result != OWNERSHIP_INVALID_ID &&
+           operation->operand != OWNERSHIP_INVALID_ID &&
+           operation->callee == OWNERSHIP_INVALID_ID &&
+           operation->parameter_index == SIZE_MAX &&
+           operation->operand_count == 0 && operation->target_count == 0;
   case OWNERSHIP_OP_HOLD:
   case OWNERSHIP_OP_MOVE:
     return operation->result != OWNERSHIP_INVALID_ID &&
            operation->operand != OWNERSHIP_INVALID_ID &&
-           operation->target_count == 0;
+           ((operation->callee == OWNERSHIP_INVALID_ID &&
+             operation->parameter_index == SIZE_MAX) ||
+            (operation->callee != OWNERSHIP_INVALID_ID &&
+             operation->parameter_index != SIZE_MAX)) &&
+           operation->operand_count == 0 && operation->target_count == 0;
   case OWNERSHIP_OP_RELEASE:
   case OWNERSHIP_OP_END_BORROW:
     return operation->result == OWNERSHIP_INVALID_ID &&
            operation->operand != OWNERSHIP_INVALID_ID &&
+           operation->callee == OWNERSHIP_INVALID_ID &&
+           operation->parameter_index == SIZE_MAX &&
+           operation->operand_count == 0 && operation->target_count == 0;
+  case OWNERSHIP_OP_CALL:
+    return operation->result != OWNERSHIP_INVALID_ID &&
+           operation->operand == OWNERSHIP_INVALID_ID &&
+           operation->callee != OWNERSHIP_INVALID_ID &&
+           operation->parameter_index == SIZE_MAX &&
+           (operation->operand_count == 0 || operation->operands != NULL) &&
            operation->target_count == 0;
   case OWNERSHIP_OP_JUMP:
     return operation->result == OWNERSHIP_INVALID_ID &&
@@ -156,13 +181,23 @@ void ownership_plan_internal_destroy(ownership_plan *plan) {
     return;
   }
   for (block_index = 0; block_index < plan->block_count; block_index++) {
+    size_t operation_index;
+    for (operation_index = 0;
+         operation_index < plan->blocks[block_index].operation_count;
+         operation_index++) {
+      free(plan->blocks[block_index].operations[operation_index].operands);
+    }
     free(plan->blocks[block_index].operations);
   }
   for (slot_index = 0; slot_index < plan->slot_count; slot_index++) {
     free(plan->slots[slot_index].name);
   }
   free(plan->function_name);
+  free(plan->function_external_symbol);
   free(plan->function_c_symbol);
+  for (slot_index = 0; slot_index < plan->callee_count; slot_index++)
+    free(plan->callee_symbols[slot_index]);
+  free(plan->callee_symbols);
   free(plan->slots);
   free(plan->blocks);
   free(plan->tokens);
@@ -202,6 +237,7 @@ int ownership_plan_internal_add_operation(ownership_plan *plan,
                                           ownership_id block_id,
                                           ownership_operation operation) {
   ownership_block *block;
+  ownership_operation copy;
   if (plan->sealed || block_id >= plan->block_count) {
     return 0;
   }
@@ -210,7 +246,20 @@ int ownership_plan_internal_add_operation(ownership_plan *plan,
                   sizeof(*block->operations), block->operation_count + 1)) {
     return 0;
   }
-  block->operations[block->operation_count++] = operation;
+  copy = operation;
+  copy.operands = NULL;
+  if (operation.operand_count != 0) {
+    if (operation.operands == NULL ||
+        operation.operand_count > SIZE_MAX / sizeof(*copy.operands)) {
+      return 0;
+    }
+    copy.operands = malloc(operation.operand_count * sizeof(*copy.operands));
+    if (copy.operands == NULL)
+      return 0;
+    memcpy(copy.operands, operation.operands,
+           operation.operand_count * sizeof(*copy.operands));
+  }
+  block->operations[block->operation_count++] = copy;
   return 1;
 }
 
@@ -264,11 +313,13 @@ static int copy_declarations(const sir_function *function, ownership_plan *plan,
                              ownership_diagnostic *diagnostic) {
   size_t index;
   plan->function_name = copy_name(function->name);
+  plan->function_external_symbol = copy_name(function->external_symbol);
   plan->function_c_symbol = copy_name(function->c_symbol);
   plan->return_type = function->return_type;
   plan->return_representation = function->return_representation;
   plan->return_ownership = function->return_ownership;
-  if (plan->function_name == NULL || plan->function_c_symbol == NULL) {
+  if (plan->function_name == NULL || plan->function_external_symbol == NULL ||
+      plan->function_c_symbol == NULL) {
     set_diagnostic(diagnostic, OWNERSHIP_DIAGNOSTIC_ALLOCATION_FAILED, 0, 0,
                    OWNERSHIP_INVALID_ID,
                    "could not copy ownership function declaration");
@@ -297,6 +348,34 @@ static int copy_declarations(const sir_function *function, ownership_plan *plan,
       set_diagnostic(diagnostic, OWNERSHIP_DIAGNOSTIC_ALLOCATION_FAILED, 0, 0,
                      OWNERSHIP_INVALID_ID,
                      "could not copy ownership slot declaration");
+      return 0;
+    }
+  }
+  return 1;
+}
+
+static int copy_callees(const sir_environment *environment,
+                        ownership_plan *plan,
+                        ownership_diagnostic *diagnostic) {
+  size_t index;
+  if (environment == NULL || environment->signature_count == 0)
+    return 1;
+  plan->callee_symbols =
+      calloc(environment->signature_count, sizeof(*plan->callee_symbols));
+  if (plan->callee_symbols == NULL) {
+    set_diagnostic(diagnostic, OWNERSHIP_DIAGNOSTIC_ALLOCATION_FAILED, 0, 0,
+                   OWNERSHIP_INVALID_ID,
+                   "could not allocate ownership callee declarations");
+    return 0;
+  }
+  plan->callee_count = environment->signature_count;
+  for (index = 0; index < environment->signature_count; index++) {
+    plan->callee_symbols[index] =
+        copy_name(environment->signatures[index].c_symbol);
+    if (plan->callee_symbols[index] == NULL) {
+      set_diagnostic(diagnostic, OWNERSHIP_DIAGNOSTIC_ALLOCATION_FAILED, 0, 0,
+                     OWNERSHIP_INVALID_ID,
+                     "could not copy ownership callee declaration");
       return 0;
     }
   }
@@ -340,7 +419,7 @@ static int append_parameter_initializers(const sir_function *function,
     operation =
         empty_operation(function->slots[index].representation == SIR_REP_SCALAR
                             ? OWNERSHIP_OP_DEFINE_SCALAR
-                            : OWNERSHIP_OP_ACQUIRE);
+                            : OWNERSHIP_OP_ADOPT);
     operation.result = slot_tokens[index];
     if (!append_or_fail(plan, block, operation, diagnostic)) {
       return 0;
@@ -404,6 +483,9 @@ ownership_plan *ownership_plan_build(const sir_function *function,
   }
   ownership_plan_internal_init(built);
   if (!copy_declarations(function, built, diagnostic)) {
+    goto failure;
+  }
+  if (!copy_callees(environment, built, diagnostic)) {
     goto failure;
   }
   slot_tokens = malloc((function->slot_count == 0 ? 1 : function->slot_count) *
@@ -476,6 +558,50 @@ ownership_plan *ownership_plan_build(const sir_function *function,
       operation.operand = source_token;
       operation.result = slot_tokens[source->slot];
       break;
+    case SIR_OP_PREPARE_ARGUMENT:
+      source_token = value_tokens[source->operands[0]];
+      operation =
+          empty_operation(function->values[source->operands[0]].ownership ==
+                                  SIR_OWNERSHIP_BORROWED
+                              ? OWNERSHIP_OP_HOLD
+                              : OWNERSHIP_OP_MOVE);
+      operation.operand = source_token;
+      operation.result = value_tokens[source->result];
+      operation.callee = source->callee;
+      operation.parameter_index = source->parameter_index;
+      break;
+    case SIR_OP_CALL: {
+      size_t argument_index;
+      operation = empty_operation(OWNERSHIP_OP_CALL);
+      operation.result = value_tokens[source->result];
+      operation.callee = source->callee;
+      operation.operand_count = source->operand_count;
+      if (source->operand_count != 0) {
+        operation.operands =
+            malloc(source->operand_count * sizeof(*operation.operands));
+        if (operation.operands == NULL) {
+          set_diagnostic(diagnostic, OWNERSHIP_DIAGNOSTIC_ALLOCATION_FAILED, 0,
+                         index, OWNERSHIP_INVALID_ID,
+                         "could not allocate ownership call operands");
+          goto failure;
+        }
+        for (argument_index = 0; argument_index < source->operand_count;
+             argument_index++) {
+          operation.operands[argument_index] =
+              value_tokens[source->operands[argument_index]];
+        }
+      }
+      if (!append_or_fail(built, block, operation, diagnostic)) {
+        free(operation.operands);
+        goto failure;
+      }
+      free(operation.operands);
+      continue;
+    }
+    case SIR_OP_EXPRESSION_END:
+      operation = empty_operation(OWNERSHIP_OP_RELEASE);
+      operation.operand = value_tokens[source->operands[0]];
+      break;
     case SIR_OP_RETURN:
       operation = empty_operation(OWNERSHIP_OP_RETURN);
       if (source->operand_count == 1) {
@@ -510,7 +636,6 @@ ownership_plan *ownership_plan_build(const sir_function *function,
       break;
     case SIR_OP_CONSTANT:
     case SIR_OP_PRIMITIVE:
-    case SIR_OP_CALL:
     case SIR_OP_TERMINAL_CALL:
     case SIR_OP_JUMP:
     case SIR_OP_BRANCH:
@@ -635,6 +760,23 @@ static int validate_static_structure(const ownership_plan *plan,
                        "ownership operand token is not declared");
         return 0;
       }
+      if (operation->callee != OWNERSHIP_INVALID_ID &&
+          operation->callee >= plan->callee_count) {
+        set_diagnostic(diagnostic, OWNERSHIP_DIAGNOSTIC_INVALID_OPERATION,
+                       block_index, operation_index, OWNERSHIP_INVALID_ID,
+                       "ownership call target is not declared");
+        return 0;
+      }
+      for (target_index = 0; target_index < operation->operand_count;
+           target_index++) {
+        if (operation->operands[target_index] >= plan->token_count) {
+          set_diagnostic(diagnostic, OWNERSHIP_DIAGNOSTIC_INVALID_TOKEN,
+                         block_index, operation_index,
+                         operation->operands[target_index],
+                         "ownership call operand token is not declared");
+          return 0;
+        }
+      }
       for (target_index = 0; target_index < operation->target_count;
            target_index++) {
         if (operation->targets[target_index] >= plan->block_count) {
@@ -652,6 +794,50 @@ static int validate_static_structure(const ownership_plan *plan,
                      (ownership_id)token_index,
                      "ownership token has no definition");
       return 0;
+    }
+  }
+  for (block_index = 0; block_index < plan->block_count; block_index++) {
+    const ownership_block *block = &plan->blocks[block_index];
+    size_t operation_index;
+    for (operation_index = 0; operation_index < block->operation_count;
+         operation_index++) {
+      const ownership_operation *call = &block->operations[operation_index];
+      size_t argument_index;
+      size_t previous_definition = 0;
+      int has_previous_definition = 0;
+      if (call->kind != OWNERSHIP_OP_CALL)
+        continue;
+      for (argument_index = 0; argument_index < call->operand_count;
+           argument_index++) {
+        size_t definition_index;
+        const ownership_operation *preparation = NULL;
+        for (definition_index = 0; definition_index < operation_index;
+             definition_index++) {
+          const ownership_operation *candidate =
+              &block->operations[definition_index];
+          if (operation_defines_token(candidate->kind) &&
+              candidate->result == call->operands[argument_index]) {
+            preparation = candidate;
+            break;
+          }
+        }
+        if (preparation == NULL ||
+            (preparation->kind != OWNERSHIP_OP_HOLD &&
+             preparation->kind != OWNERSHIP_OP_MOVE) ||
+            preparation->callee != call->callee ||
+            preparation->parameter_index != argument_index ||
+            (has_previous_definition &&
+             definition_index <= previous_definition)) {
+          set_diagnostic(diagnostic, OWNERSHIP_DIAGNOSTIC_INVALID_OPERATION,
+                         block_index, operation_index,
+                         call->operands[argument_index],
+                         "ownership call operand is not an ordered prepared "
+                         "share");
+          return 0;
+        }
+        previous_definition = definition_index;
+        has_previous_definition = 1;
+      }
     }
   }
   return 1;
@@ -678,6 +864,7 @@ static int process_operation(const ownership_plan *plan,
   ownership_id owner;
   switch (operation->kind) {
   case OWNERSHIP_OP_ACQUIRE:
+  case OWNERSHIP_OP_ADOPT:
     if (!require_uninitialized(state, operation->result, block_index,
                                operation_index, diagnostic) ||
         plan->tokens[operation->result].kind == OWNERSHIP_TOKEN_SCALAR) {
@@ -786,6 +973,30 @@ static int process_operation(const ownership_plan *plan,
     state->states[operation->operand] = OWNERSHIP_STATE_RELEASED;
     state->provenance[operation->operand] = OWNERSHIP_INVALID_ID;
     return 1;
+  case OWNERSHIP_OP_CALL: {
+    size_t argument_index;
+    if (!require_uninitialized(state, operation->result, block_index,
+                               operation_index, diagnostic) ||
+        operation->callee >= plan->callee_count ||
+        plan->tokens[operation->result].kind != OWNERSHIP_TOKEN_MANAGED) {
+      break;
+    }
+    for (argument_index = 0; argument_index < operation->operand_count;
+         argument_index++) {
+      ownership_id argument = operation->operands[argument_index];
+      if (argument >= plan->token_count ||
+          state->states[argument] != OWNERSHIP_STATE_OWNED ||
+          has_live_borrow(plan, state, argument)) {
+        set_diagnostic(diagnostic, OWNERSHIP_DIAGNOSTIC_INVALID_MOVE,
+                       block_index, operation_index, argument,
+                       "call requires prepared owned arguments");
+        return 0;
+      }
+      state->states[argument] = OWNERSHIP_STATE_MOVED;
+    }
+    state->states[operation->result] = OWNERSHIP_STATE_OWNED;
+    return 1;
+  }
   case OWNERSHIP_OP_BRANCH:
     if (operation->target_count == 2 &&
         state->states[operation->operand] == OWNERSHIP_STATE_SCALAR &&
@@ -1038,6 +1249,7 @@ int ownership_plan_function(const ownership_plan *plan,
     return 0;
   }
   view->name = plan->function_name;
+  view->external_symbol = plan->function_external_symbol;
   view->c_symbol = plan->function_c_symbol;
   view->return_type = plan->return_type;
   view->return_representation = plan->return_representation;
@@ -1064,6 +1276,13 @@ int ownership_plan_slot_at(const ownership_plan *plan, ownership_id slot,
   view->is_parameter = source->is_parameter;
   view->token = source->token;
   return 1;
+}
+
+const char *ownership_plan_callee_symbol(const ownership_plan *plan,
+                                         ownership_id callee) {
+  if (!ownership_plan_is_verified(plan) || callee >= plan->callee_count)
+    return NULL;
+  return plan->callee_symbols[callee];
 }
 
 size_t ownership_plan_token_count(const ownership_plan *plan) {
@@ -1105,6 +1324,19 @@ int ownership_plan_operation_at(const ownership_plan *plan, ownership_id block,
       operation >= plan->blocks[block].operation_count) {
     return 0;
   }
-  *view = plan->blocks[block].operations[operation];
+  {
+    const ownership_operation *source =
+        &plan->blocks[block].operations[operation];
+    view->kind = source->kind;
+    view->result = source->result;
+    view->operand = source->operand;
+    view->callee = source->callee;
+    view->parameter_index = source->parameter_index;
+    view->operands = source->operands;
+    view->operand_count = source->operand_count;
+    view->targets[0] = source->targets[0];
+    view->targets[1] = source->targets[1];
+    view->target_count = source->target_count;
+  }
   return 1;
 }

@@ -4,7 +4,17 @@
 #include "ownership_plan/ownership_plan.h"
 
 typedef ownership_token_view ownership_token;
-typedef ownership_operation_view ownership_operation;
+typedef struct ownership_operation {
+  ownership_op_kind kind;
+  ownership_id result;
+  ownership_id operand;
+  ownership_id callee;
+  size_t parameter_index;
+  ownership_id *operands;
+  size_t operand_count;
+  ownership_id targets[2];
+  size_t target_count;
+} ownership_operation;
 
 typedef struct ownership_block {
   ownership_operation *operations;
@@ -23,6 +33,7 @@ typedef struct ownership_slot {
 
 struct ownership_plan {
   char *function_name;
+  char *function_external_symbol;
   char *function_c_symbol;
   sir_type return_type;
   sir_representation return_representation;
@@ -36,6 +47,8 @@ struct ownership_plan {
   size_t block_count;
   size_t block_capacity;
   ownership_id entry_block;
+  char **callee_symbols;
+  size_t callee_count;
   int sealed;
 };
 

@@ -1290,6 +1290,27 @@ void generate_funcall(generator_t *g, ast_t fun) {
       // Emit plain function call (mangled if the name is overloaded)
       const char *semantic_symbol =
           semantic_plan_function_symbol(g->semantic_plans, func_ref);
+      char (*semantic_arguments)[64] = NULL;
+      if (semantic_symbol && funcall.args.length > 0) {
+        semantic_arguments =
+            calloc((size_t)funcall.args.length, sizeof(*semantic_arguments));
+        if (semantic_arguments == NULL)
+          error(funcall.name.filename, funcall.name.line, funcall.name.col,
+                "could not allocate semantic-plan call arguments");
+        for (int i = 0; i < funcall.args.length; i++) {
+          char *argument = capture_expression(g, funcall.args.data[i]);
+          snprintf(semantic_arguments[i], sizeof(*semantic_arguments),
+                   "rift_plan_legacy_arg_%d", g->str_tmp_counter++);
+          fprintf(g->pre_f, "string %s = %s;\n", semantic_arguments[i],
+                  argument);
+          if (rhs_is_borrower(funcall.args.data[i])) {
+            fprintf(g->pre_f, "__string_retain(%s);\n", semantic_arguments[i]);
+          } else if (strncmp(argument, "__strtmp_", 9) == 0) {
+            emit_nullify_tmp(g->pre_f, argument);
+          }
+          free(argument);
+        }
+      }
       if (semantic_symbol)
         fprintf(f, "%s", semantic_symbol);
       else if (func_ref->tag == fundef && func_ref->data.fundef.emitted_c_name)
@@ -1302,8 +1323,8 @@ void generate_funcall(generator_t *g, ast_t fun) {
       /* User functions consume owned values. This retain is deliberately at
        * the call site: aliases keep their source share; constructor, pop, and
        * subscript results transfer without an otherwise-ownerless reference. */
-      if (user_function) {
         for (int i = 0; i < funcall.args.length && i < param_types.length; i++) {
+      if (user_function && !semantic_symbol) {
           if (param_types.data[i] && param_types.data[i]->tag == type) {
             ast_type param_type = param_types.data[i]->data.type;
             if (param_type.is_array ||
@@ -1326,10 +1347,15 @@ void generate_funcall(generator_t *g, ast_t fun) {
           }
         }
         if (cast.length > 0) fprintf(f, "(" SV_Fmt ")(", SV_Arg(cast));
-        generate_expression(g, funcall.args.data[i]);
         if (cast.length > 0) fprintf(f, ")");
+        if (semantic_symbol) {
+          fprintf(f, "%s", semantic_arguments[i]);
+        } else {
+          generate_expression(g, funcall.args.data[i]);
+        }
       }
       fprintf(f, ")");
+      free(semantic_arguments);
     }
   }
 }
@@ -2859,6 +2885,13 @@ void generate_forward_defs(generator_t *g, ast_t program) {
                                             &diagnostic)) {
             error(fundef.name.filename, fundef.name.line, fundef.name.col,
                   "semantic-plan signature emission failed: %s",
+                  diagnostic.message ? diagnostic.message : "unknown error");
+          }
+          fprintf(f, ";\n");
+          if (!semantic_plan_emit_body_signature(g->semantic_plans, stmt, f,
+                                                 &diagnostic)) {
+            error(fundef.name.filename, fundef.name.line, fundef.name.col,
+                  "semantic-plan body signature emission failed: %s",
                   diagnostic.message ? diagnostic.message : "unknown error");
           }
           fprintf(f, ";\n\n");

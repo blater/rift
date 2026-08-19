@@ -1,0 +1,338 @@
+#include "ownership_plan/internal.h"
+#include "semantic_ir/lower.h"
+
+#include <stdio.h>
+#include <string.h>
+
+static int failures;
+
+static void expect(int condition, const char *message) {
+  if (condition) {
+    printf("PASS: %s\n", message);
+  } else {
+    fprintf(stderr, "FAIL: %s\n", message);
+    failures++;
+  }
+}
+
+static token_t named_token(char *name) {
+  token_t token;
+  memset(&token, 0, sizeof(token));
+  token.type = TOK_IDENTIFIER;
+  token.lexeme.data = name;
+  token.lexeme.length = strlen(name);
+  return token;
+}
+
+static ast_t build_echo_function(node_t *nodes, token_t *arguments,
+                                 ast_t *types, ast_t *statements) {
+  memset(nodes, 0, 7 * sizeof(*nodes));
+  memset(arguments, 0, sizeof(*arguments));
+  nodes[0].tag = type;
+  nodes[0].data.type.name = named_token("string");
+  nodes[1].tag = identifier;
+  nodes[1].data.identifier.id = named_token("value");
+  nodes[2].tag = vardef;
+  nodes[2].data.vardef.name = named_token("copy");
+  nodes[2].data.vardef.type = &nodes[0];
+  nodes[2].data.vardef.expr = &nodes[1];
+  nodes[3].tag = identifier;
+  nodes[3].data.identifier.id = named_token("copy");
+  nodes[4].tag = ret;
+  nodes[4].data.ret.expr = &nodes[3];
+  statements[0] = &nodes[2];
+  statements[1] = &nodes[4];
+  nodes[5].tag = compound;
+  nodes[5].data.compound.stmts.data = statements;
+  nodes[5].data.compound.stmts.length = 2;
+  nodes[5].data.compound.stmts.capacity = 2;
+  arguments[0] = named_token("value");
+  types[0] = &nodes[0];
+  nodes[6].tag = fundef;
+  nodes[6].data.fundef.name = named_token("echo");
+  nodes[6].data.fundef.args.data = arguments;
+  nodes[6].data.fundef.args.length = 1;
+  nodes[6].data.fundef.args.capacity = 1;
+  nodes[6].data.fundef.types.data = types;
+  nodes[6].data.fundef.types.length = 1;
+  nodes[6].data.fundef.types.capacity = 1;
+  nodes[6].data.fundef.body = &nodes[5];
+  nodes[6].data.fundef.ret_type = &nodes[0];
+  return &nodes[6];
+}
+
+static ownership_operation operation(ownership_op_kind kind) {
+  ownership_operation result;
+  memset(&result, 0, sizeof(result));
+  result.kind = kind;
+  result.result = OWNERSHIP_INVALID_ID;
+  result.operand = OWNERSHIP_INVALID_ID;
+  result.targets[0] = OWNERSHIP_INVALID_ID;
+  result.targets[1] = OWNERSHIP_INVALID_ID;
+  return result;
+}
+
+static sir_operation semantic_operation(sir_op_kind kind) {
+  sir_operation result;
+  memset(&result, 0, sizeof(result));
+  result.kind = kind;
+  result.effects = sir_effects_none();
+  result.result = SIR_INVALID_ID;
+  result.slot = SIR_INVALID_ID;
+  result.callee = SIR_INVALID_ID;
+  result.targets[0] = SIR_INVALID_ID;
+  result.targets[1] = SIR_INVALID_ID;
+  return result;
+}
+
+static ownership_token managed_string_token(void) {
+  ownership_token token;
+  token.kind = OWNERSHIP_TOKEN_MANAGED;
+  token.type = sir_builtin_type(SIR_TYPE_STRING);
+  token.representation = SIR_REP_STRING_DESCRIPTOR;
+  return token;
+}
+
+static ownership_token bool_token(void) {
+  ownership_token token;
+  token.kind = OWNERSHIP_TOKEN_SCALAR;
+  token.type = sir_builtin_type(SIR_TYPE_BOOL);
+  token.representation = SIR_REP_SCALAR;
+  return token;
+}
+
+static void test_representative_plan(void) {
+  node_t nodes[7];
+  token_t arguments[1];
+  ast_t types[1];
+  ast_t statements[2];
+  sir_function semantic;
+  sir_lower_options options = sir_lower_default_options();
+  sir_diagnostic semantic_diagnostic;
+  ownership_plan *plan;
+  ownership_diagnostic diagnostic;
+  ast_t ast = build_echo_function(nodes, arguments, types, statements);
+
+  sir_function_init(&semantic);
+  plan = NULL;
+  options.enabled = 1;
+  expect(sir_lower_function(ast, &options, &semantic, &semantic_diagnostic) ==
+             SIR_LOWER_OK,
+         "representative AST reaches verified semantic IR");
+  plan = ownership_plan_build(&semantic, NULL, &diagnostic);
+  expect(plan != NULL, "verified semantic IR produces an ownership plan");
+  expect(ownership_plan_is_verified(plan),
+         "ownership builder returns only a sealed verified plan");
+  {
+    ownership_operation_view operations[4];
+    size_t indexes[4] = {4, 5, 6, 7};
+    size_t index;
+    int queried = 1;
+    for (index = 0; index < 4; index++) {
+      queried = queried && ownership_plan_operation_at(plan, 0, indexes[index],
+                                                       &operations[index]);
+    }
+    expect(queried && ownership_plan_block_count(plan) == 1 &&
+               ownership_plan_operation_count(plan, 0) == 8 &&
+               operations[0].kind == OWNERSHIP_OP_HOLD &&
+               operations[1].kind == OWNERSHIP_OP_RELEASE &&
+               operations[2].kind == OWNERSHIP_OP_RELEASE &&
+               operations[3].kind == OWNERSHIP_OP_RETURN,
+           "return is held before reverse-order owner cleanup and transfer");
+  }
+  expect(ownership_plan_internal_add_block(plan) == OWNERSHIP_INVALID_ID,
+         "sealed ownership plan rejects post-verification mutation");
+  ownership_plan_destroy(plan);
+  sir_function_destroy(&semantic);
+}
+
+static void test_borrow_provenance_rejected(void) {
+  ownership_plan plan;
+  ownership_diagnostic diagnostic;
+  ownership_operation op;
+  ownership_id block;
+  ownership_id owner;
+  ownership_id borrower;
+
+  ownership_plan_internal_init(&plan);
+  owner = ownership_plan_internal_add_token(&plan, managed_string_token());
+  borrower = ownership_plan_internal_add_token(&plan, managed_string_token());
+  block = ownership_plan_internal_add_block(&plan);
+  plan.entry_block = block;
+  op = operation(OWNERSHIP_OP_ACQUIRE);
+  op.result = owner;
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  op = operation(OWNERSHIP_OP_RELEASE);
+  op.operand = owner;
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  op = operation(OWNERSHIP_OP_BORROW);
+  op.operand = owner;
+  op.result = borrower;
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  op = operation(OWNERSHIP_OP_RETURN);
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  expect(!ownership_plan_internal_verify_and_seal(&plan, &diagnostic) &&
+             diagnostic.code == OWNERSHIP_DIAGNOSTIC_BORROW_PROVENANCE,
+         "ownership verifier rejects a borrow without a live owner");
+  ownership_plan_internal_destroy(&plan);
+}
+
+static void test_double_release_rejected(void) {
+  ownership_plan plan;
+  ownership_diagnostic diagnostic;
+  ownership_operation op;
+  ownership_id block;
+  ownership_id owner;
+
+  ownership_plan_internal_init(&plan);
+  owner = ownership_plan_internal_add_token(&plan, managed_string_token());
+  block = ownership_plan_internal_add_block(&plan);
+  plan.entry_block = block;
+  op = operation(OWNERSHIP_OP_ACQUIRE);
+  op.result = owner;
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  op = operation(OWNERSHIP_OP_RELEASE);
+  op.operand = owner;
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  op = operation(OWNERSHIP_OP_RETURN);
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  expect(!ownership_plan_internal_verify_and_seal(&plan, &diagnostic) &&
+             diagnostic.code == OWNERSHIP_DIAGNOSTIC_DOUBLE_RELEASE,
+         "ownership verifier rejects double release on one path");
+  ownership_plan_internal_destroy(&plan);
+}
+
+static void test_unbalanced_join_rejected(void) {
+  ownership_plan plan;
+  ownership_diagnostic diagnostic;
+  ownership_operation op;
+  ownership_id entry;
+  ownership_id left;
+  ownership_id right;
+  ownership_id join;
+  ownership_id owner;
+  ownership_id condition;
+
+  ownership_plan_internal_init(&plan);
+  owner = ownership_plan_internal_add_token(&plan, managed_string_token());
+  condition = ownership_plan_internal_add_token(&plan, bool_token());
+  entry = ownership_plan_internal_add_block(&plan);
+  left = ownership_plan_internal_add_block(&plan);
+  right = ownership_plan_internal_add_block(&plan);
+  join = ownership_plan_internal_add_block(&plan);
+  plan.entry_block = entry;
+  op = operation(OWNERSHIP_OP_ACQUIRE);
+  op.result = owner;
+  (void)ownership_plan_internal_add_operation(&plan, entry, op);
+  op = operation(OWNERSHIP_OP_DEFINE_SCALAR);
+  op.result = condition;
+  (void)ownership_plan_internal_add_operation(&plan, entry, op);
+  op = operation(OWNERSHIP_OP_BRANCH);
+  op.operand = condition;
+  op.targets[0] = left;
+  op.targets[1] = right;
+  op.target_count = 2;
+  (void)ownership_plan_internal_add_operation(&plan, entry, op);
+  op = operation(OWNERSHIP_OP_RELEASE);
+  op.operand = owner;
+  (void)ownership_plan_internal_add_operation(&plan, left, op);
+  op = operation(OWNERSHIP_OP_JUMP);
+  op.targets[0] = join;
+  op.target_count = 1;
+  (void)ownership_plan_internal_add_operation(&plan, left, op);
+  (void)ownership_plan_internal_add_operation(&plan, right, op);
+  op = operation(OWNERSHIP_OP_RETURN);
+  (void)ownership_plan_internal_add_operation(&plan, join, op);
+  expect(!ownership_plan_internal_verify_and_seal(&plan, &diagnostic) &&
+             diagnostic.code == OWNERSHIP_DIAGNOSTIC_UNBALANCED_JOIN,
+         "ownership verifier rejects a join with unequal owner states");
+  ownership_plan_internal_destroy(&plan);
+}
+
+static void test_use_after_move_rejected(void) {
+  ownership_plan plan;
+  ownership_diagnostic diagnostic;
+  ownership_operation op;
+  ownership_id block;
+  ownership_id source;
+  ownership_id destination;
+
+  ownership_plan_internal_init(&plan);
+  source = ownership_plan_internal_add_token(&plan, managed_string_token());
+  destination =
+      ownership_plan_internal_add_token(&plan, managed_string_token());
+  block = ownership_plan_internal_add_block(&plan);
+  plan.entry_block = block;
+  op = operation(OWNERSHIP_OP_ACQUIRE);
+  op.result = source;
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  op = operation(OWNERSHIP_OP_MOVE);
+  op.operand = source;
+  op.result = destination;
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  op = operation(OWNERSHIP_OP_RELEASE);
+  op.operand = source;
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  op.operand = destination;
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  op = operation(OWNERSHIP_OP_RETURN);
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  expect(!ownership_plan_internal_verify_and_seal(&plan, &diagnostic) &&
+             diagnostic.code == OWNERSHIP_DIAGNOSTIC_INVALID_OPERATION,
+         "ownership verifier rejects use after move");
+  ownership_plan_internal_destroy(&plan);
+}
+
+static void test_unsupported_semantic_op_rejected(void) {
+  sir_function semantic;
+  sir_diagnostic semantic_diagnostic;
+  ownership_plan *plan;
+  ownership_diagnostic diagnostic;
+  sir_value value;
+  sir_operation constant;
+  sir_operation return_op;
+  sir_id value_id;
+  sir_id block;
+
+  sir_function_init(&semantic);
+  semantic.return_type = sir_builtin_type(SIR_TYPE_INT);
+  semantic.return_representation = SIR_REP_SCALAR;
+  semantic.return_ownership = SIR_OWNERSHIP_SCALAR;
+  value.type = semantic.return_type;
+  value.representation = semantic.return_representation;
+  value.ownership = semantic.return_ownership;
+  value_id = sir_function_add_value(&semantic, value);
+  block = sir_function_add_block(&semantic);
+  semantic.entry_block = block;
+  constant = semantic_operation(SIR_OP_CONSTANT);
+  constant.result = value_id;
+  (void)sir_block_add_operation(&semantic, block, &constant);
+  return_op = semantic_operation(SIR_OP_RETURN);
+  return_op.operands = &value_id;
+  return_op.operand_count = 1;
+  (void)sir_block_add_operation(&semantic, block, &return_op);
+  expect(sir_verify_function(&semantic, NULL, &semantic_diagnostic),
+         "semantic verifier accepts the explicit constant primitive");
+  plan = ownership_plan_build(&semantic, NULL, &diagnostic);
+  expect(plan == NULL &&
+             diagnostic.code == OWNERSHIP_DIAGNOSTIC_UNSUPPORTED_SOURCE_IR,
+         "checkpoint planner rejects a verified but unsupported semantic op");
+  ownership_plan_destroy(plan);
+  sir_function_destroy(&semantic);
+}
+
+int main(void) {
+  test_representative_plan();
+  test_borrow_provenance_rejected();
+  test_double_release_rejected();
+  test_unbalanced_join_rejected();
+  test_use_after_move_rejected();
+  test_unsupported_semantic_op_rejected();
+  if (failures != 0) {
+    fprintf(stderr, "%d ownership plan test(s) failed\n", failures);
+    return 1;
+  }
+  printf("All ownership plan tests passed\n");
+  return 0;
+}

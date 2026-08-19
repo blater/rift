@@ -1,7 +1,7 @@
 ---
 name: wiki
 description: >-
-  Operates the Rock language knowledge wiki at /Users/blater/src/rock/wikiroot/.
+  Operates the Rift language knowledge wiki at /Users/blater/src/rift/wikiroot/.
   Uses explicit slash commands as the formal trigger surface: /wiki, /wiki
   help, /wiki query <question>, /wiki lint, /wiki lint fix <scope>, and /wiki
   ingest [file|pending]. Also runs session-start orientation: give a one-line
@@ -15,7 +15,7 @@ description: >-
 
 ## Context
 
-- **Wiki root:** `/Users/blater/src/rock/wikiroot/`
+- **Wiki root:** `/Users/blater/src/rift/wikiroot/` (a standalone Git repository)
 - **Schema:** `wikiroot/wiki-proposal.md` — authoritative workflow reference (read it when you need procedural detail not covered here)
 - **Source of truth:** `src/` — the wiki documents the code, never contradicts it
 - **Wiki is persistent and compounding** — every operation should leave it richer and more consistent than before

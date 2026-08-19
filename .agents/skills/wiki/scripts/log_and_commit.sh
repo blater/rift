@@ -7,7 +7,9 @@ usage() {
 Usage: log_and_commit.sh <type> <title> <path> [<path> ...]
 
 Appends a wiki log entry using stdin as the body, then commits only the
-specified paths plus wikiroot/log.md.
+specified paths plus the wiki log. Paths are relative to the standalone
+wikiroot repository when wikiroot/.git exists; otherwise they are relative
+to the project repository.
 EOF
   exit 1
 }
@@ -19,12 +21,18 @@ shift
 title=$1
 shift
 
-repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || {
+project_root=$(git rev-parse --show-toplevel 2>/dev/null) || {
   echo "Not inside a git repository." >&2
   exit 1
 }
 
-log_path="wikiroot/log.md"
+if [ -d "$project_root/wikiroot/.git" ]; then
+  repo_root=$(git -C "$project_root/wikiroot" rev-parse --show-toplevel)
+  log_path="log.md"
+else
+  repo_root=$project_root
+  log_path="wikiroot/log.md"
+fi
 
 cd "$repo_root"
 
@@ -35,6 +43,7 @@ cd "$repo_root"
 
 body_file=$(mktemp)
 index_file=$(mktemp)
+rm -f "$index_file"
 
 cleanup() {
   rm -f "$body_file" "$index_file"

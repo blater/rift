@@ -83,8 +83,8 @@ P3: [Nice-to-have — missing cross-refs, draft promotion]
 
 ```sh
 ./.agents/skills/wiki/scripts/log_and_commit.sh lint "<brief summary>" \
-  wikiroot/pages/<page>.md \
-  wikiroot/index.md <<'EOF'
+  pages/<page>.md \
+  index.md <<'EOF'
 Automated tool: <exit code and summary>
 Issues fixed: <what changed>
 Remaining issues: <what was deferred, or "none">
@@ -92,4 +92,7 @@ TODOs filed: <count and short description, or "none">
 EOF
 ```
 
-The helper appends the `wikiroot/log.md` entry and creates one commit for that fix batch.
+When `wikiroot/` is a standalone repository, paths are relative to that
+repository. The helper appends its `log.md` entry and creates one commit for
+that fix batch. It retains the legacy project-relative behavior when the wiki
+is still tracked by the project repository.

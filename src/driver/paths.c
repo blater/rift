@@ -63,7 +63,7 @@ static const char *path_filename(const char *path) {
 }
 
 static char *strip_known_suffix(const char *filename) {
-  const char *suffixes[] = {".rift", ".rft", ".exe", ".nex", ".zxn"};
+  const char *suffixes[] = {".rift", ".rft", ".exe", ".nex"};
   size_t length = strlen(filename);
   for (size_t i = 0; i < sizeof(suffixes) / sizeof(suffixes[0]); i++) {
     size_t suffix_length = strlen(suffixes[i]);
@@ -126,7 +126,7 @@ static char *resolve_output(const char *cwd, const char *source,
     free(stem);
     return NULL;
   }
-  const char *suffix = options->target == DRIVER_TARGET_ZXN ? ".zxn" : ".exe";
+  const char *suffix = options->target == DRIVER_TARGET_ZXN ? ".nex" : ".exe";
   char *filename = driver_path_with_suffix(stem, suffix);
   char *output = filename ? driver_path_join(resolved_dir, filename) : NULL;
   free(filename);

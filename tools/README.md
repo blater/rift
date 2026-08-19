@@ -5,9 +5,9 @@ The first supported pairing is ZX Spectrum Next (`zxn`) with ZEsarUX.
 
 ```sh
 export ZESARUX_BIN=/path/to/zesarux
-tools/rift-emu run --target zxn program.zxn
-tools/rift-emu inspect --target zxn program.zxn
-tools/rift-emu test --target zxn program.zxn
+tools/rift-emu run --target zxn program.nex
+tools/rift-emu inspect --target zxn program.nex
+tools/rift-emu test --target zxn program.nex
 ```
 
 Verify that a ZEsarUX build provides Rift's complete loopback/headless/timing
@@ -50,7 +50,7 @@ paged address space.
 both the workload and its endpoint.
 
 ```sh
-tools/rift-emu measure --target zxn program.zxn \
+tools/rift-emu measure --target zxn program.nex \
   --gate-address 0x7146 --breakpoint 0x7136 --breakpoint-pass-count 2 \
   --release-pc 0x714d
 ```
@@ -61,8 +61,21 @@ The validated baseline is tag `zrcp-headless-2026-08-15` at commit
 `4a5c08189e1c6406d50f9d565ea44cc156a4d7f9`. Run
 `tools/test-zesarux-zrcp` to verify that contract independently.
 
+The maintained fork also provides `--silent` (short form `-s`) for
+informational startup UI. Rift's launcher uses that single option instead of
+separate welcome and splash switches. It suppresses startup update checks,
+version/change notices, first-run help, memorial notices, and joystick notices;
+warnings, errors, crashes, and ZRCP diagnostics remain visible. Verify the
+contract with `make test-zesarux-silent-startup`.
+
+`--noupdates` disables every statistics-server path: version lookup, yesterday
+user-count lookup, telemetry UUID generation/submission, and the telemetry
+consent prompt. Rift automation and `~/bin/zx` pass it alongside `--silent`.
+It does not disable user-requested online features such as ZENG or the online
+game/search browsers. Verify it with `make test-zesarux-noupdates`.
+
 `run` reports whether the emulator process completed. `inspect` keeps VM
-diagnostics. `test` requires a `.zxn` built with `rift --zxn-test` and accepts
+diagnostics. `test` requires a `.nex` built with `rift --zxn-test` and accepts
 only a `RIFTTEST:FINISH` marker with no `RIFTTEST:FAIL` marker as success.
 
 The command prints one JSON result to stdout. Its `artifacts` path contains the
@@ -82,7 +95,7 @@ To build an instrumented test artifact manually:
 
 ```sh
 ./rift --zxn-test --target=zxn test/simple_test.rift /private/tmp/simple.exe
-tools/rift-emu test --target=zxn /private/tmp/simple.zxn
+tools/rift-emu test --target=zxn /private/tmp/simple.nex
 ```
 
 `--zxn-test` is test-only. It activates `zxn_test.c`, has `Assert.rift` emit
@@ -115,7 +128,7 @@ private `/tmp/rift-build-*` workspace. `--debug` reports and retains that
 workspace; normal builds remove it after the check.
 
 The successful-build status line includes exact byte sizes. Native builds
-report the executable size. ZXN builds report the final `.zxn` size first and
+report the executable size. ZXN builds report the final `.nex` size first and
 the `_CODE.bin` program payload as the pre-wrap executable size; with
 `-create-app`, Z88DK's nominal `.exe` is only a zero-byte marker.
 

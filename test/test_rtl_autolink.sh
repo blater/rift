@@ -32,7 +32,7 @@ build_mode() {
     exit 1
   fi
   cp "$debug_dir/${mode}_CODE.bin" "$TMPDIR_AUDIT/${mode}_CODE.bin"
-  if [ ! -f "$TMPDIR_AUDIT/$mode.zxn" ] || [ ! -f "$TMPDIR_AUDIT/${mode}_CODE.bin" ]; then
+  if [ ! -f "$TMPDIR_AUDIT/$mode.nex" ] || [ ! -f "$TMPDIR_AUDIT/${mode}_CODE.bin" ]; then
     cat "$log"
     echo "FAIL: --rtl=$mode produced no code artifact" >&2
     exit 1

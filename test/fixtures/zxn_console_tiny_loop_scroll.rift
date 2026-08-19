@@ -1,0 +1,5 @@
+sub main() {
+  for i := 1 to 800 {
+    print("A");
+  }
+}

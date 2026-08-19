@@ -1,28 +1,37 @@
 # Rift runtime component manifest v1.
 # Lists are comma-separated paths relative to src/lib. Empty fields are valid.
-# component|id|dependencies|headers|host_sources|zxn_sources|host_asm|zxn_asm|init|shutdown|always?
-component|core|tiny_print,tiny_test|pools.h,fundefs.h,fundefs_internal.h,typedefs.h,host_caps.h,zxn_test.h,light_console.h|pools.c,print_bytes.c,fundefs.c,fundefs_internal.c,asm_interop.c,host_caps.c,zxn_test.c,host/termbox2_impl.c|pools.c,fundefs.c,fundefs_internal.c,asm_interop.c,host_caps.c|||rift_rtl_init|rift_rtl_shutdown|always
-component|tiny_print||||print_bytes.c|||||
-component|tiny_test||||zxn_test.c|||||
-component|keyboard|core|keyboard.h|keyboard.c|keyboard.c||zxn/keyboard.asm|||
-component|border|core|border.h|border.c|border.c|||||
-component|ink_paper|plot|ink_paper.h|ink_paper.c|ink_paper.c|||||
-component|cls|core|cls.h|cls.c|cls.c|||||
-component|time|core|time.h|time.c|time.c|||||
-component|sound|core|sound.h|sound.c|sound.c|||||
-component|input|core|input.h|input.c|input.c|||||
-component|print_at|ink_paper|print_at.h|print_at.c|print_at.c|||||
-component|plot|core|plot.h|plot.c|plot.c|||||
-component|draw|plot|draw.h|draw.c|draw.c|||||
-component|polyline|draw|polyline.h|polyline.c|polyline.c|||||
-component|circle|plot|circle.h|circle.c|circle.c|||||
-component|fill|draw|fill.h|fill.c|fill.c|||||
-component|triangle|draw|triangle.h|triangle.c|triangle.c|||||
-component|random|core|random.h|random.c|random.c|||||
-component|nextreg|core|nextreg.h|nextreg.c|nextreg.c|||||
-component|helpers|core|helpers.h|helpers.c|helpers.c|||||
-component|fmath|core|fmath.h|fmath.c|fmath.c|||||
-component|sprite||sprite.h|sprite_host.c|||zxn/sprite.asm|||
+# component|id|dependencies|headers|host_sources|zxn_sources|host_asm|zxn_asm|init|shutdown|always?|zxn-capability
+component|core|tiny_print,tiny_test,error_sink|pools.h,fundefs.h,fundefs_internal.h,typedefs.h,host_caps.h,zxn_test.h|pools.c,print_bytes.c,fundefs.c,fundefs_internal.c,asm_interop.c,host_caps.c,zxn_test.c,host/termbox2_impl.c|pools.c,fundefs.c,fundefs_internal.c,asm_interop.c,host_caps.c|||rift_rtl_init|rift_rtl_shutdown|always|startup31
+component|tiny_print||console.h||print_bytes.c||||||startup31
+component|tiny_test||||zxn_test.c||||||startup31
+component|error_sink|tiny_print|error_sink.h|error_sink.c|error_sink.c||||||startup31
+component|number_format|tiny_print|number_format.h|number_format.c|number_format.c||||||startup31
+component|dword_format|tiny_print|dword_format.h|dword_format.c|dword_format.c||||||startup31
+component|float_format|tiny_print,number_format,dword_format|float_format.h|float_format.c|float_format.c||||||startup31
+component|integer_to_string|core,number_format||integer_to_string.c|integer_to_string.c||||||startup31
+component|dword_to_string|core,dword_format||dword_to_string.c|dword_to_string.c||||||startup31
+component|float_to_string|core,float_format||float_to_string.c|float_to_string.c||||||startup31
+component|keyboard||keyboard.h|keyboard.c|keyboard.c||zxn/keyboard.asm||||startup31
+component|border||border.h|border.c|border.c||||||startup31
+component|ink_paper|tiny_print|ink_paper.h|ink_paper.c|ink_paper.c||||||startup31
+component|over|plot|over.h|over.c|over.c||||||startup31
+component|cls|tiny_print|cls.h|cls.c|cls.c||||||startup31
+component|time||time.h|time.c|time.c||||||startup31
+component|sound|core|sound.h|sound.c|sound.c||||||
+component|input|keyboard|input.h|input.c|input.c||||||startup31
+component|line_input|core,input,tiny_print||line_input.c|line_input.c||||||startup31
+component|print_at|tiny_print,ink_paper|print_at.h|print_at.c|print_at.c||||||startup31
+component|plot|core|plot.h|plot.c|plot.c||||||startup31
+component|draw|plot|draw.h|draw.c|draw.c||||||startup31
+component|polyline|draw|polyline.h|polyline.c|polyline.c||||||startup31
+component|circle|plot|circle.h|circle.c|circle.c||||||startup31
+component|fill|draw|fill.h|fill.c|fill.c||||||startup31
+component|triangle|draw|triangle.h|triangle.c|triangle.c||||||startup31
+component|random|core|random.h|random.c|random.c||||||startup31
+component|nextreg||nextreg.h|nextreg.c|nextreg.c||||||startup31
+component|helpers|core|helpers.h|helpers.c|helpers.c||||||startup31
+component|fmath|core|fmath.h|fmath.c|fmath.c||||||startup31
+component|sprite||sprite.h|sprite_host.c|||zxn/sprite.asm||||startup31
 
 # builtin|rift-name|component|return-type|parameter-types|C-symbol|reserved
 builtin|scan_keyboard|keyboard|void||scan_keyboard|
@@ -34,7 +43,7 @@ builtin|paper|ink_paper|void|byte|paper|
 builtin|bright|ink_paper|void|byte|bright|
 builtin|flash|ink_paper|void|byte|flash|
 builtin|inverse|ink_paper|void|byte|inverse|
-builtin|over|ink_paper|void|byte|over|
+builtin|over|over|void|byte|over|
 builtin|graphics_on|core|void||graphics_on|
 builtin|graphics_off|core|void||graphics_off|
 builtin|cls|cls|void||cls|
@@ -72,8 +81,14 @@ builtin|sleep|time|void|word|rift_sleep|
 builtin|beep|sound|void|word,word|beep|
 builtin|inkey|input|byte||inkey|
 builtin|keypress|input|byte||keypress|
-builtin|print|core|void|string|print|
-lowered|print|print_at|void|byte,byte,string|print_at|
+builtin|input|line_input|string||input|
+lowered|print|core|void|printable|print|
+lowered|print|print_at|void|byte,byte,printable|print_at|
+lowered|println|core|void||rift_println|
+lowered|println|core|void|printable|rift_println_value|
+lowered|putchar|tiny_print|void|char|rift_console_putc|
+lowered|putchar_at|print_at|void|byte,byte,char|rift_console_putc_at|
+lowered|putchar_addr|print_at|void|word,char|rift_console_putc_addr|
 
 # namespace|Rift-owner|component
 namespace|Sprite|sprite

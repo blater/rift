@@ -1,0 +1,116 @@
+// Opt-in ZXN console contract fixture.  This is intentionally outside the
+// auto-discovered test/*.rift set; test_zxn_stdio_free_console.sh owns it.
+
+sub check(boolean condition) {
+  if (condition) {
+    zxn_test_pass();
+  } else {
+    zxn_test_fail();
+  }
+}
+
+sub cell_top_address(int column, int row) returns word {
+  int band := row / 8;
+  int within_band := row - (band * 8);
+  return to_word(16384 + (band * 2048) + (within_band * 32) + column);
+}
+
+sub rows_equal(int expected_row, int actual_row) returns boolean {
+  for column := 0 to 31 {
+    word expected_top := cell_top_address(column, expected_row);
+    word actual_top := cell_top_address(column, actual_row);
+    for scanline := 0 to 7 {
+      word expected_address := to_word(to_int(expected_top) + (scanline * 256));
+      word actual_address := to_word(to_int(actual_top) + (scanline * 256));
+      if (peek(expected_address) != peek(actual_address)) {
+        return false;
+      }
+    }
+
+    word expected_attr := to_word(22528 + (expected_row * 32) + column);
+    word actual_attr := to_word(22528 + (actual_row * 32) + column);
+    if (peek(expected_attr) != peek(actual_attr)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+sub returned_word() returns word {
+  return to_word(1234);
+}
+
+sub main() {
+  int signed_value := 0 - 42;
+  byte byte_value := to_byte(255);
+  word word_value := to_word(65535);
+  dword dword_value := to_dword(2000000000);
+  char char_value := 'Z';
+  boolean true_value := true;
+  boolean false_value := false;
+  float float_value := 0.0 - 2.5;
+  string text_value := "text";
+
+  ink(7);
+  paper(0);
+  border(0);
+  cls();
+
+  print(0, 0, "i=-42 e=-40 b=255");
+  print(0, 1, "i=");
+  print(signed_value);
+  print(" e=");
+  print(signed_value + 2);
+  print(" b=");
+  print(byte_value);
+
+  print(0, 2, "w=65535 d=2000000000");
+  print(0, 3, "w=");
+  print(word_value);
+  print(" d=");
+  print(dword_value);
+
+  print(0, 4, "c=Z t=true f=false");
+  print(0, 5, "c=");
+  print(char_value);
+  print(" t=");
+  print(true_value);
+  print(" f=");
+  print(false_value);
+
+  print(0, 6, "x=-2.5 s=text");
+  print(0, 7, "x=");
+  print(float_value);
+  print(" s=");
+  print(text_value);
+
+  print(0, 8, "fn=1234");
+  print(0, 9, "fn=");
+  print(returned_word());
+
+  print(0, 10, "line");
+  print(0, 11, "next");
+  print(0, 12, "line");
+  println();
+  print("next");
+
+  print(0, 14, "42");
+  print(0, 15, to_word(42));
+
+  print(0, 16, "value=7");
+  print(0, 17, "tail");
+  print(0, 18, "value=");
+  println(7);
+  print("tail");
+
+  check(rows_equal(0, 1));
+  check(rows_equal(2, 3));
+  check(rows_equal(4, 5));
+  check(rows_equal(6, 7));
+  check(rows_equal(8, 9));
+  check(rows_equal(10, 12));
+  check(rows_equal(11, 13));
+  check(rows_equal(14, 15));
+  check(rows_equal(16, 18));
+  check(rows_equal(17, 19));
+}

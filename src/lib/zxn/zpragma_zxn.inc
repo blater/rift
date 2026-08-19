@@ -15,7 +15,4 @@
 
 // eliminate the stdio heap (no files can be opened)
 #pragma output CLIB_STDIO_HEAP_SIZE = 0
-
-// eliminate unused printf converters
-// placed used converters here, empty string if none (e.g. "%c %s %u %d")
-#pragma printf = "%c %s %u %d"    
+#pragma output CLIB_FOPEN_MAX = -1

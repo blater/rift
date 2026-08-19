@@ -98,14 +98,19 @@ def stop_process(process):
 def probe(binary, timeout):
   if not binary.is_file() or not os.access(binary, os.X_OK):
     raise ProbeError("ZEsarUX binary is not executable: %s" % binary)
-  if b"--remoteprotocol-host" not in binary.read_bytes():
+  binary_data = binary.read_bytes()
+  if b"--remoteprotocol-host" not in binary_data:
     raise ProbeError("ZEsarUX does not expose --remoteprotocol-host")
+  if b"--silent" not in binary_data:
+    raise ProbeError("ZEsarUX does not expose --silent")
+  if b"--noupdates" not in binary_data:
+    raise ProbeError("ZEsarUX does not expose --noupdates")
 
   artifacts = Path(tempfile.mkdtemp(prefix="rift-zesarux-zrcp-"))
   port = reserve_port()
   command = [
       str(binary), "--noconfigfile", "--machine", "tbblue", "--vo", "null",
-      "--ao", "null", "--nosplash", "--nowelcomemessage", "--quickexit",
+      "--ao", "null", "--silent", "--noupdates", "--quickexit",
       "--enable-remoteprotocol", "--remoteprotocol-host", "127.0.0.1",
       "--remoteprotocol-port", str(port),
   ]

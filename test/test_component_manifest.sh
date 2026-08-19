@@ -38,6 +38,7 @@ gcc -Wall -Werror -Wno-unused-variable -Wno-implicit-function-declaration \
   -I"$FIXTURES" -I"$ROOT/src/lib" -I"$ROOT/src/ext/lib" -o "$WORK/lifecycle" "$WORK/host.c" \
   "$FIXTURES/component_lifecycle.c" "$ROOT/src/lib/pools.c" \
   "$ROOT/src/lib/print_bytes.c" "$ROOT/src/lib/fundefs.c" \
+  "$ROOT/src/lib/error_sink.c" \
   "$ROOT/src/lib/fundefs_internal.c" "$ROOT/src/lib/asm_interop.c" \
   "$ROOT/src/lib/host_caps.c" "$ROOT/src/lib/zxn_test.c" \
   "$ROOT/src/lib/host/termbox2_impl.c" -lm
@@ -49,6 +50,7 @@ gcc -Wall -Werror -Wno-unused-variable -Wno-implicit-function-declaration \
 if gcc -Wno-implicit-function-declaration -I"$ROOT/src/lib" -I"$ROOT/src/ext/lib" \
     -o "$WORK/missing-hook" "$WORK/missing-hook.c" \
     "$ROOT/src/lib/pools.c" "$ROOT/src/lib/print_bytes.c" \
+    "$ROOT/src/lib/error_sink.c" \
     "$ROOT/src/lib/fundefs.c" "$ROOT/src/lib/fundefs_internal.c" \
     "$ROOT/src/lib/asm_interop.c" "$ROOT/src/lib/host_caps.c" \
     "$ROOT/src/lib/zxn_test.c" "$ROOT/src/lib/host/termbox2_impl.c" -lm \
@@ -58,7 +60,7 @@ fi
 
 "$ROOT/riftc" "$FIXTURES/sprite_type_methods.rift" "$WORK/sprite" \
   "--component-manifest=$ROOT/src/lib/components.manifest"
-[ "$(cat "$WORK/sprite.components")" = $'RIFT_COMPONENTS_V1\n@profile=full\ntiny_print\ntiny_test\ncore\nsprite' ] || \
+[ "$(cat "$WORK/sprite.components")" = $'RIFT_COMPONENTS_V1\n@profile=full\ntiny_print\ntiny_test\nerror_sink\ncore\nsprite' ] || \
   fail "Sprite type-method use did not select the component exactly once"
 grep -q '^byte sprite = (byte)(3);$' "$WORK/sprite.c" || \
   fail "Sprite constructor did not lower to its byte representation"
@@ -96,15 +98,56 @@ grep -q 'method owner is not a declared opaque interface or namespace' "$WORK/un
   cd /tmp
   "$ROOT/riftc" "$FIXTURES/zxn_size_empty.rift" "$WORK/direct"
 )
-[ "$(cat "$WORK/direct.components")" = $'RIFT_COMPONENTS_V1\n@profile=full\ntiny_print\ntiny_test\ncore' ] || \
+[ "$(cat "$WORK/direct.components")" = $'RIFT_COMPONENTS_V1\n@profile=full\ntiny_print\ntiny_test\nerror_sink\ncore' ] || \
   fail "direct riftc default manifest depends on working directory"
 
 "$ROOT/riftc" "$FIXTURES/native_name_shadow.rift" "$WORK/shadow" \
   "--component-manifest=$ROOT/src/lib/components.manifest"
-[ "$(cat "$WORK/shadow.components")" = $'RIFT_COMPONENTS_V1\n@profile=full\ntiny_print\ntiny_test\ncore' ] || \
+[ "$(cat "$WORK/shadow.components")" = $'RIFT_COMPONENTS_V1\n@profile=full\ntiny_print\ntiny_test\nerror_sink\ncore' ] || \
   fail "user function shadow incorrectly selected a native component"
 grep -q '^sleep(3);$' "$WORK/shadow.c" || fail "resolved user sleep call was lowered as native"
 if grep -q '^rift_sleep(3);$' "$WORK/shadow.c"; then fail "native lowering ignored resolved target"; fi
+grep -q '^rift_user_print(1);$' "$WORK/shadow.c" || \
+  fail "resolved user print call was lowered as a builtin"
+grep -q '^rift_user_println(2);$' "$WORK/shadow.c" || \
+  fail "resolved user println call was lowered as a builtin"
+grep -q '^rift_user_concat(3, 4);$' "$WORK/shadow.c" || \
+  fail "resolved user concat call was lowered as a builtin"
+grep -q '^rift_user_input();$' "$WORK/shadow.c" || \
+  fail "resolved user input call was lowered as a builtin"
+grep -q '^rift_user_putchar(5);$' "$WORK/shadow.c" || \
+  fail "resolved user putchar call was lowered as a builtin"
+
+if "$ROOT/riftc" "$FIXTURES/printf_undefined.rift" "$WORK/printf-undefined" \
+    "--component-manifest=$ROOT/src/lib/components.manifest" \
+    >"$WORK/printf-undefined.log" 2>&1; then
+  fail "removed printf builtin was still accepted"
+fi
+grep -q "undefined function printf" "$WORK/printf-undefined.log" || \
+  fail "removed printf builtin did not report an undefined function"
+
+"$ROOT/riftc" "$FIXTURES/zxn_beep_requires_crt.rift" "$WORK/beep" \
+  --target=zxn "--component-manifest=$ROOT/src/lib/components.manifest"
+grep -q '^@profile=full$' "$WORK/beep.components" || \
+  fail "ROM BEEPER was incorrectly admitted to a startup-31 profile"
+
+"$ROOT/riftc" "$FIXTURES/zxn_graphics_core_profile.rift" "$WORK/graphics-core" \
+  --target=zxn "--component-manifest=$ROOT/src/lib/components.manifest"
+grep -q '^@profile=core-31$' "$WORK/graphics-core.components" || \
+  fail "direct core graphics calls were incorrectly accepted by the tiny profile"
+grep -q '^core$' "$WORK/graphics-core.components" || \
+  fail "direct core graphics calls lost their core component"
+
+"$ROOT/riftc" "$ROOT/test/input_ownership_test.rift" "$WORK/input-ownership" \
+  "--component-manifest=$ROOT/src/lib/components.manifest"
+[ "$(grep -c '= input();' "$WORK/input-ownership.c")" -eq 5 ] || \
+  fail "input producer contexts were not each evaluated exactly once"
+grep -q '__return_string(__strtmp_' "$WORK/input-ownership.c" || \
+  fail "returned input producer was not retained across return cleanup"
+grep -q '__string_release(__strtmp_' "$WORK/input-ownership.c" || \
+  fail "input producer temporary was not tracked for release"
+grep -q '__strtmp_.*\.data = NULL' "$WORK/input-ownership.c" || \
+  fail "transferred input producer temporary was not nullified"
 
 if "$ROOT/riftc" "$FIXTURES/zxn_size_hello.rift" "$WORK/no-tiny" \
     --target=zxn "--component-manifest=$FIXTURES/component_manifest_order.manifest" \

@@ -46,6 +46,10 @@ static void flush_pre_f(generator_t *g, FILE *dest);
 // Constant to avoid repeated SV_STRING + strlen
 static const string_view SV_STRING = {.data = "string", .length = 6};
 
+static int printable_type_is(string_view type, const char *name);
+static int printable_type_supported(string_view type);
+static const char *printable_c_type(string_view type);
+
 /* Sprite is nominal in Rift but has byte storage and uses the existing byte
  * array helpers in generated C. */
 static string_view c_scalar_type_name(string_view rift_type) {
@@ -288,63 +292,180 @@ static int program_user_fundef_count(ast_t program, string_view name) {
 // the name is mangled as `name__N` where N is the arity. Single-definition
 // names emit unmangled for backward compatibility and diff minimisation.
 static void emit_fun_name(FILE *f, generator_t *g, string_view name, int argc) {
+  int lowered_name = svcmp(name, sv_from_cstr("printf")) == 0 ||
+                     svcmp(name, sv_from_cstr("print")) == 0 ||
+                     svcmp(name, sv_from_cstr("println")) == 0 ||
+                     svcmp(name, sv_from_cstr("concat")) == 0 ||
+                     svcmp(name, sv_from_cstr("input")) == 0 ||
+                     svcmp(name, sv_from_cstr("putchar")) == 0;
+  if (lowered_name) fprintf(f, "rift_user_");
   if (program_user_fundef_count(g->program, name) > 1)
     fprintf(f, SV_Fmt "__%d", SV_Arg(name), argc);
   else
     fprintf(f, SV_Fmt, SV_Arg(name));
 }
 
-// Helper: Check if a function is a known operation that's always available
-// These functions emit code patterns we recognize regardless of name table
-// Unified string concat: capture arguments, emit setup to pre_f, emit tmp var
-void emit_concat(generator_t *g, ast_funcall call) {
-  ast_t arg = call.args.data[1];
-  int is_char = 0;
+// Helper: Check if a function is a known operation that's always available.
+// Intrinsic concat trees are flattened so every operand is evaluated once, in
+// source order, before one final allocation is made.
+typedef struct {
+  ast_t *data;
+  int length;
+  int capacity;
+} concat_leaf_array;
 
-  if (arg->tag == literal && arg->data.literal.lit.type == TOK_CHR_LIT) {
-    is_char = 1;
-  } else if (arg->tag == identifier) {
-    string_view type = get_var_type(arg->data.identifier.id.lexeme, g->table);
-    if (svcmp(type, sv_from_cstr("char")) == 0) is_char = 1;
-  } else if (arg->tag == arr_index) {
-    string_view elem_type = get_array_element_type(arg->data.arr_index.array, g->table, call.name);
-    if (svcmp(elem_type, sv_from_cstr("char")) == 0) is_char = 1;
-  } else if (arg->tag == funcall) {
-    string_view fname = arg->data.funcall.name.lexeme;
-    if ((svcmp(fname, sv_from_cstr("get")) == 0 || svcmp(fname, sv_from_cstr("pop")) == 0) &&
-        arg->data.funcall.args.length > 0) {
-      string_view elem_type = get_array_element_type(arg->data.funcall.args.data[0], g->table, call.name);
-      if (svcmp(elem_type, sv_from_cstr("char")) == 0) is_char = 1;
+static int intrinsic_concat(ast_t expr) {
+  if (!expr || expr->tag != funcall) return 0;
+  ast_funcall call = expr->data.funcall;
+  int resolved_user = call.resolved_target &&
+                      call.resolved_target->tag == fundef &&
+                      call.resolved_target->data.fundef.body != NULL;
+  return !resolved_user && call.args.length == 2 &&
+         svcmp(call.name.lexeme, sv_from_cstr("concat")) == 0;
+}
+
+static void push_concat_leaf(concat_leaf_array *leaves, ast_t leaf) {
+  if (leaves->length == leaves->capacity) {
+    leaves->capacity = leaves->capacity == 0 ? 4 : leaves->capacity * 2;
+    leaves->data = realloc(leaves->data,
+                           sizeof(*leaves->data) * (size_t)leaves->capacity);
+    if (!leaves->data) {
+      fprintf(stderr, "riftc: out of memory while lowering concat\n");
+      exit(1);
     }
   }
+  leaves->data[leaves->length++] = leaf;
+}
 
-  const char *func_name = is_char ? "__concat_char" : "__concat_str";
+static void collect_concat_leaves(concat_leaf_array *leaves, ast_t expr) {
+  if (intrinsic_concat(expr)) {
+    collect_concat_leaves(leaves, expr->data.funcall.args.data[0]);
+    collect_concat_leaves(leaves, expr->data.funcall.args.data[1]);
+  } else {
+    push_concat_leaf(leaves, expr);
+  }
+}
+
+static const char *concat_format_function(string_view type) {
+  if (svcmp(type, sv_from_cstr("boolean")) == 0 ||
+      svcmp(type, sv_from_cstr("bool")) == 0)
+    return "rift_format_boolean";
+  if (svcmp(type, sv_from_cstr("byte")) == 0)
+    return "rift_format_byte";
+  if (svcmp(type, sv_from_cstr("word")) == 0)
+    return "rift_format_word";
+  if (svcmp(type, sv_from_cstr("dword")) == 0)
+    return "rift_format_dword";
+  if (svcmp(type, sv_from_cstr("float")) == 0)
+    return "rift_format_float";
+  return "rift_format_int";
+}
+
+void emit_concat(generator_t *g, ast_funcall call) {
+  concat_leaf_array leaves = {0};
   const char *tmp_var = allocate_string_tmp(g);
+  int id = g->str_tmp_counter++;
+  int valid = 1;
 
-  char *arg0_buf = capture_expression(g, call.args.data[0]);
-  char *arg1_buf = capture_expression(g, call.args.data[1]);
+  collect_concat_leaves(&leaves, call.args.data[0]);
+  collect_concat_leaves(&leaves, call.args.data[1]);
 
-  fprintf(g->pre_f, "string %s; %s(&%s, %s, %s);\n",
-          tmp_var, func_name, tmp_var, arg0_buf, arg1_buf);
+  for (int i = 0; i < leaves.length; i++) {
+    ast_t leaf = leaves.data[i];
+    string_view type = infer_expr_type(leaf, g->table);
+    token_t token = token_for_expr(leaf);
+    char *text;
+    if (!printable_type_supported(type)) {
+      error(token.filename, token.line, token.col,
+            "concat operand must be string, char, boolean, byte, word, dword, int, or float");
+      valid = 0;
+      continue;
+    }
+    text = capture_expression(g, leaf);
+    fprintf(g->pre_f, "%s __concat_value_%d_%d = %s;\n",
+            printable_c_type(type), id, i, text);
+    if (printable_type_is(type, "string")) {
+      if (rhs_is_borrower(leaf))
+        fprintf(g->pre_f, "__string_retain(__concat_value_%d_%d);\n", id,
+                i);
+      else if (strncmp(text, "__strtmp_", 9) == 0)
+        emit_nullify_tmp(g->pre_f, text);
+      fprintf(g->pre_f,
+              "size_t __concat_length_%d_%d = "
+              "__concat_value_%d_%d.data ? __concat_value_%d_%d.length : 0;\n",
+              id, i, id, i, id, i);
+    } else if (printable_type_is(type, "char")) {
+      fprintf(g->pre_f, "size_t __concat_length_%d_%d = 1;\n", id, i);
+    } else {
+      int buffer_size = printable_type_is(type, "float") ? 20 : 12;
+      fprintf(g->pre_f, "char __concat_buffer_%d_%d[%d];\n", id, i,
+              buffer_size);
+      fprintf(g->pre_f,
+              "size_t __concat_length_%d_%d = %s(__concat_buffer_%d_%d, "
+              "__concat_value_%d_%d);\n",
+              id, i, concat_format_function(type), id, i, id, i);
+    }
+    free(text);
+  }
+
+  if (!valid) {
+    fprintf(g->f, "(string){0}");
+    free(leaves.data);
+    free((char *)tmp_var);
+    return;
+  }
+
+  fprintf(g->pre_f, "size_t __concat_total_%d = 0;\n", id);
+  for (int i = 0; i < leaves.length; i++)
+    fprintf(g->pre_f,
+            "__concat_total_%d = __concat_checked_add(__concat_total_%d, "
+            "__concat_length_%d_%d);\n",
+            id, id, id, i);
+  fprintf(g->pre_f, "string %s; __rift_make_longlived_string(&%s, "
+                    "__concat_total_%d);\n",
+          tmp_var, tmp_var, id);
+  fprintf(g->pre_f, "size_t __concat_offset_%d = 0;\n", id);
+  for (int i = 0; i < leaves.length; i++) {
+    string_view type = infer_expr_type(leaves.data[i], g->table);
+    const char *data;
+    char data_name[96];
+    if (printable_type_is(type, "string"))
+      snprintf(data_name, sizeof(data_name), "__concat_value_%d_%d.data", id,
+               i);
+    else if (printable_type_is(type, "char"))
+      snprintf(data_name, sizeof(data_name), "&__concat_value_%d_%d", id, i);
+    else
+      snprintf(data_name, sizeof(data_name), "__concat_buffer_%d_%d", id, i);
+    data = data_name;
+    fprintf(g->pre_f,
+            "__concat_offset_%d = __concat_append_bytes(%s, "
+            "__concat_offset_%d, %s, __concat_length_%d_%d);\n",
+            id, tmp_var, id, data, id, i);
+    if (printable_type_is(type, "string"))
+      fprintf(g->pre_f, "__string_release(__concat_value_%d_%d);\n", id, i);
+  }
+  fprintf(g->pre_f, "%s.data[__concat_total_%d] = 0;\n", tmp_var, id);
   fprintf(g->f, "%s", tmp_var);
-
-  free(arg0_buf);
-  free(arg1_buf);
   track_string_tmp(g, tmp_var);
+  free(leaves.data);
 }
 
 void emit_to_string(generator_t *g, ast_funcall call) {
   // Capture argument, emit setup to pre_f, emit tmp var to main output
   ast_t arg = call.args.data[0];
   const char *fn = "__to_string_int";
-
-  if (arg->tag == identifier) {
-    string_view type = get_var_type(arg->data.identifier.id.lexeme, g->table);
-    if (svcmp(type, sv_from_cstr("byte")) == 0) fn = "__to_string_byte";
-    else if (svcmp(type, sv_from_cstr("word")) == 0) fn = "__to_string_word";
-    else if (svcmp(type, sv_from_cstr("dword")) == 0) fn = "__to_string_dword";
-    else if (svcmp(type, sv_from_cstr("float")) == 0) fn = "__to_string_float";
-  }
+  string_view type = infer_expr_type(arg, g->table);
+  if (svcmp(type, sv_from_cstr("byte")) == 0) fn = "__to_string_byte";
+  else if (svcmp(type, sv_from_cstr("word")) == 0) fn = "__to_string_word";
+  else if (svcmp(type, sv_from_cstr("dword")) == 0) fn = "__to_string_dword";
+  else if (svcmp(type, sv_from_cstr("float")) == 0) fn = "__to_string_float";
+  else if (svcmp(type, sv_from_cstr("boolean")) == 0 ||
+           svcmp(type, sv_from_cstr("bool")) == 0)
+    fn = "__to_string_boolean";
+  else if (svcmp(type, sv_from_cstr("char")) == 0)
+    fn = "__to_string_char";
+  else if (svcmp(type, sv_from_cstr("string")) == 0)
+    fn = "__to_string_string";
 
   const char *tmp_var = allocate_string_tmp(g);
   char *arg_buf = capture_expression(g, arg);
@@ -511,7 +632,7 @@ generator_t *new_generator(char *filename, const char *output_base,
   // Register C library builtin functions with their return types
   // Stdlib / I/O
   register_builtin(&res->table, "print",                "void");
-  register_builtin(&res->table, "printf",               "void");
+  register_builtin(&res->table, "println",              "void");
   // Array operations - handled specially by name lookup in generator
   register_builtin(&res->table, "length",               "int");
   // String operations from fundefs.h
@@ -542,6 +663,8 @@ generator_t *new_generator(char *filename, const char *output_base,
   register_builtin(&res->table, "exit",                 "void");
   register_builtin(&res->table, "halt",                 "void");
   register_builtin(&res->table, "putchar",              "void");
+  register_builtin(&res->table, "putchar_at",           "void");
+  register_builtin(&res->table, "putchar_addr",         "void");
   register_builtin(&res->table, "fill_cmd_args",        "void");
   register_builtin(&res->table, "zxn_test_begin",       "void");
   register_builtin(&res->table, "zxn_test_stage",       "void");
@@ -759,6 +882,159 @@ void generate_to_string(generator_t *g, ast_funcall call) {
   emit_to_string(g, call);
 }
 
+static int printable_type_is(string_view type, const char *name) {
+  return svcmp(type, sv_from_cstr((char *)name)) == 0;
+}
+
+static int printable_type_supported(string_view type) {
+  return printable_type_is(type, "string") || printable_type_is(type, "char") ||
+         printable_type_is(type, "boolean") || printable_type_is(type, "bool") ||
+         printable_type_is(type, "byte") || printable_type_is(type, "word") ||
+         printable_type_is(type, "dword") || printable_type_is(type, "int") ||
+         printable_type_is(type, "float");
+}
+
+static const char *printable_c_type(string_view type) {
+  if (printable_type_is(type, "bool")) return "boolean";
+  if (printable_type_is(type, "string")) return "string";
+  if (printable_type_is(type, "char")) return "char";
+  if (printable_type_is(type, "boolean")) return "boolean";
+  if (printable_type_is(type, "byte")) return "byte";
+  if (printable_type_is(type, "word")) return "word";
+  if (printable_type_is(type, "dword")) return "dword";
+  if (printable_type_is(type, "float")) return "float";
+  return "int";
+}
+
+static void emit_printable_text(FILE *f, string_view type, const char *text) {
+  if (printable_type_is(type, "string"))
+    fprintf(f, "print(%s)", text);
+  else if (printable_type_is(type, "char"))
+    fprintf(f, "rift_console_putc((char)(%s))", text);
+  else if (printable_type_is(type, "boolean") ||
+           printable_type_is(type, "bool"))
+    fprintf(f, "rift_print_boolean((boolean)(%s))", text);
+  else if (printable_type_is(type, "byte"))
+    fprintf(f, "rift_print_byte((byte)(%s))", text);
+  else if (printable_type_is(type, "word"))
+    fprintf(f, "rift_print_word((word)(%s))", text);
+  else if (printable_type_is(type, "dword"))
+    fprintf(f, "rift_print_dword((dword)(%s))", text);
+  else if (printable_type_is(type, "float"))
+    fprintf(f, "rift_print_float((float)(%s))", text);
+  else
+    fprintf(f, "rift_print_int((int)(%s))", text);
+}
+
+static void emit_printable_call(generator_t *g, ast_t value) {
+  string_view type = infer_expr_type(value, g->table);
+  token_t token = token_for_expr(value);
+  if (!printable_type_supported(type)) {
+    error(token.filename, token.line, token.col,
+          "print value must be string, char, boolean, byte, word, dword, int, or float");
+    fprintf(g->f, "(void)0");
+    return;
+  }
+  char *text = capture_expression(g, value);
+  if (printable_type_is(type, "string")) {
+    int id = g->str_tmp_counter++;
+    fprintf(g->pre_f, "string __print_string_%d = %s;\n", id, text);
+    if (rhs_is_borrower(value))
+      fprintf(g->pre_f, "__string_retain(__print_string_%d);\n", id);
+    else if (strncmp(text, "__strtmp_", 9) == 0)
+      emit_nullify_tmp(g->pre_f, text);
+    fprintf(g->pre_f, "print(__print_string_%d);\n", id);
+    fprintf(g->pre_f, "__string_release(__print_string_%d);\n", id);
+    fprintf(g->f, "(void)0");
+  } else {
+    emit_printable_text(g->f, type, text);
+  }
+  free(text);
+}
+
+static void emit_positioned_print(generator_t *g, ast_funcall call) {
+  string_view value_type = infer_expr_type(call.args.data[2], g->table);
+  token_t value_token = token_for_expr(call.args.data[2]);
+  if (!printable_type_supported(value_type)) {
+    error(value_token.filename, value_token.line, value_token.col,
+          "positioned print value must be string, char, boolean, byte, word, dword, int, or float");
+    fprintf(g->f, "(void)0");
+    return;
+  }
+
+  int id = g->str_tmp_counter++;
+  char *x_text = capture_expression(g, call.args.data[0]);
+  fprintf(g->pre_f, "byte __print_x_%d = (byte)(%s);\n", id, x_text);
+  free(x_text);
+  char *y_text = capture_expression(g, call.args.data[1]);
+  fprintf(g->pre_f, "byte __print_y_%d = (byte)(%s);\n", id, y_text);
+  free(y_text);
+  if (call.args.data[2]->tag == literal &&
+      call.args.data[2]->data.literal.lit.type == TOK_STR_LIT) {
+    token_t literal = call.args.data[2]->data.literal.lit;
+    fprintf(g->pre_f,
+            "rift_console_set_cursor(__print_x_%d, __print_y_%d);\n", id,
+            id);
+    fprintf(g->pre_f, "rift_print_bytes(" SV_Fmt ", %d);\n",
+            SV_Arg(literal.lexeme), get_literal_string_length(literal) - 1);
+    fprintf(g->f, "(void)0");
+    return;
+  }
+  char *value_text = capture_expression(g, call.args.data[2]);
+  fprintf(g->pre_f, "%s __print_value_%d = %s;\n",
+          printable_c_type(value_type), id, value_text);
+  if (printable_type_is(value_type, "string")) {
+    if (rhs_is_borrower(call.args.data[2]))
+      fprintf(g->pre_f, "__string_retain(__print_value_%d);\n", id);
+    else if (strncmp(value_text, "__strtmp_", 9) == 0)
+      emit_nullify_tmp(g->pre_f, value_text);
+  }
+  free(value_text);
+  fprintf(g->pre_f, "rift_console_set_cursor(__print_x_%d, __print_y_%d);\n",
+          id, id);
+  char value_name[64];
+  snprintf(value_name, sizeof(value_name), "__print_value_%d", id);
+  emit_printable_text(g->pre_f, value_type, value_name);
+  fprintf(g->pre_f, ";\n");
+  if (printable_type_is(value_type, "string"))
+    fprintf(g->pre_f, "__string_release(__print_value_%d);\n", id);
+  fprintf(g->f, "(void)0");
+}
+
+static void emit_positioned_putchar(generator_t *g, ast_funcall call,
+                                    int raw_address) {
+  int id = g->str_tmp_counter++;
+  char *first_text = capture_expression(g, call.args.data[0]);
+  char *value_text;
+  if (raw_address)
+    fprintf(g->pre_f, "word __putchar_address_%d = (word)(%s);\n", id,
+            first_text);
+  else
+    fprintf(g->pre_f, "byte __putchar_x_%d = (byte)(%s);\n", id,
+            first_text);
+  free(first_text);
+  if (!raw_address) {
+    char *y_text = capture_expression(g, call.args.data[1]);
+    fprintf(g->pre_f, "byte __putchar_y_%d = (byte)(%s);\n", id, y_text);
+    free(y_text);
+  }
+  value_text = capture_expression(g, call.args.data[raw_address ? 1 : 2]);
+  fprintf(g->pre_f, "char __putchar_value_%d = (char)(%s);\n", id,
+          value_text);
+  free(value_text);
+  if (raw_address)
+    fprintf(g->pre_f,
+            "rift_console_putc_addr(__putchar_address_%d, "
+            "__putchar_value_%d);\n",
+            id, id);
+  else
+    fprintf(g->pre_f,
+            "rift_console_putc_at(__putchar_x_%d, __putchar_y_%d, "
+            "__putchar_value_%d);\n",
+            id, id, id);
+  fprintf(g->f, "(void)0");
+}
+
 void generate_funcall(generator_t *g, ast_t fun) {
   FILE *f = g->f;
   ast_funcall funcall = fun->data.funcall;
@@ -791,6 +1067,26 @@ void generate_funcall(generator_t *g, ast_t fun) {
     generate_concat(g, funcall);
   } else if (!resolved_user && svcmp(funcall.name.lexeme, sv_from_cstr("toString")) == 0) {
     generate_to_string(g, funcall);
+  } else if (!resolved_user &&
+             svcmp(funcall.name.lexeme, sv_from_cstr("length")) == 0 &&
+             funcall.args.length == 1) {
+    string_view argument_type = infer_expr_type(funcall.args.data[0], g->table);
+    if (svcmp(argument_type, SV_STRING) == 0)
+      fprintf(g->f, "__length_string(");
+    else
+      fprintf(g->f, "__length_array(");
+    generate_expression(g, funcall.args.data[0]);
+    fprintf(g->f, ")");
+  } else if (!resolved_user &&
+             svcmp(funcall.name.lexeme, sv_from_cstr("input")) == 0 &&
+             funcall.args.length == 0) {
+    /* input() produces an owned long-lived string. Put it under the same
+     * tracked temporary discipline as substring/concat so discard, return,
+     * argument, print, and concat contexts each release exactly once. */
+    const char *tmp = allocate_string_tmp(g);
+    fprintf(g->pre_f, "string %s = input();\n", tmp);
+    fprintf(g->f, "%s", tmp);
+    track_string_tmp(g, tmp);
   } else if (!resolved_user && svcmp(funcall.name.lexeme, sv_from_cstr("halt")) == 0) {
     /* halt is terminal just like return: release every active owned value and
      * restore bump marks before entering the runtime's non-returning exit. */
@@ -817,16 +1113,38 @@ void generate_funcall(generator_t *g, ast_t fun) {
             SV_Arg(tok.lexeme), get_literal_string_length(tok) - 1);
   } else if (!resolved_user && svcmp(funcall.name.lexeme, sv_from_cstr("print")) == 0 &&
              funcall.args.length == 3) {
-    // Overloaded print(x, y, text) — routes to the C print_at entry point
-    // defined in src/lib/print_at.c. 1-arg print(text) falls through to the
-    // generic path below and emits as C `print`.
-    FILE *f = g->f;
-    fprintf(f, "print_at(");
-    for (int i = 0; i < funcall.args.length; i++) {
-      if (i > 0) fprintf(f, ", ");
-      generate_expression(g, funcall.args.data[i]);
+    emit_positioned_print(g, funcall);
+  } else if (!resolved_user &&
+             svcmp(funcall.name.lexeme, sv_from_cstr("print")) == 0 &&
+             funcall.args.length == 1) {
+    emit_printable_call(g, funcall.args.data[0]);
+  } else if (!resolved_user &&
+             svcmp(funcall.name.lexeme, sv_from_cstr("println")) == 0) {
+    if (funcall.args.length == 0) {
+      fprintf(g->f, "rift_console_newline()");
+    } else if (funcall.args.length == 1) {
+      fprintf(g->f, "(");
+      emit_printable_call(g, funcall.args.data[0]);
+      fprintf(g->f, ", rift_console_newline())");
+    } else {
+      error(funcall.name.filename, funcall.name.line, funcall.name.col,
+            "println() requires 0 or 1 arguments, got %d", funcall.args.length);
+      fprintf(g->f, "(void)0");
     }
-    fprintf(f, ")");
+  } else if (!resolved_user &&
+             svcmp(funcall.name.lexeme, sv_from_cstr("putchar")) == 0 &&
+             funcall.args.length == 1) {
+    fprintf(g->f, "rift_console_putc((char)(");
+    generate_expression(g, funcall.args.data[0]);
+    fprintf(g->f, "))");
+  } else if (!resolved_user &&
+             svcmp(funcall.name.lexeme, sv_from_cstr("putchar_at")) == 0 &&
+             funcall.args.length == 3) {
+    emit_positioned_putchar(g, funcall, 0);
+  } else if (!resolved_user &&
+             svcmp(funcall.name.lexeme, sv_from_cstr("putchar_addr")) == 0 &&
+             funcall.args.length == 2) {
+    emit_positioned_putchar(g, funcall, 1);
   } else if (!resolved_user && svcmp(funcall.name.lexeme, sv_from_cstr("sleep")) == 0) {
     // Rift `sleep` → C `rift_sleep` to avoid POSIX unistd.h collision.
     FILE *f = g->f;
@@ -836,25 +1154,6 @@ void generate_funcall(generator_t *g, ast_t fun) {
       generate_expression(g, funcall.args.data[i]);
     }
     fprintf(f, ")");
-  } else if (!resolved_user && svcmp(funcall.name.lexeme, sv_from_cstr("printf")) == 0) {
-    // Rift printf takes one string argument.
-    // ADR-0003 §13: route Rift string expressions through the length-aware
-    // print() runtime helper. Substring views are not null-terminated, so
-    // C %s would print past the substring's end into the source's bytes.
-    FILE *f = g->f;
-    ast_t arg = funcall.args.data[0];
-
-    if (expr_returns_string(arg, g->table)) {
-      fprintf(f, "print(");
-      generate_expression(g, arg);
-      fprintf(f, ")");
-    }
-    // Non-string: emit C printf as before
-    else {
-      fprintf(f, "printf(");
-      generate_expression(g, arg);
-      fprintf(f, ")");
-    }
   } else {
     // Check if function is defined (either in name table or as a special builtin)
     string_view fname = funcall.name.lexeme;
@@ -1064,10 +1363,12 @@ void generate_array_funcs(generator_t *g, char *type_name) {
   fprintf(f, "%s %s_get_elem(__internal_dynamic_array_t arr, size_t index) {\n",
           type_name, type_name);
   fprintf(f, "  %s *res = __internal_get_elem(arr, index);\n", type_name);
-  fprintf(f,
-          "  if (res == NULL){ printf(\"NULL ELEMENT IN %s_get_elem\"); "
-          "exit(1);}\n",
+  fprintf(f, "  if (res == NULL) {\n");
+  fprintf(f, "    rift_error_text(\"NULL ELEMENT IN %s_get_elem\");\n",
           type_name);
+  fprintf(f, "    rift_error_newline();\n");
+  fprintf(f, "    exit(1);\n");
+  fprintf(f, "  }\n");
   /* Array reads borrow the slot. Destinations that outlive the expression
    * retain through rhs_is_borrower(), avoiding an untracked owner for
    * expressions such as get(items, 0).field. */
@@ -2609,12 +2910,6 @@ void transpile(generator_t *g, ast_t program) {
   g->zxn_tiny_simple_stdout = tiny.simple_stdout;
   g->zxn_light_core_eligible = g->target == TARGET_ZXN;
   generator_collect_component_uses(g, program);
-  for (int i = 0; i < g->components->component_count; i++) {
-    const char *id = g->components->components[i].id;
-    if (g->direct_components[i] && strcmp(id, "core") != 0 &&
-        strcmp(id, "tiny_print") != 0 && strcmp(id, "tiny_test") != 0)
-      g->zxn_light_core_eligible = 0;
-  }
   if (tiny.eligible) {
     int core = component_index(g, "core");
     if (core >= 0) g->direct_components[core] = 0;
@@ -2622,6 +2917,28 @@ void transpile(generator_t *g, ast_t program) {
     if (g->zxn_test) record_component(g, "tiny_test");
   }
   generator_compute_component_closure(g);
+  int closure_startup31_safe = 1;
+  for (int i = 0; i < g->components->component_count; i++) {
+    if (g->closed_components[i] &&
+        !g->components->components[i].zxn_startup31_safe) {
+      closure_startup31_safe = 0;
+      break;
+    }
+  }
+  if (tiny.eligible && !closure_startup31_safe) {
+    tiny.eligible = 0;
+    g->zxn_tiny_eligible = 0;
+    g->zxn_light_core_eligible = 0;
+    int core = component_index(g, "core");
+    if (core >= 0) g->direct_components[core] = 1;
+    memset(g->closed_components, 0,
+           (size_t)g->components->component_count *
+               sizeof(*g->closed_components));
+    g->component_order_count = 0;
+    generator_compute_component_closure(g);
+  } else if (!tiny.eligible && g->zxn_light_core_eligible) {
+    g->zxn_light_core_eligible = closure_startup31_safe;
+  }
   generator_write_component_output(g);
   asset_generator_emit_asm(g->assets, g->asset_asm_output_path,
                            g->target == TARGET_ZXN);
@@ -2638,6 +2955,9 @@ void transpile(generator_t *g, ast_t program) {
   }
 
   fprintf(f, "#include <stdlib.h>\n");
+  if (g->target == TARGET_ZXN && !tiny.eligible &&
+      !g->zxn_light_core_eligible)
+    fprintf(f, "#include <stdio.h>\n");
   generator_emit_manifest_headers(g);
   fprintf(f, "\n");
 

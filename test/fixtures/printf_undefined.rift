@@ -1,0 +1,3 @@
+sub main() {
+  printf("not a builtin");
+}

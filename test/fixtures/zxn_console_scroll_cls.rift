@@ -1,0 +1,100 @@
+// Verify black-paper clearing, column wrapping, and a 24-row scroll without
+// relying on terminal stdout or screenshot OCR.
+
+sub check(boolean condition) {
+  if (condition) {
+    zxn_test_pass();
+  } else {
+    zxn_test_fail();
+  }
+}
+
+sub cell_top_address(int column, int row) returns word {
+  int band := row / 8;
+  int within_band := row - (band * 8);
+  return to_word(16384 + (band * 2048) + (within_band * 32) + column);
+}
+
+sub cells_equal(int left_column, int left_row, int right_column, int right_row) returns boolean {
+  word left_top := cell_top_address(left_column, left_row);
+  word right_top := cell_top_address(right_column, right_row);
+  for scanline := 0 to 7 {
+    if (peek(to_word(to_int(left_top) + (scanline * 256))) != peek(to_word(to_int(right_top) + (scanline * 256)))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+sub screen_is_black_and_clear() returns boolean {
+  for address := 16384 to 22527 {
+    if (peek(to_word(address)) != to_byte(0)) {
+      return false;
+    }
+  }
+  for address := 22528 to 23295 {
+    if (peek(to_word(address)) != to_byte(7)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+sub main() {
+  ink(7);
+  paper(0);
+  border(0);
+  cls();
+  check(screen_is_black_and_clear());
+
+  print(31, 0, "AB");
+  putchar_at(to_byte(30), to_byte(0), 'A');
+  putchar_at(to_byte(1), to_byte(1), 'B');
+  check(cells_equal(31, 0, 30, 0));
+  check(cells_equal(0, 1, 1, 1));
+
+  cls();
+  ink(1);
+  println('A');
+  ink(2);
+  println('B');
+  println('C');
+  println('D');
+  println('E');
+  println('F');
+  println('G');
+  println('H');
+  println('I');
+  println('J');
+  println('K');
+  println('L');
+  println('M');
+  println('N');
+  println('O');
+  println('P');
+  println('Q');
+  println('R');
+  println('S');
+  println('T');
+  println('U');
+  println('V');
+  println('W');
+  ink(3);
+  println('X');
+  print('Y');
+
+  // After the newline below X scrolls, the visible rows are B..X,Y.
+  putchar_at(to_byte(31), to_byte(0), 'B');
+  putchar_at(to_byte(31), to_byte(1), 'C');
+  putchar_at(to_byte(31), to_byte(22), 'X');
+  putchar_at(to_byte(31), to_byte(23), 'Y');
+  check(cells_equal(0, 0, 31, 0));
+  check(cells_equal(0, 1, 31, 1));
+  check(cells_equal(0, 22, 31, 22));
+  check(cells_equal(0, 23, 31, 23));
+  check(peek(to_word(22528)) = to_byte(2));
+  check(peek(to_word(22560)) = to_byte(2));
+  check(peek(to_word(23232)) = to_byte(3));
+  check(peek(to_word(23264)) = to_byte(3));
+  check(peek(to_word(23295)) = to_byte(3));
+}

@@ -1,0 +1,96 @@
+#!/usr/bin/env python3
+"""Verify that ZEsarUX --noupdates disables statistics-server traffic."""
+
+import argparse
+import json
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+
+
+DEFAULT_ZESARUX = Path("/Users/blater/src/zesarux/src/zesarux")
+
+
+class ProbeError(RuntimeError):
+  pass
+
+
+def run(binary, arguments, timeout=15.0):
+  try:
+    return subprocess.run(
+        [str(binary), *arguments], capture_output=True, text=True,
+        timeout=timeout, check=False)
+  except subprocess.TimeoutExpired as error:
+    raise ProbeError(
+        "ZEsarUX did not complete %s within %.1fs" %
+        (" ".join(arguments), timeout)) from error
+
+
+def probe(binary):
+  if not binary.is_file() or not os.access(binary, os.X_OK):
+    raise ProbeError("ZEsarUX binary is not executable: %s" % binary)
+  if b"--noupdates" not in binary.read_bytes():
+    raise ProbeError("ZEsarUX help does not expose --noupdates")
+
+  command_result = run(
+      binary, ["--noconfigfile", "--noupdates", "--testconfig"])
+  if command_result.returncode != 0:
+    raise ProbeError("--noupdates was rejected on the command line")
+
+  with tempfile.TemporaryDirectory(prefix="rift-zesarux-noupdates-") as temp:
+    config = Path(temp) / "zesarux.rc"
+    config.write_text(
+        "--saveconf-on-exit\n"
+        "--stats-send-already-asked\n"
+        "--stats-send-enabled\n"
+        "--noupdates\n",
+        encoding="utf-8")
+    result = run(binary, [
+        "--configfile", str(config), "--machine", "tbblue", "--vo", "null",
+        "--ao", "null", "--nowelcomemessage", "--nosplash", "--quickexit",
+        "--exit-after", "1", "--verbose", "4",
+    ])
+    output = result.stdout + result.stderr
+    if result.returncode != 0:
+      raise ProbeError("--noupdates runtime check failed:\n%s" % output)
+
+    forbidden = (
+        "Generated uuid:",
+        "Starting sending statistics pthread",
+        "Starting check updates pthread",
+        "Starting check yesterday users pthread",
+    )
+    observed = [message for message in forbidden if message in output]
+    if observed:
+      raise ProbeError(
+          "--noupdates allowed statistics activity: %s" % ", ".join(observed))
+    if "--noupdates" not in config.read_text(encoding="utf-8"):
+      raise ProbeError("--noupdates was not persisted in the configuration file")
+
+  return {
+      "binary": str(binary),
+      "configuration": "persisted",
+      "statistics_server_activity": "disabled",
+      "status": "passed",
+  }
+
+
+def main():
+  parser = argparse.ArgumentParser(
+      description="Verify ZEsarUX --noupdates behavior")
+  parser.add_argument(
+      "--emulator-bin",
+      default=os.environ.get("ZESARUX_BIN", str(DEFAULT_ZESARUX)))
+  args = parser.parse_args()
+  try:
+    result = probe(Path(args.emulator_bin).expanduser().resolve())
+  except (OSError, ProbeError, subprocess.SubprocessError) as error:
+    print(json.dumps({"error": str(error), "status": "failed"}, sort_keys=True))
+    return 1
+  print(json.dumps(result, sort_keys=True))
+  return 0
+
+
+if __name__ == "__main__":
+  raise SystemExit(main())

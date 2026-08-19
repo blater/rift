@@ -60,7 +60,7 @@ def main():
   parser.add_argument("--timeout-seconds", type=float, default=4.0)
   parser.add_argument("--artifacts", type=Path, default=DEFAULT_ARTIFACTS)
   parser.add_argument("--keep-builds", action="store_true",
-                      help="retain compiled .zxn files after the suite")
+                      help="retain compiled .nex files after the suite")
   args = parser.parse_args()
 
   if not (ROOT / "riftc").is_file():
@@ -97,7 +97,7 @@ def main():
         print(f"FAIL {case} (build; {case_artifacts / 'build.log'})")
         continue
 
-      nex = exe.with_suffix(".zxn")
+      nex = exe.with_suffix(".nex")
       launch_command = [str(ROOT / "tools" / "rift-emu"), "--target", "zxn",
                         "--timeout-seconds", str(args.timeout_seconds),
                         "--artifacts", str(case_artifacts), "--keep-all",

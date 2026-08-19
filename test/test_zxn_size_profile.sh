@@ -37,10 +37,22 @@ build_debug hello_all "$FIXTURES/zxn_size_hello.rift" --rtl=all
 build_debug custom "$FIXTURES/zxn_size_general_string.rift" \
   --zxn-bump-pool=256 --zxn-longlived-pool=1024
 
-EMPTY_NEX_BYTES=$(wc -c <"$TMPDIR_SIZE/empty.zxn" | tr -d '[:space:]')
+EMPTY_NEX_BYTES=$(wc -c <"$TMPDIR_SIZE/empty.nex" | tr -d '[:space:]')
 EMPTY_PREWRAP_BYTES=$(wc -c <"$TMPDIR_SIZE/empty_CODE.bin" | tr -d '[:space:]')
-grep -q "created .*empty.zxn (ZXN: $EMPTY_NEX_BYTES bytes; pre-wrap EXE: $EMPTY_PREWRAP_BYTES bytes)" \
+grep -q "created .*empty.nex (ZXN: $EMPTY_NEX_BYTES bytes; pre-wrap EXE: $EMPTY_PREWRAP_BYTES bytes)" \
   "$TMPDIR_SIZE/empty.log"
+[ ! -e "$TMPDIR_SIZE/empty.zxn" ] || {
+  echo 'FAIL: ZXN build retained the obsolete .zxn artifact extension' >&2
+  exit 1
+}
+cp "$TMPDIR_SIZE/empty.nex" "$TMPDIR_SIZE/legacy.zxn"
+if "$ROOT/tools/rift-emu" run --target zxn "$TMPDIR_SIZE/legacy.zxn" \
+    >"$TMPDIR_SIZE/legacy-extension.log" 2>&1; then
+  echo 'FAIL: rift-emu accepted the obsolete .zxn artifact extension' >&2
+  exit 1
+fi
+grep -q 'adapter requires a valid \.nex artifact' \
+  "$TMPDIR_SIZE/legacy-extension.log"
 if [ "$EMPTY_NEX_BYTES" -le "$EMPTY_PREWRAP_BYTES" ]; then
   echo "FAIL: representative NEX size $EMPTY_NEX_BYTES is not larger than its $EMPTY_PREWRAP_BYTES-byte pre-wrap image" >&2
   exit 1
@@ -109,8 +121,8 @@ if [ $((HELLO_BYTES - EMPTY_BYTES)) -gt 600 ]; then
   echo "FAIL: tiny literal print overhead exceeds 600 bytes ($HELLO_BYTES vs $EMPTY_BYTES)" >&2
   exit 1
 fi
-if [ $((SPRITE_BYTES - EMPTY_BYTES)) -ne 335 ]; then
-  echo "FAIL: assetless byte-backed Sprite overhead is $((SPRITE_BYTES - EMPTY_BYTES)) bytes, expected 335 ($SPRITE_BYTES vs $EMPTY_BYTES)" >&2
+if [ $((SPRITE_BYTES - EMPTY_BYTES)) -ne 326 ]; then
+  echo "FAIL: assetless byte-backed Sprite overhead is $((SPRITE_BYTES - EMPTY_BYTES)) bytes, expected 326 ($SPRITE_BYTES vs $EMPTY_BYTES)" >&2
   exit 1
 fi
 if [ $((CONTROL_BYTES - EMPTY_BYTES)) -gt 1400 ]; then

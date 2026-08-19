@@ -1,0 +1,37 @@
+// Translation of the classic ZX BASIC colour/brightness demonstration.
+
+sub main() {
+  for m := 0 to 1 {
+    bright(to_byte(m));
+
+    for n := 1 to 14 {
+      for c := 4 to 7 {
+        paper(to_byte(c));
+        print(" ");
+      }
+    }
+  }
+
+  for m := 0 to 1 {
+    bright(to_byte(m));
+    paper(7);
+
+    for c := 0 to 3 {
+      ink(to_byte(c));
+      print(c);
+      print(" ");
+    }
+
+    paper(0);
+
+    for c := 4 to 7 {
+      ink(to_byte(c));
+      print(c);
+      print(" ");
+    }
+  }
+
+  paper(7);
+  ink(0);
+  bright(0);
+}

@@ -1,0 +1,100 @@
+#!/usr/bin/env python3
+"""Verify the maintained ZEsarUX silent-startup option."""
+
+import argparse
+import json
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+
+
+DEFAULT_ZESARUX = Path("/Users/blater/src/zesarux/src/zesarux")
+
+
+class ProbeError(RuntimeError):
+  pass
+
+
+def run(binary, arguments, timeout=10.0):
+  try:
+    return subprocess.run(
+        [str(binary), *arguments], capture_output=True, text=True,
+        timeout=timeout, check=False)
+  except subprocess.TimeoutExpired as error:
+    raise ProbeError(
+        "ZEsarUX did not complete %s within %.1fs" %
+        (" ".join(arguments), timeout)) from error
+
+
+def require_silent_config_parse(binary, config, option):
+  config.write_text(
+      '--last-version-text "future"\n'
+      '--last-version "2147483647"\n',
+      encoding="utf-8")
+  result = run(binary, ["--configfile", str(config), "--testconfig", option])
+  output = result.stdout + result.stderr
+  if result.returncode != 0:
+    raise ProbeError("%s was rejected:\n%s" % (option, output))
+  if "downgraded ZEsarUX" in output:
+    raise ProbeError("%s did not suppress the downgrade startup notice" % option)
+
+
+def probe(binary):
+  if not binary.is_file() or not os.access(binary, os.X_OK):
+    raise ProbeError("ZEsarUX binary is not executable: %s" % binary)
+
+  if b"--silent, -s" not in binary.read_bytes():
+    raise ProbeError("ZEsarUX help does not expose --silent and -s")
+
+  with tempfile.TemporaryDirectory(prefix="rift-zesarux-silent-") as temp:
+    temp_path = Path(temp)
+    require_silent_config_parse(binary, temp_path / "long.rc", "--silent")
+    require_silent_config_parse(binary, temp_path / "short.rc", "-s")
+
+    config_option = temp_path / "config-option.rc"
+    config_option.write_text(
+        '--last-version-text "future"\n'
+        '--last-version "2147483647"\n'
+        '--silent\n',
+        encoding="utf-8")
+    config_result = run(
+        binary, ["--configfile", str(config_option), "--testconfig"])
+    config_output = config_result.stdout + config_result.stderr
+    if config_result.returncode != 0 or "downgraded ZEsarUX" in config_output:
+      raise ProbeError("--silent was not honoured from the configuration file")
+
+  warning_result = run(
+      binary, ["--noconfigfile", "--silent", "--zoom", "0", "--testconfig"])
+  warning_output = warning_result.stdout + warning_result.stderr
+  if warning_result.returncode != 0 or "Invalid value for zoom" not in warning_output:
+    raise ProbeError("--silent suppressed or hid an invalid-value diagnostic")
+
+  return {
+      "binary": str(binary),
+      "configuration": "honoured",
+      "diagnostics": "preserved",
+      "long_option": "accepted",
+      "short_option": "accepted",
+      "status": "passed",
+  }
+
+
+def main():
+  parser = argparse.ArgumentParser(
+      description="Verify ZEsarUX silent startup behavior")
+  parser.add_argument(
+      "--emulator-bin",
+      default=os.environ.get("ZESARUX_BIN", str(DEFAULT_ZESARUX)))
+  args = parser.parse_args()
+  try:
+    result = probe(Path(args.emulator_bin).expanduser().resolve())
+  except (OSError, ProbeError, subprocess.SubprocessError) as error:
+    print(json.dumps({"error": str(error), "status": "failed"}, sort_keys=True))
+    return 1
+  print(json.dumps(result, sort_keys=True))
+  return 0
+
+
+if __name__ == "__main__":
+  raise SystemExit(main())

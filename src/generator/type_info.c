@@ -6,6 +6,35 @@
 
 static const string_view SV_STRING = {.data = "string", .length = 6};
 
+static int numeric_literal_is_float(string_view text) {
+  for (size_t i = 0; i < text.length; i++)
+    if (text.data[i] == '.' || text.data[i] == 'e' || text.data[i] == 'E')
+      return 1;
+  return 0;
+}
+
+static int comparison_operator(token_type_t op) {
+  return op == TOK_LSSR || op == TOK_LSSR_EQ || op == TOK_GRTR ||
+         op == TOK_GRTR_EQ || op == TOK_EQUAL || op == TOK_DIFF ||
+         op == TOK_LOG_AND || op == TOK_LOG_OR;
+}
+
+static int type_is(string_view type, const char *name) {
+  return svcmp(type, sv_from_cstr((char *)name)) == 0;
+}
+
+static string_view arithmetic_result_type(string_view left,
+                                          string_view right) {
+  if (type_is(left, "float") || type_is(right, "float"))
+    return sv_from_cstr("float");
+  if (type_is(left, "dword") || type_is(right, "dword"))
+    return sv_from_cstr("dword");
+  if (type_is(left, "word") || type_is(right, "word"))
+    return sv_from_cstr("word");
+  if (left.length && right.length) return sv_from_cstr("int");
+  return sv_from_cstr("");
+}
+
 char *capture_expression(generator_t *g, ast_t expr);
 void generate_expression(generator_t *g, ast_t expr);
 int is_builtin_typename(char *name);
@@ -351,6 +380,9 @@ string_view infer_expr_type(ast_t expr, name_table_t table) {
   if (!expr) return sv_from_cstr("");
 
   if (expr->tag == identifier) {
+    if (svcmp(expr->data.identifier.id.lexeme, sv_from_cstr("true")) == 0 ||
+        svcmp(expr->data.identifier.id.lexeme, sv_from_cstr("false")) == 0)
+      return sv_from_cstr("boolean");
     ast_t ref = get_ref(expr->data.identifier.id.lexeme, table);
     if (!ref) return sv_from_cstr("");
     if (ref->tag == vardef) {
@@ -372,13 +404,20 @@ string_view infer_expr_type(ast_t expr, name_table_t table) {
               expr->data.identifier.id.lexeme) == 0)
       return get_array_element_type(ref->data.iter_loop.iterable, table,
                                     ref->data.iter_loop.variable);
+    if (ref->tag == loop &&
+        svcmp(ref->data.loop.variable.lexeme,
+              expr->data.identifier.id.lexeme) == 0)
+      return sv_from_cstr("int");
     return sv_from_cstr("");
   }
 
   if (expr->tag == literal) {
     token_type_t t = expr->data.literal.lit.type;
     if (t == TOK_STR_LIT) return SV_STRING;
-    if (t == TOK_NUM_LIT) return sv_from_cstr("int");
+    if (t == TOK_NUM_LIT)
+      return numeric_literal_is_float(expr->data.literal.lit.lexeme)
+                 ? sv_from_cstr("float")
+                 : sv_from_cstr("int");
     if (t == TOK_CHR_LIT) return sv_from_cstr("char");
     return sv_from_cstr("");
   }
@@ -444,7 +483,35 @@ string_view infer_expr_type(ast_t expr, name_table_t table) {
       token_t tok = token_for_expr(ai.array);
       return get_array_element_type(ai.array, table, tok);
     }
-    return sv_from_cstr("");
+    token_t tok = token_for_expr(ai.array);
+    string_view current_type = get_array_element_type(ai.array, table, tok);
+    for (int i = 0; i < ai.field_path.length; i++) {
+      current_type = get_field_type(current_type,
+                                    ai.field_path.data[i].lexeme, table);
+      if (current_type.length == 0) return sv_from_cstr("");
+    }
+    if (!ai.field_expr || ai.field_expr->tag != identifier)
+      return sv_from_cstr("");
+    string_view field_name = ai.field_expr->data.identifier.id.lexeme;
+    string_view array_element = try_get_field_array_type(
+        current_type, field_name, table);
+    if (array_element.length > 0) return make_array_type_sv(array_element);
+    return get_field_type(current_type, field_name, table);
+  }
+
+  if (expr->tag == op) {
+    ast_op operation = expr->data.op;
+    if (comparison_operator(operation.op)) return sv_from_cstr("boolean");
+    return arithmetic_result_type(infer_expr_type(operation.left, table),
+                                  infer_expr_type(operation.right, table));
+  }
+
+  if (expr->tag == unary_op) {
+    string_view operand = infer_expr_type(expr->data.unary_op.operand, table);
+    if (type_is(operand, "byte") || type_is(operand, "char") ||
+        type_is(operand, "boolean") || type_is(operand, "bool"))
+      return sv_from_cstr("int");
+    return operand;
   }
 
   return sv_from_cstr("");

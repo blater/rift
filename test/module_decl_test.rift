@@ -4,19 +4,19 @@ int TRUE := 1;
 int FALSE := 0;
 
 sub printPass(string desc) {
-    printf("PASS: ");
-    printf(desc);
-    printf("\n");
+    print("PASS: ");
+    print(desc);
+    println();
 }
 
 sub printFail(string desc, string expected, string actual) {
-    printf("FAIL: ");
-    printf(desc);
-    printf(" (expected:");
-    printf(expected);
-    printf(" actual:");
-    printf(actual);
-    printf(")\n");
+    print("FAIL: ");
+    print(desc);
+    print(" (expected:");
+    print(expected);
+    print(" actual:");
+    print(actual);
+    println(")");
 }
 
 sub printResult(int res, string desc, string expected, string actual) returns int {

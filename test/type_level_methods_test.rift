@@ -49,13 +49,13 @@ FieldTool ParamTool;
 
 sub check(string description, int expected, int actual) {
   if expected = actual then {
-    printf("PASS: ");
-    printf(description);
-    printf("\n");
+    print("PASS: ");
+    print(description);
+    println();
   } else {
-    printf("FAIL: ");
-    printf(description);
-    printf("\n");
+    print("FAIL: ");
+    print(description);
+    println();
   }
 }
 

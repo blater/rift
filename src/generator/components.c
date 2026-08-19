@@ -52,22 +52,67 @@ static void collect_component_uses(generator_t *g, ast_t node) {
     mark_opaque_type_usage(g, node->data.fundef.ret_type);
     for (int i = 0; i < node->data.fundef.types.length; i++)
       mark_opaque_type_usage(g, node->data.fundef.types.data[i]);
+    new_nt_scope(&g->table);
+    for (int i = 0; i < node->data.fundef.args.length; i++)
+      push_nt(&g->table, node->data.fundef.args.data[i].lexeme, NT_VAR, node);
     collect_component_uses(g, node->data.fundef.body);
+    end_nt_scope(&g->table);
     return;
   case compound:
+    new_nt_scope(&g->table);
     for (int i = 0; i < node->data.compound.stmts.length; i++)
       collect_component_uses(g, node->data.compound.stmts.data[i]);
+    end_nt_scope(&g->table);
     return;
   case funcall: {
     ast_funcall call = node->data.funcall;
     record_fundef_component(g, call.resolved_target);
-    if ((!call.resolved_target || call.resolved_target->tag != fundef ||
-         call.resolved_target->data.fundef.body == NULL) &&
-        (svcmp(call.name.lexeme, sv_from_cstr("putchar")) == 0 ||
-         (svcmp(call.name.lexeme, sv_from_cstr("printf")) == 0 &&
-          (call.args.length != 1 ||
-           !expr_returns_string(call.args.data[0], g->table)))))
-      g->zxn_light_core_eligible = 0;
+    int intrinsic_print =
+        !call.resolved_target || call.resolved_target->tag != fundef ||
+        call.resolved_target->data.fundef.body == NULL;
+    if (intrinsic_print &&
+        (svcmp(call.name.lexeme, sv_from_cstr("print")) == 0 ||
+         svcmp(call.name.lexeme, sv_from_cstr("println")) == 0)) {
+      int value_index = call.args.length == 3 ? 2 : 0;
+      if (call.args.length > value_index) {
+        string_view value_type =
+            infer_expr_type(call.args.data[value_index], g->table);
+        if (svcmp(value_type, sv_from_cstr("boolean")) == 0 ||
+            svcmp(value_type, sv_from_cstr("bool")) == 0 ||
+            svcmp(value_type, sv_from_cstr("byte")) == 0 ||
+            svcmp(value_type, sv_from_cstr("word")) == 0 ||
+            svcmp(value_type, sv_from_cstr("int")) == 0)
+          record_component(g, "number_format");
+        else if (svcmp(value_type, sv_from_cstr("dword")) == 0)
+          record_component(g, "dword_format");
+        else if (svcmp(value_type, sv_from_cstr("float")) == 0)
+          record_component(g, "float_format");
+      }
+    }
+    if (intrinsic_print &&
+        svcmp(call.name.lexeme, sv_from_cstr("toString")) == 0 &&
+        call.args.length == 1) {
+      string_view value_type = infer_expr_type(call.args.data[0], g->table);
+      if (svcmp(value_type, sv_from_cstr("float")) == 0)
+        record_component(g, "float_to_string");
+      else if (svcmp(value_type, sv_from_cstr("dword")) == 0)
+        record_component(g, "dword_to_string");
+      else
+        record_component(g, "integer_to_string");
+    }
+    if (intrinsic_print &&
+        svcmp(call.name.lexeme, sv_from_cstr("concat")) == 0) {
+      for (int i = 0; i < call.args.length; i++) {
+        string_view value_type = infer_expr_type(call.args.data[i], g->table);
+        if (svcmp(value_type, sv_from_cstr("float")) == 0)
+          record_component(g, "float_format");
+        else if (svcmp(value_type, sv_from_cstr("dword")) == 0)
+          record_component(g, "dword_format");
+        else if (svcmp(value_type, sv_from_cstr("string")) != 0 &&
+                 svcmp(value_type, sv_from_cstr("char")) != 0)
+          record_component(g, "number_format");
+      }
+    }
     for (int i = 0; i < call.args.length; i++)
       collect_component_uses(g, call.args.data[i]);
     return;
@@ -81,6 +126,7 @@ static void collect_component_uses(generator_t *g, ast_t node) {
   case vardef:
     mark_opaque_type_usage(g, node->data.vardef.type);
     collect_component_uses(g, node->data.vardef.expr);
+    push_nt(&g->table, node->data.vardef.name.lexeme, NT_VAR, node);
     return;
   case assign:
     collect_component_uses(g, node->data.assign.target);
@@ -108,11 +154,17 @@ static void collect_component_uses(generator_t *g, ast_t node) {
   case loop:
     collect_component_uses(g, node->data.loop.start);
     collect_component_uses(g, node->data.loop.end);
+    new_nt_scope(&g->table);
+    push_nt(&g->table, node->data.loop.variable.lexeme, NT_VAR, node);
     collect_component_uses(g, node->data.loop.statement);
+    end_nt_scope(&g->table);
     return;
   case iter_loop:
     collect_component_uses(g, node->data.iter_loop.iterable);
+    new_nt_scope(&g->table);
+    push_nt(&g->table, node->data.iter_loop.variable.lexeme, NT_VAR, node);
     collect_component_uses(g, node->data.iter_loop.statement);
+    end_nt_scope(&g->table);
     return;
   case sub:
     collect_component_uses(g, node->data.sub.receiver);

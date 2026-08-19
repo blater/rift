@@ -1,5 +1,5 @@
 #include "ink_paper.h"
-#include "plot.h"
+#include "console.h"
 
 /* Attribute kinds — used by the internal set_attr helper to pick a
  * branch without duplicating the six setter bodies. Values match the
@@ -9,44 +9,61 @@
 #define ATTR_FLASH   18
 #define ATTR_BRIGHT  19
 #define ATTR_INVERSE 20
-#define ATTR_OVER    21
 
 #ifdef __SDCC
 
-/* ZXN: the ROM maintains its own attribute sysvars on channel #2.
- * set_attr emits a two-byte control sequence through RST 10h and the
- * ROM applies the new attribute to subsequent output. We also keep a
- * local shadow so attr_fg/attr_bg have something to return for API
- * uniformity, even though print_at's ZXN branch has no consumer. */
+/* Startup 31 places Rift code across the ROM system-variable area, so text
+ * state is owned by the direct console backend rather than ATTR_P/P_FLAG. */
 
 static byte sh_ink     = 7;
 static byte sh_paper   = 0;
 static byte sh_bright  = 0;
 static byte sh_flash   = 0;
+static byte sh_inverse = 0;
 
-unsigned char rift_ip_rom_byte;
-
-static void ip_rst10_emit(void) {
-  __asm
-    ld a, (_rift_ip_rom_byte)
-    rst 0x10
-  __endasm;
+static void sync_colour_attributes(void) {
+  byte ink_colour = sh_inverse ? sh_paper : sh_ink;
+  byte paper_colour = sh_inverse ? sh_ink : sh_paper;
+  byte attr = (ink_colour & 0x07) | ((paper_colour & 0x07) << 3) |
+              (sh_bright ? 0x40 : 0) | (sh_flash ? 0x80 : 0);
+  rift_console_set_attribute(attr);
 }
 
 static void set_attr(byte kind, byte val) {
   switch (kind) {
-    case ATTR_INK:    sh_ink    = val; break;
-    case ATTR_PAPER:  sh_paper  = val; break;
-    case ATTR_BRIGHT: sh_bright = val; break;
-    case ATTR_FLASH:  sh_flash  = val; break;
-    default: break;
+    case ATTR_INK:
+      sh_ink = val & 0x07;
+      sync_colour_attributes();
+      break;
+    case ATTR_PAPER:
+      sh_paper = val & 0x07;
+      sync_colour_attributes();
+      break;
+    case ATTR_BRIGHT:
+      sh_bright = val ? 1 : 0;
+      sync_colour_attributes();
+      break;
+    case ATTR_FLASH:
+      sh_flash = val ? 1 : 0;
+      sync_colour_attributes();
+      break;
+    case ATTR_INVERSE:
+      sh_inverse = val ? 1 : 0;
+      sync_colour_attributes();
+      break;
+    default:
+      break;
   }
-  rift_ip_rom_byte = kind; ip_rst10_emit();
-  rift_ip_rom_byte = val;  ip_rst10_emit();
 }
 
-unsigned int attr_fg(void) { return sh_ink  | (sh_bright ? 0x08 : 0); }
-unsigned int attr_bg(void) { return sh_paper | (sh_flash  ? 0x08 : 0); }
+unsigned int attr_fg(void) {
+  byte colour = sh_inverse ? sh_paper : sh_ink;
+  return colour | (sh_bright ? 0x08 : 0);
+}
+
+unsigned int attr_bg(void) {
+  return sh_inverse ? sh_ink : sh_paper;
+}
 
 #else
 
@@ -85,8 +102,14 @@ static void set_attr(byte kind, byte val) {
     case ATTR_BRIGHT:  sh_bright  = val ? 1 : 0; break;
     case ATTR_FLASH:   sh_flash   = val ? 1 : 0; break;
     case ATTR_INVERSE: sh_inverse = val ? 1 : 0; break;
-    case ATTR_OVER:    /* no termbox2 equivalent */      break;
     default: break;
+  }
+  {
+    byte ink_colour = sh_inverse ? sh_paper : sh_ink;
+    byte paper_colour = sh_inverse ? sh_ink : sh_paper;
+    rift_console_set_attribute(
+        (byte)((ink_colour & 7u) | ((paper_colour & 7u) << 3) |
+               (sh_bright ? 0x40u : 0) | (sh_flash ? 0x80u : 0)));
   }
 }
 
@@ -110,12 +133,3 @@ void paper(byte c)   { set_attr(ATTR_PAPER,   c); }
 void bright(byte n)  { set_attr(ATTR_BRIGHT,  n); }
 void flash(byte n)   { set_attr(ATTR_FLASH,   n); }
 void inverse(byte n) { set_attr(ATTR_INVERSE, n); }
-void over(byte n) {
-  /* over() is the single source of truth for both pixel-level draw
-   * merge mode and the ROM text channel's OVER state. Updates the
-   * framebuffer-merge flag read by plot.c / draw.c inline asm, then
-   * forwards to set_attr so the ROM path (ZXN) and the host shadow
-   * stay consistent. */
-  rift_draw_mode = n ? 1 : 0;
-  set_attr(ATTR_OVER, n);
-}

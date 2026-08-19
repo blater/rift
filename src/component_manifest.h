@@ -26,6 +26,7 @@ typedef struct component_spec {
   char *init_hook;
   char *shutdown_hook;
   int always;
+  int zxn_startup31_safe;
 } component_spec;
 
 typedef struct component_interface_spec {

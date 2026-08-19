@@ -8,5 +8,5 @@
 sub main() {
   string s := "hello";
   setCharAt(s, 1, 'X');
-  printf("should not reach here\n");
+  print("should not reach here\n");
 }

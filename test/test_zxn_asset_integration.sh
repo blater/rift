@@ -342,7 +342,7 @@ printf '%s\n' \
 "$ROOT/rift" --debug --target=zxn "$space_dir/main program.rift" \
   "$space_dir/target.exe" >"$space_dir/build.log"
 collect_debug_build "$space_dir/build.log" "$space_dir"
-[ -f "$space_dir/target.zxn" ] ||
+[ -f "$space_dir/target.nex" ] ||
   fail 'referenced ZXN build failed to produce a ZXN in a spaced output path'
 [ -s "$space_dir/target.exe.assets.asm" ] ||
   fail 'spaced referenced ZXN build did not retain its generated assembly'

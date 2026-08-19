@@ -22,7 +22,7 @@ sub main() {
   Assert a;
 
   for n := 1 to 100 {
-    printf(upper(toString(n)));
+    print(upper(toString(n)));
   }
   a.AssertEquals("uppercase works...", "Hello", upper("hello"));
 

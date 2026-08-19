@@ -1,7 +1,10 @@
 #include "fundefs.h"
 #include "fundefs_internal.h"
+#include "error_sink.h"
 #include "pools.h"
+#ifndef __SDCC
 #include <stdio.h>
+#endif
 #include <stdlib.h>
 #include <string.h>
 
@@ -52,8 +55,7 @@ int equals(string s1, string s2) {
 
 void print(string s) {
   if (s.data == NULL) {
-    printf("NULL");
-    fflush(stdout);
+    rift_print_bytes("NULL", 4);
     return;
   }
   rift_print_bytes(s.data, s.length);
@@ -87,6 +89,20 @@ void __concat_str(string *out, string s1, string s2) {
   out->data[len1 + len2] = 0;
 }
 
+size_t __concat_checked_add(size_t total, size_t addition) {
+  if (addition > (size_t)-1 - total) {
+    rift_print_bytes("concat: result is too large\n", 28);
+    exit_rift(1);
+  }
+  return total + addition;
+}
+
+size_t __concat_append_bytes(string out, size_t offset,
+                             const char *data, size_t length) {
+  if (data != NULL && length != 0) memcpy(out.data + offset, data, length);
+  return offset + length;
+}
+
 void new_string(string *out, string s) {
   __rift_make_longlived_string(out, s.length);
   for (size_t i = 0; i < out->length; i++)
@@ -100,12 +116,16 @@ void setCharAt(string s, int n, char c) {
    * of any source). Mutation through such a descriptor would corrupt
    * shared bytes (literal in rodata; the source of a substring). */
   if (s.capacity == 0) {
-    printf("setCharAt: cannot mutate read-only string view "
-           "(literal or substring; capacity == 0)\n");
+    rift_error_text("setCharAt: cannot mutate read-only string view "
+                    "(literal or substring; capacity == 0)\n");
     exit_rift(1);
   }
   if (n < 0 || (size_t)n >= s.length) {
-    printf("setCharAt: index %d out of bounds (length=%zu)\n", n, s.length);
+    rift_error_text("setCharAt: index ");
+    rift_error_int(n);
+    rift_error_text(" out of bounds (length=");
+    rift_error_size(s.length);
+    rift_error_text(")\n");
     exit_rift(1);
   }
   s.data[n] = c;
@@ -187,11 +207,11 @@ void __string_retain(string s) {
   if (s.backing == NULL) return;
   if (s.backing->refcount == RIFT_RC_STATIC) return;
   if (s.backing->refcount == RIFT_RC_FREE || s.backing->refcount == RIFT_RC_MAGAZINE) {
-    fprintf(stderr, "rift: __string_retain on freed block\n");
+    rift_error_text("rift: __string_retain on freed block\n");
     exit(1);
   }
   if (s.backing->refcount >= RIFT_RC_FREE - 1) {
-    fprintf(stderr, "rift: __string_retain refcount overflow\n");
+    rift_error_text("rift: __string_retain refcount overflow\n");
     exit(1);
   }
   s.backing->refcount++;
@@ -201,7 +221,7 @@ void __string_release(string s) {
   if (s.backing == NULL) return;
   if (s.backing->refcount == RIFT_RC_STATIC) return;
   if (s.backing->refcount == RIFT_RC_FREE || s.backing->refcount == RIFT_RC_MAGAZINE) {
-    fprintf(stderr, "rift: __string_release on already-freed block\n");
+    rift_error_text("rift: __string_release on already-freed block\n");
     exit(1);
   }
   if (--s.backing->refcount == 0) {
@@ -243,11 +263,11 @@ void *__handle_retain(void *payload) {
   rift_block_header *h = ((rift_block_header *)payload) - 1;
   if (h->refcount == RIFT_RC_STATIC) return payload;
   if (h->refcount == RIFT_RC_FREE || h->refcount == RIFT_RC_MAGAZINE) {
-    fprintf(stderr, "rift: __handle_retain on already-freed block at %p\n", payload);
+    rift_error_text("rift: __handle_retain on already-freed block\n");
     exit(1);
   }
   if (h->refcount >= RIFT_RC_FREE - 1) {
-    fprintf(stderr, "rift: __handle_retain refcount overflow\n");
+    rift_error_text("rift: __handle_retain refcount overflow\n");
     exit(1);
   }
   h->refcount++;
@@ -259,7 +279,7 @@ void __handle_release(void *payload) {
   rift_block_header *h = ((rift_block_header *)payload) - 1;
   if (h->refcount == RIFT_RC_STATIC) return;
   if (h->refcount == RIFT_RC_FREE || h->refcount == RIFT_RC_MAGAZINE) {
-    fprintf(stderr, "rift: __handle_release on already-freed block at %p\n", payload);
+    rift_error_text("rift: __handle_release on already-freed block\n");
     exit(1);
   }
   if (--h->refcount == 0) {
@@ -290,8 +310,7 @@ static int __normalize_substr_idx(int idx, int length) {
 void __substring_from(string *out, string s, int start) {
   int c_start = __normalize_substr_idx(start, (int)s.length);
   if (c_start < 0 || c_start > (int)s.length) {
-    printf("substring: start index out of bounds (start=%d, length=%d)\n",
-           start, (int)s.length);
+    rift_error_text("substring: start index out of bounds\n");
     exit_rift(1);
   }
   int len = (int)s.length - c_start;
@@ -306,13 +325,11 @@ void __substring_range(string *out, string s, int start, int end) {
   int c_start = __normalize_substr_idx(start, (int)s.length);
   int c_end   = __normalize_substr_idx(end,   (int)s.length);
   if (c_start < 0 || c_start >= (int)s.length) {
-    printf("substring: start index out of bounds (start=%d, length=%d)\n",
-           start, (int)s.length);
+    rift_error_text("substring: start index out of bounds\n");
     exit_rift(1);
   }
   if (c_end < c_start || c_end >= (int)s.length) {
-    printf("substring: end index out of bounds (end=%d, length=%d)\n",
-           end, (int)s.length);
+    rift_error_text("substring: end index out of bounds\n");
     exit_rift(1);
   }
   int len = c_end - c_start + 1;
@@ -335,47 +352,12 @@ byte __to_byte_int(int n) {
   return (byte)n;
 }
 
-void __to_string_byte(string *out, byte b) {
-  char buf[4];  // max "255\0"
-  int len = snprintf(buf, sizeof(buf), "%u", (unsigned int)b);
-  __rift_make_longlived_string(out, (size_t)len);
-  memcpy(out->data, buf, len + 1);
-}
-
-void __to_string_int(string *out, int n) {
-  char buf[24];
-  int len = snprintf(buf, sizeof(buf), "%d", n);
-  __rift_make_longlived_string(out, (size_t)len);
-  memcpy(out->data, buf, len + 1);
-}
-
 int  __to_int_word(word w)  { return (int)w; }
 word __to_word_int(int n)   { return (word)n; }
-
-void __to_string_word(string *out, word w) {
-  char buf[6];  // max "65535\0"
-  int len = snprintf(buf, sizeof(buf), "%u", (unsigned int)w);
-  __rift_make_longlived_string(out, (size_t)len);
-  memcpy(out->data, buf, len + 1);
-}
 
 int   __to_int_dword(dword d)  { return (int)d; }
 dword __to_dword_int(int n)    { return (dword)n; }
 int   __to_int_float(float f)  { return (int)f; }
-
-void __to_string_dword(string *out, dword d) {
-  char buf[11];  // max "4294967295\0"
-  int len = snprintf(buf, sizeof(buf), "%lu", (unsigned long)d);
-  __rift_make_longlived_string(out, (size_t)len);
-  memcpy(out->data, buf, len + 1);
-}
-
-void __to_string_float(string *out, float f) {
-  char buf[24];
-  int len = snprintf(buf, sizeof(buf), "%g", (double)f);
-  __rift_make_longlived_string(out, (size_t)len);
-  memcpy(out->data, buf, len + 1);
-}
 
 // ============================================================================
 // ALWAYS-AVAILABLE CASTING FUNCTIONS (safe for sccz80)

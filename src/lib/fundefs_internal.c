@@ -1,9 +1,9 @@
 #include "fundefs_internal.h"
 
 #include "fundefs.h"
+#include "error_sink.h"
 #include "pools.h"
 #include "typedefs.h"
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -20,7 +20,9 @@ static int checked_double(size_t value, size_t *result) {
 }
 
 static void array_size_error(const char *operation) {
-  printf("Array size overflow during %s\n", operation);
+  rift_error_text("Array size overflow during ");
+  rift_error_text(operation);
+  rift_error_newline();
   exit_rift(1);
   exit(1); /* documents non-return to compilers that do not know exit_rift */
 }
@@ -38,7 +40,7 @@ __internal_dynamic_array_t __internal_make_array_with_release(
    * Rift code is a pointer to the payload (the struct itself); the
    * rift_block_header sits at handle - sizeof(rift_block_header). */
   if (size == 0) {
-    printf("Could not create dynamic array: BAD ELEMENT SIZE\n");
+    rift_error_text("Could not create dynamic array: BAD ELEMENT SIZE\n");
     exit_rift(1);
   }
   size_t capacity = max_capacity > 0 ? max_capacity : dynamic_array_initial_capacity;
@@ -66,7 +68,7 @@ void __internal_free_array(__internal_dynamic_array_t arr, int is_string_array) 
   rift_block_header *header = ((rift_block_header *)arr) - 1;
   if (header->refcount == RIFT_RC_STATIC) return;
   if (header->refcount == RIFT_RC_FREE || header->refcount == RIFT_RC_MAGAZINE) {
-    fprintf(stderr, "rift: array release on already-freed block\n");
+    rift_error_text("rift: array release on already-freed block\n");
     exit(1);
   }
   if (--header->refcount != 0) return;
@@ -93,18 +95,17 @@ void __internal_retain_array(__internal_dynamic_array_t arr) {
 
 int __internal_push_array(__internal_dynamic_array_t arr, void *elem) {
   if (arr->data == NULL) {
-    printf("Uninitialized array !\n");
+    rift_error_text("Uninitialized array !\n");
     exit_rift(1);
   }
   if (elem == NULL) {
-    printf("Could not push elem to dynamic array: BAD ELEM\n");
+    rift_error_text("Could not push elem to dynamic array: BAD ELEM\n");
     exit_rift(1);
   }
 
   // Check if we can add more elements
   if (arr->max_capacity > 0 && arr->length >= arr->max_capacity) {
-    printf("Error: Cannot append to fixed-size array (capacity: %zu, length: %zu)\n",
-           arr->max_capacity, arr->length);
+    rift_error_text("Error: Cannot append to fixed-size array\n");
     exit_rift(1);
   }
 
@@ -127,13 +128,13 @@ int __internal_push_array(__internal_dynamic_array_t arr, void *elem) {
       arr->data = new_data;
       arr->capacity = new_capacity;
     } else {
-      printf("Error: Array capacity exceeded\n");
+      rift_error_text("Error: Array capacity exceeded\n");
       exit_rift(1);
     }
   }
   void *dst = (char *)arr->data + arr->length * arr->elem_size;
   if (dst == NULL) {
-    printf("Could not push elem to dynamic array: BAD ARRAY\n");
+    rift_error_text("Could not push elem to dynamic array: BAD ARRAY\n");
     exit_rift(1);
   }
   // memccpy(dst, elem, 1, arr->elem_size);
@@ -146,12 +147,12 @@ int __internal_push_array(__internal_dynamic_array_t arr, void *elem) {
 
 int __internal_pop_into(__internal_dynamic_array_t arr, void *out) {
   if (arr->length == 0) {
-    printf("Could not pop elem out of dynamic array: EMPTY ARRAY\n");
+    rift_error_text("Could not pop elem out of dynamic array: EMPTY ARRAY\n");
     exit_rift(1);
     return 0;
   }
   if (arr->elem_size == 0) {
-    printf("Could not pop elem out of dynamic array: BAD ELEMENT SIZE\n");
+    rift_error_text("Could not pop elem out of dynamic array: BAD ELEMENT SIZE\n");
     exit_rift(1);
     return 0;
   }
@@ -166,15 +167,16 @@ void *__internal_get_elem(__internal_dynamic_array_t arr, size_t index) {
   // For fixed-size arrays, check against capacity; for dynamic, check against length
   size_t limit = (arr->max_capacity > 0) ? arr->max_capacity : arr->length;
   if (index >= limit) {
-    printf("Could not get elem from dynamic array: INDEX OUT OF BOUNDS (%ld)\n",
-           index);
+    rift_error_text("Could not get elem from dynamic array: INDEX OUT OF BOUNDS (");
+    rift_error_size(index);
+    rift_error_text(")\n");
 
     int *tmp = NULL;
     *tmp = 3;
     return NULL;
   }
   if (arr->elem_size == 0) {
-    printf("Could not get elem from dynamic array: BAD ELEMENT SIZE\n");
+    rift_error_text("Could not get elem from dynamic array: BAD ELEMENT SIZE\n");
     return NULL;
   }
   void *src = (char *)arr->data + index * arr->elem_size;
@@ -186,24 +188,23 @@ void *__internal_get_elem(__internal_dynamic_array_t arr, size_t index) {
 void __internal_insert(__internal_dynamic_array_t arr, size_t index,
                        void *elem) {
   if (arr->data == NULL) {
-    printf("Uninitialized array!\n");
+    rift_error_text("Uninitialized array!\n");
     exit_rift(1);
   }
 
   if (elem == NULL) {
-    printf("Could not insert elem into dynamic array: BAD ELEM\n");
+    rift_error_text("Could not insert elem into dynamic array: BAD ELEM\n");
     exit_rift(1);
   }
 
   if (arr->elem_size == 0) {
-    printf("Could not insert elem into dynamic array: BAD ELEMENT SIZE\n");
+    rift_error_text("Could not insert elem into dynamic array: BAD ELEMENT SIZE\n");
     exit_rift(1);
   }
 
   // For insert, index can be from 0 to length (inclusive)
   if (index > arr->length) {
-    printf("Could not insert elem: INDEX OUT OF BOUNDS (%zu, length: %zu)\n",
-           index, arr->length);
+    rift_error_text("Could not insert elem: INDEX OUT OF BOUNDS\n");
     exit_rift(1);
   }
 
@@ -224,7 +225,7 @@ void __internal_insert(__internal_dynamic_array_t arr, size_t index,
       arr->data = new_data;
       arr->capacity = new_capacity;
     } else {
-      printf("Error: Array capacity exceeded, cannot insert\n");
+      rift_error_text("Error: Array capacity exceeded, cannot insert\n");
       exit_rift(1);
     }
   }
@@ -249,17 +250,16 @@ void __internal_set_elem(__internal_dynamic_array_t arr, size_t index,
   if (arr->max_capacity > 0)
     limit = arr->length < arr->capacity ? arr->length + 1 : arr->capacity;
   if (index >= limit) {
-    printf("Could not set elem in dynamic array: INDEX OUT OF BOUNDS (%zu, limit: %zu)\n",
-           index, limit);
+    rift_error_text("Could not set elem in dynamic array: INDEX OUT OF BOUNDS\n");
     exit_rift(1);
   }
   if (arr->elem_size == 0) {
-    printf("Could not set elem in dynamic array: BAD ELEMENT SIZE\n");
+    rift_error_text("Could not set elem in dynamic array: BAD ELEMENT SIZE\n");
     exit_rift(1);
   }
   void *dst = (char *)arr->data + index * arr->elem_size;
   if (dst == NULL) {
-    printf("Could not set elem in dynamic array: BAD ARRAY\n");
+    rift_error_text("Could not set elem in dynamic array: BAD ARRAY\n");
     exit_rift(1);
   }
   memcpy(dst, elem, arr->elem_size);

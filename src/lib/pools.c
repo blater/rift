@@ -7,10 +7,9 @@
  *****************************************************/
 
 #include "pools.h"
+#include "error_sink.h"
 #include <limits.h>
-#include <stdio.h>
 #include <stdlib.h>
-#include "light_console.h"
 
 /* The normal ZXN build exports the public allocate/free symbols from the
  * small assembly shim.  It handles only a magazine hit and transfers every
@@ -207,7 +206,7 @@ static void core_free(rift_block_header *block) {
   unsigned int order = order_for_total(block_total_size(block));
   const rift_buddy_root *root = root_for_block(block);
   if (!root) {
-    fprintf(stderr, "rift_pools: free outside buddy roots\n");
+    rift_error_text("rift_pools: free outside buddy roots\n");
     exit(1);
   }
   while (order < root->max_order) {
@@ -275,8 +274,13 @@ static int magazine_store(rift_block_header *block, int class_index) {
 }
 
 static void default_oom(const char *pool_name, size_t requested, size_t available) {
-  fprintf(stderr, "rift_pools: %s pool exhausted; requested %zu bytes, %zu available\n",
-          pool_name, requested, available);
+  rift_error_text("rift_pools: ");
+  rift_error_text(pool_name);
+  rift_error_text(" pool exhausted; requested ");
+  rift_error_size(requested);
+  rift_error_text(" bytes, ");
+  rift_error_size(available);
+  rift_error_text(" available\n");
   exit(1);
 }
 
@@ -292,21 +296,21 @@ void rift_pools_init(size_t bump_capacity, size_t longlived_capacity) {
 #ifdef __SDCC
   if (bump_capacity > RIFT_ZXN_BUMP_POOL_CAPACITY ||
       longlived_capacity > RIFT_ZXN_LONGLIVED_POOL_CAPACITY) {
-    fprintf(stderr, "rift_pools: requested ZXN pool capacity exceeds static budget\n");
+    rift_error_text("rift_pools: requested ZXN pool capacity exceeds static budget\n");
     exit(1);
   }
   bump_base = align_pool_base(zxn_bump_pool_storage, alignment);
   ll_base = align_pool_base(zxn_longlived_pool_storage, alignment);
   if (((uintptr_t)bump_base % alignment) != 0 ||
       ((uintptr_t)ll_base % alignment) != 0) {
-    fprintf(stderr, "rift_pools: target pool alignment failure\n");
+    rift_error_text("rift_pools: target pool alignment failure\n");
     exit(1);
   }
 #else
   bump_base = (char *)malloc(bump_capacity);
   ll_base = (char *)malloc(longlived_capacity);
   if (!bump_base || !ll_base) {
-    fprintf(stderr, "rift_pools: failed to allocate host pool backing\n");
+    rift_error_text("rift_pools: failed to allocate host pool backing\n");
     free(bump_base);
     free(ll_base);
     bump_base = NULL;
@@ -319,14 +323,14 @@ void rift_pools_init(size_t bump_capacity, size_t longlived_capacity) {
   ll_quantum = 16;
 #else
   if (!round_up(minimum_quantum > 16 ? minimum_quantum : 16, alignment, &ll_quantum)) {
-    fprintf(stderr, "rift_pools: pool capacity overflow\n");
+    rift_error_text("rift_pools: pool capacity overflow\n");
     exit(1);
   }
 #endif
   bump_cap = bump_capacity - (bump_capacity % alignment);
   ll_cap = longlived_capacity - (longlived_capacity % ll_quantum);
   if (!offset_fits(ll_cap) || ll_cap < ll_quantum) {
-    fprintf(stderr, "rift_pools: invalid longlived pool capacity\n");
+    rift_error_text("rift_pools: invalid longlived pool capacity\n");
     exit(1);
   }
   bump_top = 0;
@@ -345,7 +349,7 @@ void rift_pools_init(size_t bump_capacity, size_t longlived_capacity) {
       order++;
     }
     if (order >= RIFT_BUDDY_MAX_ORDERS || buddy_root_count >= RIFT_BUDDY_MAX_ROOTS) {
-      fprintf(stderr, "rift_pools: buddy order exceeds target representation\n");
+      rift_error_text("rift_pools: buddy order exceeds target representation\n");
       exit(1);
     }
     root = (rift_block_header *)(ll_base + root_offset);
@@ -462,11 +466,11 @@ void rift_longlived_free(void *payload) {
   block = ((rift_block_header *)payload) - 1;
   if (block->refcount == RIFT_RC_STATIC) return;
   if ((char *)block < ll_base || (char *)block >= ll_base + ll_cap) {
-    fprintf(stderr, "rift_pools: invalid free at payload %p\n", payload);
+    rift_error_text("rift_pools: invalid free\n");
     exit(1);
   }
   if (block->refcount == RIFT_RC_FREE || block->refcount == RIFT_RC_MAGAZINE) {
-    fprintf(stderr, "rift_pools: double free at payload %p\n", payload);
+    rift_error_text("rift_pools: double free\n");
     exit(1);
   }
   RIFT_STAT_INC(frees);

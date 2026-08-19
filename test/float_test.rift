@@ -59,6 +59,18 @@ sub main() {
   s := toString(x);
   a.AssertEQ("toString(-2.5)", 1, equals(s, "-2.5"));
 
+  x := 0.00123;
+  s := toString(x);
+  a.AssertEQ("toString fixed small value", 1, equals(s, "0.00123"));
+
+  x := 1000000.0;
+  s := toString(x);
+  a.AssertEQ("toString scientific value", 1, equals(s, "1e+6"));
+
+  x := 1.234567;
+  s := toString(x);
+  a.AssertEQ("toString six significant digits", 1, equals(s, "1.23457"));
+
   // float[] arrays.
   float[] arr;
   append(arr, 1.5);

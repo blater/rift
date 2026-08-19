@@ -3,16 +3,20 @@
 
 #include "typedefs.h"
 #include "asm_interop.h"
+#include "console.h"
+#ifndef __SDCC
 #include <stdio.h>
-#include "light_console.h"
+#endif
 
 void print(string s);
-void rift_print_bytes(const char *data, size_t length);
 char *string_to_cstr(string s);
 void cstr_to_string(string *out, char *cstr);
 char charAt(string s, int n);
 void __concat_char(string *out, string s, char c);
 void __concat_str(string *out, string s1, string s2);
+size_t __concat_checked_add(size_t total, size_t addition);
+size_t __concat_append_bytes(string out, size_t offset,
+                             const char *data, size_t length);
 void setCharAt(string s, int n, char c);
 void __read_file_impl(string *out, string filename);
 void new_string(string *out, string s);
@@ -95,6 +99,9 @@ void __to_string_word(string *out, word w);
 int    __to_int_dword(dword d);
 dword  __to_dword_int(int n);
 void __to_string_dword(string *out, dword d);
+void __to_string_boolean(string *out, boolean value);
+void __to_string_char(string *out, char value);
+void __to_string_string(string *out, string value);
 void __to_string_int(string *out, int n);
 int    __to_int_float(float f);
 void __to_string_float(string *out, float f);

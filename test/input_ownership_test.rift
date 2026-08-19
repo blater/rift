@@ -1,0 +1,31 @@
+include "Assert.rift"
+
+sub discard_input() {
+  input();
+}
+
+sub return_input() returns string {
+  return input();
+}
+
+sub consume_input(string value) {
+}
+
+sub pass_input() {
+  consume_input(input());
+}
+
+sub print_input() {
+  print(input());
+}
+
+sub concat_input() returns string {
+  return concat(">", input());
+}
+
+sub main() {
+  Assert a;
+  // These functions are compile-time ownership regressions. They are not
+  // called here because input() is intentionally blocking.
+  a.AssertEQ("input producer ownership contexts compile", 1, 1);
+}

@@ -1,0 +1,3 @@
+sub main() {
+  beep(to_word(440), to_word(5));
+}

@@ -1,0 +1,4 @@
+sub main() {
+  graphics on;
+  graphics off;
+}

@@ -71,7 +71,7 @@ not5:
 
 ; --------------------------
 key4:
-	inc l 		; next key
+	inc hl 		; next key
 	rr a		; rotate keypress bits right
 	jr nc, not4	; if rightmost bit 0 then nothing pressed
 	ld e,(hl)	; else key pressed, load the current press strength
@@ -84,7 +84,7 @@ not4:
 
 ; --------------------------
 key3:
-	inc l
+	inc hl
 	rr a
 	jr nc, not3
 	ld e,(hl)
@@ -97,7 +97,7 @@ not3:
 
 ; --------------------------
 key2:
-	inc l
+	inc hl
 	rr a
 	jr nc, not2
 	ld e,(hl)
@@ -110,7 +110,7 @@ not2:
 
 ; --------------------------
 key1:
-	inc l
+	inc hl
 	rr a
 	jr nc, not1
 	ld e,(hl)
@@ -125,15 +125,15 @@ not1:
 nopress:
 	ld (hl), a  ; set key press indicators for the half row to zero
 		    ; using A as reg assign is faster (A is implicitly 0)
-	inc l
+	inc hl
 	ld (hl), a
-	inc l
+	inc hl
 	ld (hl), a
-	inc l
+	inc hl
 	ld (hl), a
-	inc l
+	inc hl
 	ld (hl), a
-	inc l
+	inc hl
 	ret
 
 ; key row IO addresses

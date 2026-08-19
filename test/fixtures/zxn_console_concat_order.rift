@@ -1,0 +1,46 @@
+// Concat operands must be evaluated once, left-to-right, whether the result is
+// retained or streamed directly into print/println.
+
+int visit_order := 0;
+
+sub visit_string(int digit, string value) returns string {
+  visit_order := (visit_order * 10) + digit;
+  return value;
+}
+
+sub visit_int(int digit, int value) returns int {
+  visit_order := (visit_order * 10) + digit;
+  return value;
+}
+
+sub visit_char(int digit, char value) returns char {
+  visit_order := (visit_order * 10) + digit;
+  return value;
+}
+
+sub visit_boolean(int digit, boolean value) returns boolean {
+  visit_order := (visit_order * 10) + digit;
+  return value;
+}
+
+sub check(boolean condition) {
+  if (condition) {
+    zxn_test_pass();
+  } else {
+    zxn_test_fail();
+  }
+}
+
+sub main() {
+  string retained := concat(visit_string(1, "A"), concat(visit_int(2, 42), visit_char(3, '!')));
+  check(visit_order = 123);
+  check(equals(retained, "A42!") != 0);
+
+  visit_order := 0;
+  print(concat(visit_string(4, "B"), concat(visit_int(5, 7), visit_boolean(6, true))));
+  check(visit_order = 456);
+
+  visit_order := 0;
+  println(concat(visit_string(7, "C"), visit_int(8, 9)));
+  check(visit_order = 78);
+}

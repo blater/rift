@@ -10,9 +10,33 @@ sub sleep(word value) returns int {
   return value + 2;
 }
 
+sub print(int value) returns int {
+  return value + 10;
+}
+
+sub println(int value) returns int {
+  return value + 20;
+}
+
+sub concat(int left, int right) returns int {
+  return left + right;
+}
+
+sub input() returns int {
+  return 30;
+}
+
+sub putchar(int value) returns int {
+  return value + 40;
+}
+
 sub main() {
-  printf("PASS: native names can be shadowed\n");
   show();
   border(2);
   sleep(3);
+  print(1);
+  println(2);
+  concat(3, 4);
+  input();
+  putchar(5);
 }

@@ -27,7 +27,7 @@
  *   0: new = old | mask  — additive (OR, default)
  *   1: new = old ^ mask  — toggle  (XOR; draw twice to erase)
  *
- * The user-facing setter is over(byte) in ink_paper.h — it matches
+ * The user-facing setter is over(byte) in over.h — it matches
  * Spectrum BASIC's OVER 0/1 and drives both this pixel-level merge
  * mode and the ROM text-channel OVER state in one call.
  *

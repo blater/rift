@@ -2,20 +2,20 @@ module Assert;
 
 sub printPass(string desc) {
   zxn_test_assert_pass(desc);
-  printf("PASS: ");
-  printf(desc);
-  printf("\n");
+  print("PASS: ");
+  print(desc);
+  println();
 }
 
 sub printFail(string desc, string expected, string actual) {
   zxn_test_assert_fail(desc, expected, actual);
-  printf("FAIL: ");
-  printf(desc);
-  printf(" (expected:");
-  printf(expected);
-  printf(" actual:");
-  printf(actual);
-  printf(")\n");
+  print("FAIL: ");
+  print(desc);
+  print(" (expected:");
+  print(expected);
+  print(" actual:");
+  print(actual);
+  println(")");
 }
 
 sub printResult(int res, string desc, string expected, string actual) returns int {

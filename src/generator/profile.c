@@ -44,16 +44,131 @@ static void analyse_node(ast_t node, generator_profile_analysis *analysis) {
         analysis->eligible = 0;
       return;
     }
-    if (svcmp(call.name.lexeme, sv_from_cstr("print")) != 0 ||
-        call.args.length != 1 || call.args.data[0]->tag != literal ||
-        call.args.data[0]->data.literal.lit.type != TOK_STR_LIT) {
+    if (svcmp(call.name.lexeme, sv_from_cstr("println")) == 0 &&
+        call.args.length == 0) {
+      analysis->uses_stdout = 1;
+      analysis->simple_stdout = 0;
+      return;
+    }
+    if ((svcmp(call.name.lexeme, sv_from_cstr("print")) == 0 ||
+         svcmp(call.name.lexeme, sv_from_cstr("println")) == 0) &&
+        call.args.length == 1) {
+      analysis->uses_stdout = 1;
+      if (call.args.data[0]->tag == literal &&
+          call.args.data[0]->data.literal.lit.type == TOK_STR_LIT) {
+        if (svcmp(call.name.lexeme, sv_from_cstr("println")) == 0 ||
+            !stdout_literal_is_simple(call.args.data[0]->data.literal.lit))
+          analysis->simple_stdout = 0;
+        else {
+          string_view text = call.args.data[0]->data.literal.lit.lexeme;
+          analysis->simple_stdout_bytes += text.length - 2;
+          if (analysis->simple_stdout_bytes > 32u * 24u)
+            analysis->simple_stdout = 0;
+        }
+        return;
+      }
+      analysis->simple_stdout = 0;
+      analyse_node(call.args.data[0], analysis);
+      return;
+    }
+    if (svcmp(call.name.lexeme, sv_from_cstr("print")) == 0 &&
+        call.args.length == 3 && call.args.data[2]->tag == literal &&
+        call.args.data[2]->data.literal.lit.type == TOK_STR_LIT) {
+      analysis->uses_stdout = 1;
+      analysis->simple_stdout = 0;
+      analyse_node(call.args.data[0], analysis);
+      analyse_node(call.args.data[1], analysis);
+      return;
+    }
+    if (svcmp(call.name.lexeme, sv_from_cstr("putchar")) == 0 &&
+        call.args.length == 1) {
+      analysis->uses_stdout = 1;
+      analysis->simple_stdout = 0;
+      analyse_node(call.args.data[0], analysis);
+      return;
+    }
+    if (svcmp(call.name.lexeme, sv_from_cstr("putchar_at")) == 0 &&
+        call.args.length == 3) {
+      analysis->uses_stdout = 1;
+      analysis->simple_stdout = 0;
+      for (int i = 0; i < 3; i++) analyse_node(call.args.data[i], analysis);
+      return;
+    }
+    if (svcmp(call.name.lexeme, sv_from_cstr("putchar_addr")) == 0 &&
+        call.args.length == 2) {
+      analysis->uses_stdout = 1;
+      analysis->simple_stdout = 0;
+      for (int i = 0; i < 2; i++) analyse_node(call.args.data[i], analysis);
+      return;
+    }
+    if ((svcmp(call.name.lexeme, sv_from_cstr("cls")) == 0) &&
+        call.args.length == 0) {
+      analysis->uses_stdout = 1;
+      analysis->simple_stdout = 0;
+      return;
+    }
+    if ((svcmp(call.name.lexeme, sv_from_cstr("ink")) == 0 ||
+         svcmp(call.name.lexeme, sv_from_cstr("paper")) == 0 ||
+         svcmp(call.name.lexeme, sv_from_cstr("bright")) == 0 ||
+         svcmp(call.name.lexeme, sv_from_cstr("flash")) == 0 ||
+         svcmp(call.name.lexeme, sv_from_cstr("inverse")) == 0) &&
+        call.args.length == 1) {
+      analysis->uses_stdout = 1;
+      analysis->simple_stdout = 0;
+      analyse_node(call.args.data[0], analysis);
+      return;
+    }
+    if (svcmp(call.name.lexeme, sv_from_cstr("border")) == 0 &&
+        call.args.length == 1) {
+      analyse_node(call.args.data[0], analysis);
+      return;
+    }
+    if ((svcmp(call.name.lexeme, sv_from_cstr("inkey")) == 0 ||
+         svcmp(call.name.lexeme, sv_from_cstr("keypress")) == 0 ||
+         svcmp(call.name.lexeme, sv_from_cstr("scan_keyboard")) == 0) &&
+        call.args.length == 0)
+      return;
+    if (svcmp(call.name.lexeme, sv_from_cstr("key_pressed")) == 0 &&
+        call.args.length == 1) {
+      analyse_node(call.args.data[0], analysis);
+      return;
+    }
+    if ((svcmp(call.name.lexeme, sv_from_cstr("to_byte")) == 0 ||
+         svcmp(call.name.lexeme, sv_from_cstr("to_word")) == 0 ||
+         svcmp(call.name.lexeme, sv_from_cstr("to_dword")) == 0 ||
+         svcmp(call.name.lexeme, sv_from_cstr("to_int")) == 0 ||
+         svcmp(call.name.lexeme, sv_from_cstr("to_float")) == 0) &&
+        call.args.length == 1) {
+      analyse_node(call.args.data[0], analysis);
+      return;
+    }
+    if (call.resolved_target && call.resolved_target->tag == fundef &&
+        call.resolved_target->data.fundef.body == NULL &&
+        call.resolved_target->data.fundef.component_id != NULL) {
+      ast_fundef native = call.resolved_target->data.fundef;
+      ast_type result = native.ret_type->data.type;
+      int scalar_only = !result.is_array &&
+                        svcmp(result.name.lexeme, sv_from_cstr("string")) != 0;
+      for (int i = 0; scalar_only && i < native.types.length; i++) {
+        ast_type parameter = native.types.data[i]->data.type;
+        if (parameter.is_array ||
+            svcmp(parameter.name.lexeme, sv_from_cstr("string")) == 0)
+          scalar_only = 0;
+      }
+      if (scalar_only) {
+        if (strcmp(native.component_id, "core") == 0) {
+          analysis->eligible = 0;
+          return;
+        }
+        for (int i = 0; i < call.args.length; i++)
+          analyse_node(call.args.data[i], analysis);
+        return;
+      }
+    }
+    {
       analysis->eligible = 0;
       return;
     }
-    analysis->uses_stdout = 1;
-    if (!stdout_literal_is_simple(call.args.data[0]->data.literal.lit))
-      analysis->simple_stdout = 0;
-    return;
   }
   case method_call: {
     ast_method_call call = node->data.method_call;
@@ -109,11 +224,15 @@ static void analyse_node(ast_t node, generator_profile_analysis *analysis) {
     analyse_node(node->data.ifstmt.elsestmt, analysis);
     return;
   case loop:
+    /* A loop can repeat even one literal beyond the minimal writer's finite
+     * screen. Select the scrolling console whenever a tiny program loops. */
+    analysis->simple_stdout = 0;
     analyse_node(node->data.loop.start, analysis);
     analyse_node(node->data.loop.end, analysis);
     analyse_node(node->data.loop.statement, analysis);
     return;
   case while_loop:
+    analysis->simple_stdout = 0;
     analyse_node(node->data.while_loop.condition, analysis);
     analyse_node(node->data.while_loop.statement, analysis);
     return;
@@ -128,7 +247,7 @@ static void analyse_node(ast_t node, generator_profile_analysis *analysis) {
 
 generator_profile_analysis generator_analyse_profile(target_t target,
                                                       ast_t program) {
-  generator_profile_analysis analysis = {1, 0, 1};
+  generator_profile_analysis analysis = {1, 0, 1, 0};
   if (target != TARGET_ZXN) {
     analysis.eligible = 0;
     return analysis;

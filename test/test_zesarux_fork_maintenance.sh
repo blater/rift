@@ -36,6 +36,12 @@ git -C "$CHECKOUT" config user.email "rift-test@example.invalid"
 git -C "$CHECKOUT" remote add upstream "$UPSTREAM"
 mkdir -p "$FAKE_RIFT/tools"
 printf '#!/usr/bin/env bash\nexit 0\n' \
+  >"$FAKE_RIFT/tools/test-zesarux-noupdates"
+chmod +x "$FAKE_RIFT/tools/test-zesarux-noupdates"
+printf '#!/usr/bin/env bash\nexit 0\n' \
+  >"$FAKE_RIFT/tools/test-zesarux-silent-startup"
+chmod +x "$FAKE_RIFT/tools/test-zesarux-silent-startup"
+printf '#!/usr/bin/env bash\nexit 0\n' \
   >"$FAKE_RIFT/tools/test-zesarux-zrcp"
 chmod +x "$FAKE_RIFT/tools/test-zesarux-zrcp"
 printf 'test-zxn:\n\t@true\n' >"$FAKE_RIFT/Makefile"

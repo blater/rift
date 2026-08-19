@@ -83,7 +83,7 @@ def zrcp_command(port, command, timeout=1.0):
 
 class ZesaruxAdapter:
   name = "zesarux"
-  artifact_suffixes = (".zxn", ".nex")
+  artifact_suffixes = (".nex",)
 
   def __init__(self, args, artifacts):
     self.args = args
@@ -101,15 +101,20 @@ class ZesaruxAdapter:
       raise LauncherError("ZEsarUX binary is not executable: %s" % path)
     return path
 
-  def verify_loopback_option(self):
-    if b"--remoteprotocol-host" not in self.binary.read_bytes():
+  def verify_required_options(self):
+    binary_data = self.binary.read_bytes()
+    if b"--remoteprotocol-host" not in binary_data:
       raise LauncherError(
           "ZEsarUX lacks --remoteprotocol-host; refusing unauthenticated ZRCP on a non-loopback listener")
+    if b"--silent" not in binary_data:
+      raise LauncherError("ZEsarUX lacks --silent; use the maintained Rift ZEsarUX build")
+    if b"--noupdates" not in binary_data:
+      raise LauncherError("ZEsarUX lacks --noupdates; use the maintained Rift ZEsarUX build")
 
   def command(self, artifact):
     return [
-        str(self.binary), "--noconfigfile", "--machine", "tbblue", "--vo", "null", "--ao", "null", "--nosplash",
-        "--nowelcomemessage", "--fastautoload", "--quickexit",
+        str(self.binary), "--noconfigfile", "--machine", "tbblue", "--vo", "null", "--ao", "null",
+        "--silent", "--noupdates", "--fastautoload", "--quickexit",
         "--enable-remoteprotocol", "--remoteprotocol-host", "127.0.0.1",
         "--remoteprotocol-port", str(self.port), "--hardware-debug-ports",
     ]
@@ -161,16 +166,10 @@ class ZesaruxAdapter:
               write_text(self.artifacts / "pc-memory.txt", memory)
 
   def load(self, artifact):
-    load_artifact = artifact
-    if artifact.suffix.lower() == ".zxn":
-      # ZEsarUX dispatches snapshot loaders by extension. Rift publishes the
-      # standard NEX container as .zxn, so provide an internal .nex alias.
-      load_artifact = self.artifacts / (artifact.stem + ".nex")
-      shutil.copy2(artifact, load_artifact)
     deadline = time.monotonic() + 5
     while True:
       try:
-        return zrcp_command(self.port, "snapshot-load %s" % load_artifact, timeout=1)
+        return zrcp_command(self.port, "snapshot-load %s" % artifact, timeout=1)
       except OSError:
         if time.monotonic() >= deadline:
           raise LauncherError("ZRCP did not become ready")
@@ -191,7 +190,7 @@ ADAPTERS = {
 def parse_args():
   parser = argparse.ArgumentParser(description=__doc__)
   parser.add_argument("mode", choices=("run", "inspect", "test", "measure"))
-  parser.add_argument("artifact", type=Path, help="built target artifact (.zxn for ZXN)")
+  parser.add_argument("artifact", type=Path, help="built target artifact (.nex for ZXN)")
   parser.add_argument("--target", required=True)
   parser.add_argument("--emulator", default="zesarux")
   parser.add_argument("--emulator-bin")
@@ -250,7 +249,7 @@ def main():
     shutil.copy2(artifact, artifacts / artifact.name)
   try:
     adapter = adapter_class(args, artifacts)
-    adapter.verify_loopback_option()
+    adapter.verify_required_options()
     command = adapter.command(artifact)
     result["command"] = command
     write_text(artifacts / "command.txt", " ".join(command) + "\n")

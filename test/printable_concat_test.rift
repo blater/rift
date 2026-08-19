@@ -1,0 +1,50 @@
+include "Assert.rift"
+
+record PrintableItem {
+  int value
+}
+
+int order := 0;
+string source := "old";
+
+sub visit(int digit, int value) returns int {
+  order := (order * 10) + digit;
+  return value;
+}
+
+sub replace_source() returns string {
+  source := "new";
+  return "-right";
+}
+
+sub main() {
+  Assert a;
+  byte b := to_byte(255);
+  word w := to_word(65535);
+  dword d := to_dword(2000000000);
+
+  string scalars := concat(true, concat(':', concat(b, concat(",", concat(w, concat(",", d))))));
+  a.AssertEquals("concat formats printable scalar types",
+                 "true:255,65535,2000000000", scalars);
+
+  string visited := concat(visit(1, 4), concat(visit(2, 5), visit(3, 6)));
+  a.AssertEQ("concat evaluates leaves left to right once", 123, order);
+  a.AssertEquals("concat preserves formatted leaf order", "456", visited);
+
+  source := concat("o", "ld");
+  string stable := concat(source, replace_source());
+  a.AssertEquals("concat stabilizes a borrowed left string", "old-right", stable);
+  a.AssertEquals("right operand may replace the source", "new", source);
+
+  a.AssertEquals("toString boolean", "false", toString(false));
+  a.AssertEquals("toString char", "Q", toString('Q'));
+  a.AssertEquals("toString string copies its value", "copy", toString("copy"));
+
+  PrintableItem item := {value := 42};
+  PrintableItem[] items;
+  append(items, item);
+  a.AssertEquals("concat types indexed record fields", "42",
+                 concat("", items[0].value));
+  print(items[0].value);
+  println();
+}

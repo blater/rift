@@ -1,0 +1,15 @@
+record ConsoleItem {
+  int value
+}
+
+sub main() {
+  ConsoleItem item := {value := 7};
+  ConsoleItem[] items;
+  append(items, item);
+  ConsoleItem selected := get(items, 0);
+  if (selected.value = 7) {
+    zxn_test_pass();
+  } else {
+    zxn_test_fail();
+  }
+}

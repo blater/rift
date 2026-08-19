@@ -1,0 +1,10 @@
+include "Assert.rift"
+
+sub printf(string value) returns string {
+  return concat("user:", value);
+}
+
+sub main() {
+  Assert a;
+  a.AssertEquals("printf may be defined by user code", "user:ok", printf("ok"));
+}

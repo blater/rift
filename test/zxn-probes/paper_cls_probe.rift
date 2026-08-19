@@ -1,0 +1,22 @@
+include "../Assert.rift"
+
+// Target-only regression for the ZXN ROM attribute variables and ULA clear.
+sub main() {
+  Assert a;
+
+  ink(7);
+  paper(0);
+  bright(0);
+  flash(0);
+  a.AssertEQ("paper black updates ATTR_P", 7, peek(23693));
+
+  poke(16384, 255);
+  poke(22528, 56);
+  poke(23295, 56);
+  cls();
+
+  a.AssertEQ("cls clears first bitmap byte", 0, peek(16384));
+  a.AssertEQ("cls clears last bitmap byte", 0, peek(22527));
+  a.AssertEQ("cls sets first attribute", 7, peek(22528));
+  a.AssertEQ("cls sets last attribute", 7, peek(23295));
+}

@@ -22,7 +22,7 @@ Example:
   test/benchmarks/allocator_primitive_cycle_bench.rift /private/tmp/allocator-primitive.exe
 # Use the reported /tmp/rift-build-* directory for the map, then:
 rg 'allocator_primitive_benchmark|l_allocator_primitive_benchmark_0010[15]' /tmp/rift-build-*/allocator-primitive.map
-tools/rift-emu measure --target zxn /private/tmp/allocator-primitive.zxn \
+tools/rift-emu measure --target zxn /private/tmp/allocator-primitive.nex \
   --gate-address 0x7146 --breakpoint 0x7136 --breakpoint-pass-count 2 \
   --release-pc 0x714d --capture-memory 0xa9cf:16
 ```

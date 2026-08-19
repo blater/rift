@@ -398,7 +398,11 @@ static void validate_manifest(component_manifest *manifest) {
                                   sizeof(parameter)))
         manifest_error(manifest->path, 0,
                        "has an unknown interface parameter type");
-      if (asset_category_type(manifest, parameter)) {
+      if (strcmp(parameter, "printable") == 0) {
+        if (entry->kind != COMPONENT_LOWERED_BUILTIN)
+          manifest_error(manifest->path, 0,
+                         "printable parameters require a lowered builtin");
+      } else if (asset_category_type(manifest, parameter)) {
         if (!valid_asset_consumer_parameter(manifest, entry, j, parameter))
           manifest_error(manifest->path, 0,
                          "asset category is only valid in its registered consumer parameter");
@@ -470,7 +474,9 @@ component_manifest *load_component_manifest(const char *path) {
     if (count < 0) manifest_error(path, line_number, "has too many fields");
 
     if (strcmp(fields[0], "component") == 0) {
-      if (count != 11) manifest_error(path, line_number, "component row needs 11 fields");
+      if (count != 11 && count != 12)
+        manifest_error(path, line_number,
+                       "component row needs 11 or 12 fields");
       if (manifest->component_count >= COMPONENT_MANIFEST_MAX_COMPONENTS)
         manifest_error(path, line_number, "has too many components");
       component_spec *entry = &manifest->components[manifest->component_count++];
@@ -484,9 +490,15 @@ component_manifest *load_component_manifest(const char *path) {
       entry->init_hook = manifest_copy(fields[8]);
       entry->shutdown_hook = manifest_copy(fields[9]);
       entry->always = strcmp(fields[10], "always") == 0;
+      entry->zxn_startup31_safe =
+          count == 12 && strcmp(fields[11], "startup31") == 0;
       if (entry->id[0] == '\0') manifest_error(path, line_number, "has an empty component ID");
       if (fields[10][0] && strcmp(fields[10], "always") != 0)
         manifest_error(path, line_number, "component selection must be empty or always");
+      if (count == 12 && fields[11][0] &&
+          strcmp(fields[11], "startup31") != 0)
+        manifest_error(path, line_number,
+                       "component ZXN capability must be empty or startup31");
       continue;
     }
 

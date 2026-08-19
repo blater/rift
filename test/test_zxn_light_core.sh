@@ -21,4 +21,4 @@ debug_dir=$(sed -n 's/^rift: debug workspace: //p' "$tmpdir/build.log" | head -1
 
 "$root/tools/rift-emu" --target zxn --emulator-bin "$emulator" \
   --timeout-seconds 6 --artifacts "$tmpdir/artifacts" --require-emulator \
-  test "$tmpdir/probe.zxn"
+  test "$tmpdir/probe.nex"

@@ -9,15 +9,13 @@
  *   x, y  - 0-based character column (0..31) and row (0..23)
  *   text  - Rift string to draw starting at (x, y)
  *
- * ZXN implementation: calls ROM RST 10h directly, preceded by the AT
- * control sequence (22, row, col). This is the pasta80 approach.
+ * ZXN implementation: writes ROM-font glyphs through the shared direct ULA
+ * console. It does not call ROM output routines or use their system state.
  *
  * Host implementation: writes "@(x,y) text\n" to stdout for inspection.
  *
- * TODO: replace the ZXN path with direct ULA framebuffer rasterisation
- * so text output keeps working when the ROM is paged out (RAM banks over
- * $0000-$3FFF) and so custom fonts can be used. Ticketed as a follow-on
- * component; the current ROM path is a pragmatic placeholder.
+ * The glyph source is the standard ROM font at $3D00, so a future custom-font
+ * API may supply another source while retaining the direct framebuffer path.
  */
 void print_at(byte x, byte y, string text);
 

@@ -1,0 +1,43 @@
+// Twelve 16x16 8bpp frames derived from assets/cat/walk2.png.
+// The raw asset uses the ZX Next reset RGB332 palette and $E3 transparency.
+SpritePattern catWalk := SpritePattern.load("assets/cat/walk.spr", 8);
+
+sub main() {
+  Sprite cat := Sprite(0);
+  word x := 304;
+  byte frame := 0;
+  byte running := 1;
+
+  // Clear the ULA screen with black paper and match the border to it.
+  paper(0);
+  border(0);
+  cls();
+
+  // Register $4B sets the transparent palette index; register $15 enables
+  // the sprite plane.
+  next_reg_set(75, 227);
+  next_reg_set(21, 1);
+  Sprite.hideall();
+
+  cat.position(x, 120);
+  cat.frame(catWalk, frame);
+  cat.show();
+
+  while running {
+    sleep(60);
+
+    if x < 2 {
+      x := 304;
+    } else {
+      x := x - 2;
+    }
+
+    frame := frame + 1;
+    if frame = 12 {
+      frame := 0;
+    }
+
+    cat.frame(catWalk, frame);
+    cat.position(x, 120);
+  }
+}

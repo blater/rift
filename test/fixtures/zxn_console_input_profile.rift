@@ -1,0 +1,13 @@
+// Compile-only component/profile fixture.  Calls stay unreachable so the
+// runner can prove linkage without waiting for keyboard input.
+
+sub main() {
+  if (false) {
+    byte key := inkey();
+    key := keypress();
+    string line := input();
+    print(line);
+    scan_keyboard();
+    key := key_pressed(to_byte(KEY_Z));
+  }
+}

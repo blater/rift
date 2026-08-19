@@ -61,7 +61,7 @@ printf '%s\n' \
 
 "$ROOT/rift" --target=zxn "$WORK/main.rift" "$WORK/sprite.exe"
 
-if "$ROOT/tools/rift-emu" inspect "$WORK/sprite.zxn" \
+if "$ROOT/tools/rift-emu" inspect "$WORK/sprite.nex" \
   --target zxn \
   --emulator-bin "$EMULATOR" \
   --require-emulator \

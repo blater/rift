@@ -27,8 +27,8 @@ sub main() {
   as.AssertEquals("substring of substring 'wor'", "wor", body_head);
 
   // Print path via Rift's printf: must not over-read the substring view.
-  printf(head);
-  printf(" ");
-  printf(body);
-  printf("\n");
+  print(head);
+  print(" ");
+  print(body);
+  println();
 }

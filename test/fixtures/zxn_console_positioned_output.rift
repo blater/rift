@@ -1,0 +1,111 @@
+// Verify exact 32x24 character-cell addressing and the address-level glyph
+// primitive without depending on OCR.
+
+int evaluation_order := 0;
+
+sub ordered_int(int digit, int value) returns int {
+  evaluation_order := (evaluation_order * 10) + digit;
+  return value;
+}
+
+sub ordered_char(int digit, char value) returns char {
+  evaluation_order := (evaluation_order * 10) + digit;
+  return value;
+}
+
+sub check(boolean condition) {
+  if (condition) {
+    zxn_test_pass();
+  } else {
+    zxn_test_fail();
+  }
+}
+
+sub cell_top_address(int column, int row) returns word {
+  int band := row / 8;
+  int within_band := row - (band * 8);
+  return to_word(16384 + (band * 2048) + (within_band * 32) + column);
+}
+
+sub cells_equal(int left_column, int left_row, int right_column, int right_row) returns boolean {
+  word left_top := cell_top_address(left_column, left_row);
+  word right_top := cell_top_address(right_column, right_row);
+  for scanline := 0 to 7 {
+    word left_address := to_word(to_int(left_top) + (scanline * 256));
+    word right_address := to_word(to_int(right_top) + (scanline * 256));
+    if (peek(left_address) != peek(right_address)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+sub cell_has_ink(int column, int row) returns boolean {
+  word top := cell_top_address(column, row);
+  for scanline := 0 to 7 {
+    if (peek(to_word(to_int(top) + (scanline * 256))) != to_byte(0)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+sub main() {
+  byte code_5c08 := peek(to_word(23560));
+  byte code_5c8d := peek(to_word(23693));
+  byte code_5c8e := peek(to_word(23694));
+  byte code_5c8f := peek(to_word(23695));
+  byte code_5c90 := peek(to_word(23696));
+  byte code_5c91 := peek(to_word(23697));
+  ink(7);
+  paper(0);
+  border(0);
+  cls();
+
+  putchar_at(to_byte(0), to_byte(0), 'A');
+  putchar_at(to_byte(31), to_byte(0), 'A');
+  putchar_at(to_byte(0), to_byte(23), 'A');
+  putchar_addr(to_word(20704), 'A'); // $50E0: top scanline of cell (0, 23)
+  putchar_addr(to_word(20735), 'A'); // $50FF: top scanline of cell (31, 23)
+
+  check(cell_has_ink(0, 0));
+  check(cells_equal(0, 0, 31, 0));
+  check(cells_equal(0, 0, 0, 23));
+  check(cells_equal(0, 0, 31, 23));
+
+  // Standard ROM-font A bytes: 00 3C 42 42 7E 42 42 00.
+  check(peek(to_word(16384)) = to_byte(0) &&
+        peek(to_word(16640)) = to_byte(60) &&
+        peek(to_word(16896)) = to_byte(66) &&
+        peek(to_word(17152)) = to_byte(66) &&
+        peek(to_word(17408)) = to_byte(126) &&
+        peek(to_word(17664)) = to_byte(66) &&
+        peek(to_word(17920)) = to_byte(66) &&
+        peek(to_word(18176)) = to_byte(0));
+
+  // Black paper, white ink, bright/flash off is attribute 7.
+  check(peek(to_word(22528)) = to_byte(7));
+  check(peek(to_word(22559)) = to_byte(7));
+  check(peek(to_word(23264)) = to_byte(7));
+  check(peek(to_word(23295)) = to_byte(7));
+
+  // The exact-address write must not spill into the neighbouring cell.
+  check(cell_has_ink(30, 23) = false);
+
+  // A scanline address is not a valid cell-top address and must be ignored.
+  byte before_invalid := peek(to_word(16640));
+  putchar_addr(to_word(16640), 'X');
+  check(peek(to_word(16640)) = before_invalid);
+
+  print(to_byte(ordered_int(1, 2)), to_byte(ordered_int(2, 3)),
+        ordered_char(3, 'Z'));
+  check(evaluation_order = 123);
+
+  // Traditional Spectrum sysvars overlap startup-31 code and must stay intact.
+  check(peek(to_word(23560)) = code_5c08 &&
+        peek(to_word(23693)) = code_5c8d &&
+        peek(to_word(23694)) = code_5c8e &&
+        peek(to_word(23695)) = code_5c8f &&
+        peek(to_word(23696)) = code_5c90 &&
+        peek(to_word(23697)) = code_5c91);
+}

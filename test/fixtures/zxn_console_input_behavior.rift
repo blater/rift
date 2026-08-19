@@ -1,0 +1,73 @@
+@embed c
+  byte injected_event(byte key, byte caps, byte symbol) {
+    return rift_input_test_event(key, caps, symbol);
+  }
+@end c
+
+@embed c
+  byte injected_reset() { rift_input_test_reset(); return 0; }
+@end c
+
+@embed c
+  byte injected_push(byte value) { rift_input_test_push(value); return 0; }
+@end c
+
+sub check(boolean condition) {
+  if (condition) {
+    zxn_test_pass();
+  } else {
+    zxn_test_fail();
+  }
+}
+
+sub main() {
+  injected_reset();
+
+  check(injected_event(to_byte(KEY_A), 0, 0) = to_byte('a'));
+  check(injected_event(to_byte(KEY_A), 0, 0) = 0);
+  check(injected_event(255, 0, 0) = 0);
+  check(injected_event(to_byte(KEY_A), 0, 0) = to_byte('a'));
+
+  injected_event(255, 0, 0);
+  check(injected_event(254, 0, 0) = 0);
+  check(injected_event(to_byte(KEY_B), 0, 0) = 0);
+  injected_event(255, 0, 0);
+  check(injected_event(to_byte(KEY_B), 0, 0) = to_byte('b'));
+
+  injected_event(255, 0, 0);
+  check(injected_event(to_byte(KEY_A), 1, 0) = to_byte('A'));
+  injected_event(255, 0, 0);
+  check(injected_event(to_byte(KEY_1), 1, 0) = 0);
+  injected_event(255, 0, 0);
+  check(injected_event(to_byte(KEY_0), 1, 0) = 8);
+  injected_event(255, 0, 0);
+  check(injected_event(to_byte(KEY_1), 0, 1) = to_byte('!'));
+  injected_event(255, 0, 0);
+  check(injected_event(to_byte(KEY_I), 0, 1) = 0);
+
+  paper(0);
+  ink(7);
+  cls();
+  injected_reset();
+  for i := 1 to 32 {
+    injected_push(to_byte('A'));
+  }
+  injected_push(8);
+  injected_push(to_byte('B'));
+  injected_push(13);
+  string wrapped := input();
+  check(length(wrapped) = 32);
+  check(charAt(wrapped, 31) = 'B');
+  check(peek(to_word(16671)) = to_byte(124)); // B, second scanline at (31,0)
+  check(peek(to_word(16672)) = 0);           // erased A scanline stays blank
+
+  injected_reset();
+  for i := 1 to 255 {
+    injected_push(to_byte('C'));
+  }
+  injected_push(to_byte('D')); // consumed but rejected at the documented cap
+  injected_push(13);
+  string capped := input();
+  check(length(capped) = 255);
+  check(charAt(capped, 254) = 'C');
+}

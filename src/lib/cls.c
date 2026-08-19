@@ -2,12 +2,13 @@
 
 #ifdef __SDCC
 
-/* ZX ROM CLS entry point. Clears the upper screen and fills the
- * attribute area with the current PAPER/INK (from ATTR_P sysvar). */
+#include "console.h"
+
+/* Clear all ULA bitmap and attribute bytes using the current permanent
+ * ROM attribute. This avoids ROM entry points whose channel/startup
+ * preconditions do not hold for every Rift program. */
 void cls(void) {
-  __asm
-    call 0x0DAF
-  __endasm;
+  rift_console_clear();
 }
 
 #else

@@ -143,7 +143,7 @@ void emit_type_release_walker(generator_t *g, string_view name,
   fprintf(g->f, "  if (header->refcount == RIFT_RC_STATIC) return;\n");
   fprintf(g->f, "  if (header->refcount == RIFT_RC_FREE || "
                 "header->refcount == RIFT_RC_MAGAZINE) { "
-                "fprintf(stderr, \"rift: aggregate release on already-freed "
+                "rift_error_text(\"rift: aggregate release on already-freed "
                 "block\\n\"); exit(1); }\n");
   fprintf(g->f, "  if (--header->refcount != 0) return;\n");
 

@@ -10,6 +10,7 @@ typedef struct ownership_operation {
   ownership_id operand;
   ownership_id callee;
   size_t parameter_index;
+  int bool_value;
   ownership_id *operands;
   size_t operand_count;
   ownership_id targets[2];

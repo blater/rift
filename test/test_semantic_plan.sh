@@ -227,4 +227,81 @@ gcc -Werror -Wall -Wextra -Wno-sign-compare -pedantic \
 zcc +zxn -vn -c -clib=sdcc_iy -I"$ROOT/src/lib" \
   "$WORK/calls-zxn.c" -o "$WORK/calls-zxn.o"
 
+"$ROOT/riftc" "$ROOT/test/fixtures/semantic_plan_if_assignment.rift" \
+  "$WORK/branches" --target=gcc --semantic-plan \
+  --component-manifest="$ROOT/src/lib/components.manifest"
+grep -q '^string rift_plan_body_1(int rift_plan_slot_0, string rift_plan_slot_1)' \
+  "$WORK/branches.c" || fail "bool condition was not sealed into the selected ABI"
+branch_body=$(awk '/^string rift_plan_body_1\(/ { seen++ }
+                   seen == 2 { print }
+                   seen == 2 && /^}$/ { exit }' "$WORK/branches.c")
+printf '%s\n' "$branch_body" | grep -q \
+  'if (rift_plan_tmp_.*) goto rift_plan_block_1; else goto rift_plan_block_2;' ||
+  fail "sealed bool condition did not emit an explicit two-way branch"
+printf '%s\n' "$branch_body" | awk '
+  /= rift_plan_body_0/ { call = NR }
+  /__string_release\(rift_plan_slot_2\)/ { if (call && call < NR) ordered++ }
+  END { exit ordered >= 2 ? 0 : 1 }
+' || fail "assignment released the old owner before fully evaluating its RHS"
+printf '%s\n' "$branch_body" | awk '
+  /__string_retain\(rift_plan_tmp_/ { held = NR }
+  /= rift_plan_body_0/ { if (held && held < NR) held_call++ }
+  END { exit held_call >= 2 ? 0 : 1 }
+' || fail "borrowed assignment input was not held across an effectful RHS"
+printf '%s\n' "$branch_body" | awk '
+  /__string_release\(rift_plan_slot_3\)/ {
+    if (getline > 0 && /goto rift_plan_block_3/) clean++
+  }
+  END { exit clean == 1 ? 0 : 1 }
+' || fail "branch-local produced string was not released before its join"
+maybe_body=$(awk '/^string rift_plan_body_2\(/ { seen++ }
+                  seen == 2 { print }
+                  seen == 2 && /^}$/ { exit }' "$WORK/branches.c")
+printf '%s\n' "$maybe_body" | grep -q \
+  'rift_plan_block_2: ;' || fail "if-without-else has no false path"
+printf '%s\n' "$maybe_body" | awk '
+  /rift_plan_block_2:/ { false_block = NR }
+  /goto rift_plan_block_3/ { if (false_block && false_block < NR) found++ }
+  END { exit found == 1 ? 0 : 1 }
+' || fail "if-without-else false path does not reach the ownership join"
+early_body=$(awk '/^string rift_plan_body_3\(/ { seen++ }
+                  seen == 2 { print }
+                  seen == 2 && /^}$/ { exit }' "$WORK/branches.c")
+[ "$(printf '%s\n' "$early_body" | grep -c '^return rift_plan_tmp_')" -eq 2 ] ||
+  fail "both conditional return paths were not emitted"
+exercise_body=$(awk '/^string rift_plan_body_4\(/ { seen++ }
+                     seen == 2 { print }
+                     seen == 2 && /^}$/ { exit }' "$WORK/branches.c")
+printf '%s\n' "$exercise_body" | grep -q 'int rift_plan_tmp_.* = 1;' ||
+  fail "true bool input was not evaluated in selected code"
+printf '%s\n' "$exercise_body" | grep -q 'int rift_plan_tmp_.* = 0;' ||
+  fail "false bool input was not evaluated in selected code"
+gcc -Werror -Wall -Wextra -Wno-sign-compare -pedantic \
+  -I"$ROOT/src/lib" -I"$ROOT/src/ext/lib" \
+  "$WORK/branches.c" \
+  "$ROOT/src/lib/arena_host.c" "$ROOT/src/lib/pools.c" \
+  "$ROOT/src/lib/fundefs.c" "$ROOT/src/lib/termination.c" \
+  "$ROOT/src/lib/print_bytes.c" "$ROOT/src/lib/error_sink.c" \
+  "$ROOT/src/lib/host_caps.c" "$ROOT/src/lib/host/termbox2_impl.c" \
+  -o "$WORK/branches.exe"
+[ "$("$WORK/branches.exe")" = "branch" ] ||
+  fail "branching plan-emitted functions returned the wrong string"
+sed 's/rift_pools_init(NULL);/rift_arena_options rift_test_arena = { .memory_max = 1024, .memory_max_present = 1 }; rift_pools_init(\&rift_test_arena);/' \
+  "$WORK/branches.c" >"$WORK/branches-constrained.c"
+gcc -Werror -Wall -Wextra -Wno-sign-compare -pedantic \
+  -I"$ROOT/src/lib" -I"$ROOT/src/ext/lib" \
+  "$WORK/branches-constrained.c" \
+  "$ROOT/src/lib/arena_host.c" "$ROOT/src/lib/pools.c" \
+  "$ROOT/src/lib/fundefs.c" "$ROOT/src/lib/termination.c" \
+  "$ROOT/src/lib/print_bytes.c" "$ROOT/src/lib/error_sink.c" \
+  "$ROOT/src/lib/host_caps.c" "$ROOT/src/lib/host/termbox2_impl.c" \
+  -o "$WORK/branches-constrained.exe"
+[ "$("$WORK/branches-constrained.exe")" = "branch" ] ||
+  fail "branching ownership plan did not reuse a 1 KiB arena"
+"$ROOT/riftc" "$ROOT/test/fixtures/semantic_plan_if_assignment.rift" \
+  "$WORK/branches-zxn" --target=zxn --semantic-plan \
+  --component-manifest="$ROOT/src/lib/components.manifest"
+zcc +zxn -vn -c -clib=sdcc_iy -I"$ROOT/src/lib" \
+  "$WORK/branches-zxn.c" -o "$WORK/branches-zxn.o"
+
 echo "PASS: semantic-plan generated-C seam"

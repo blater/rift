@@ -174,8 +174,7 @@ static int call_arguments_valid(const sir_function *function,
         value->ownership != parameter->ownership) {
       return 0;
     }
-    if (signature->kind == SIR_CALLEE_USER &&
-        parameter->mode == SIR_ARGUMENT_CONSUME) {
+    if (signature->kind == SIR_CALLEE_USER) {
       const sir_block *block = &function->blocks[block_index];
       size_t definition_index;
       int prepared = 0;
@@ -183,9 +182,10 @@ static int call_arguments_valid(const sir_function *function,
            definition_index++) {
         const sir_operation *definition = &block->operations[definition_index];
         if (definition->result == operation->operands[index]) {
-          prepared = definition->kind == SIR_OP_PREPARE_ARGUMENT &&
-                     definition->callee == operation->callee &&
-                     definition->parameter_index == index;
+          prepared = parameter->mode == SIR_ARGUMENT_SCALAR ||
+                     (definition->kind == SIR_OP_PREPARE_ARGUMENT &&
+                      definition->callee == operation->callee &&
+                      definition->parameter_index == index);
           break;
         }
       }
@@ -331,6 +331,7 @@ void sir_function_destroy(sir_function *function) {
     for (operation_index = 0; operation_index < block->operation_count;
          operation_index++) {
       free(block->operations[operation_index].operands);
+      free(block->operations[operation_index].cleanup_slots);
     }
     free(block->operations);
   }
@@ -399,6 +400,7 @@ int sir_block_add_operation(sir_function *function, sir_id block_id,
   }
   copy = *operation;
   copy.operands = NULL;
+  copy.cleanup_slots = NULL;
   if (operation->operand_count != 0) {
     if (operation->operands == NULL ||
         operation->operand_count > SIZE_MAX / sizeof(*copy.operands)) {
@@ -410,6 +412,22 @@ int sir_block_add_operation(sir_function *function, sir_id block_id,
     }
     memcpy(copy.operands, operation->operands,
            operation->operand_count * sizeof(*copy.operands));
+  }
+  if (operation->cleanup_slot_count != 0) {
+    if (operation->cleanup_slots == NULL ||
+        operation->cleanup_slot_count >
+            SIZE_MAX / sizeof(*copy.cleanup_slots)) {
+      free(copy.operands);
+      return 0;
+    }
+    copy.cleanup_slots =
+        malloc(operation->cleanup_slot_count * sizeof(*copy.cleanup_slots));
+    if (copy.cleanup_slots == NULL) {
+      free(copy.operands);
+      return 0;
+    }
+    memcpy(copy.cleanup_slots, operation->cleanup_slots,
+           operation->cleanup_slot_count * sizeof(*copy.cleanup_slots));
   }
   block->operations[block->operation_count++] = copy;
   return 1;
@@ -463,6 +481,11 @@ static int validate_operation_references(
                    operation_index, "operation operands are missing");
     return 0;
   }
+  if (operation->cleanup_slot_count != 0 && operation->cleanup_slots == NULL) {
+    set_diagnostic(diagnostic, SIR_DIAGNOSTIC_INVALID_SLOT, block_index,
+                   operation_index, "return cleanup slots are missing");
+    return 0;
+  }
   if (operation->target_count > 2) {
     set_diagnostic(diagnostic, SIR_DIAGNOSTIC_INVALID_BLOCK, block_index,
                    operation_index,
@@ -480,6 +503,16 @@ static int validate_operation_references(
     if (operation->targets[index] >= function->block_count) {
       set_diagnostic(diagnostic, SIR_DIAGNOSTIC_INVALID_BLOCK, block_index,
                      operation_index, "operation target is not declared");
+      return 0;
+    }
+  }
+  for (index = 0; index < operation->cleanup_slot_count; index++) {
+    if (operation->cleanup_slots[index] >= function->slot_count ||
+        (index != 0 && operation->cleanup_slots[index - 1] <=
+                           operation->cleanup_slots[index])) {
+      set_diagnostic(diagnostic, SIR_DIAGNOSTIC_INVALID_SLOT, block_index,
+                     operation_index,
+                     "return cleanup slots must be unique reverse order");
       return 0;
     }
   }
@@ -647,11 +680,21 @@ static int validate_operation_contract(const sir_function *function,
                    "only explicit calls may reference a resolved signature");
     return 0;
   }
+  if (operation->kind != SIR_OP_RETURN && operation->cleanup_slot_count != 0) {
+    set_diagnostic(diagnostic, SIR_DIAGNOSTIC_INVALID_OPERATION, block_index,
+                   operation_index,
+                   "only return may carry an explicit unwind list");
+    return 0;
+  }
   switch (operation->kind) {
   case SIR_OP_CONSTANT:
     if (result == NULL || operation->operand_count != 0 ||
         operation->target_count != 0 || operation->slot != SIR_INVALID_ID ||
-        !effects_are_pure(operation->effects)) {
+        !effects_are_pure(operation->effects) ||
+        result->type.kind != SIR_TYPE_BOOL ||
+        result->representation != SIR_REP_SCALAR ||
+        result->ownership != SIR_OWNERSHIP_SCALAR ||
+        (operation->bool_value != 0 && operation->bool_value != 1)) {
       break;
     }
     return 1;
@@ -678,6 +721,21 @@ static int validate_operation_contract(const sir_function *function,
     if (result == NULL && operation->slot < function->slot_count &&
         operation->operand_count == 1 && operation->target_count == 0 &&
         value_matches_slot(function, operation->operands[0], operation->slot) &&
+        effects_are_pure(operation->effects)) {
+      return 1;
+    }
+    break;
+  case SIR_OP_ASSIGN_SLOT:
+    if (result == NULL && operation->slot < function->slot_count &&
+        operation->operand_count == 1 && operation->target_count == 0 &&
+        value_matches_slot(function, operation->operands[0], operation->slot) &&
+        effects_are_pure(operation->effects)) {
+      return 1;
+    }
+    break;
+  case SIR_OP_END_SLOT:
+    if (result == NULL && operation->slot < function->slot_count &&
+        operation->operand_count == 0 && operation->target_count == 0 &&
         effects_are_pure(operation->effects)) {
       return 1;
     }

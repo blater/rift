@@ -193,6 +193,36 @@ static sir_id lower_identifier(lower_state *state, ast_t expression) {
   return value_id;
 }
 
+static sir_id lower_bool_constant(lower_state *state, ast_t expression) {
+  sir_value value;
+  sir_operation operation;
+  sir_id value_id;
+  int bool_value;
+  if (expression == NULL || expression->tag != identifier ||
+      (!view_is(expression->data.identifier.id.lexeme, "true") &&
+       !view_is(expression->data.identifier.id.lexeme, "false")))
+    return SIR_INVALID_ID;
+  bool_value = view_is(expression->data.identifier.id.lexeme, "true");
+  value.type = sir_builtin_type(SIR_TYPE_BOOL);
+  value.representation = SIR_REP_SCALAR;
+  value.ownership = SIR_OWNERSHIP_SCALAR;
+  value_id = sir_function_add_value(&state->function, value);
+  if (value_id == SIR_INVALID_ID) {
+    lower_error(state, SIR_DIAGNOSTIC_ALLOCATION_FAILED,
+                "could not allocate boolean constant");
+    return SIR_INVALID_ID;
+  }
+  operation = empty_operation(SIR_OP_CONSTANT);
+  operation.result = value_id;
+  operation.bool_value = bool_value;
+  if (!sir_block_add_operation(&state->function, state->block, &operation)) {
+    lower_error(state, SIR_DIAGNOSTIC_ALLOCATION_FAILED,
+                "could not append boolean constant");
+    return SIR_INVALID_ID;
+  }
+  return value_id;
+}
+
 static sir_id lower_expression(lower_state *state, ast_t expression);
 
 static int resolved_callee(const lower_state *state, ast_t definition,
@@ -254,14 +284,24 @@ static sir_id lower_call(lower_state *state, ast_t expression) {
   for (index = 0; index < signature->parameter_count; index++) {
     const sir_signature_parameter *parameter = &signature->parameters[index];
     sir_id source = lower_expression(state, call->args.data[index]);
-    if (source == SIR_INVALID_ID || parameter->mode != SIR_ARGUMENT_CONSUME ||
+    if (source == SIR_INVALID_ID ||
         !sir_type_equal(state->function.values[source].type, parameter->type) ||
         state->function.values[source].representation !=
-            parameter->representation ||
+            parameter->representation) {
+      lower_error(state, SIR_DIAGNOSTIC_CALL_ABI_MISMATCH,
+                  "selected call argument does not match its ABI");
+      goto failure;
+    }
+    if (parameter->mode == SIR_ARGUMENT_SCALAR &&
+        state->function.values[source].ownership == SIR_OWNERSHIP_SCALAR) {
+      arguments[index] = source;
+      continue;
+    }
+    if (parameter->mode != SIR_ARGUMENT_CONSUME ||
         (state->function.values[source].ownership != SIR_OWNERSHIP_BORROWED &&
          state->function.values[source].ownership != SIR_OWNERSHIP_OWNED)) {
       lower_error(state, SIR_DIAGNOSTIC_CALL_ABI_MISMATCH,
-                  "selected call argument does not match its consuming ABI");
+                  "selected managed call argument is not consumable");
       goto failure;
     }
     value.type = parameter->type;
@@ -317,6 +357,10 @@ static sir_id lower_expression(lower_state *state, ast_t expression) {
                 "semantic expression is missing");
     return SIR_INVALID_ID;
   }
+  if (expression->tag == identifier &&
+      (view_is(expression->data.identifier.id.lexeme, "true") ||
+       view_is(expression->data.identifier.id.lexeme, "false")))
+    return lower_bool_constant(state, expression);
   if (expression->tag == identifier)
     return lower_identifier(state, expression);
   if (expression->tag == funcall)
@@ -334,7 +378,8 @@ static int lower_vardef(lower_state *state, ast_t statement) {
 
   if (statement->data.vardef.is_rec ||
       !metadata_for_type(statement->data.vardef.type, &slot.type,
-                         &slot.representation, &slot.ownership)) {
+                         &slot.representation, &slot.ownership) ||
+      (slot.type.kind != SIR_TYPE_STRING && slot.type.kind != SIR_TYPE_BOOL)) {
     lower_error(state, SIR_DIAGNOSTIC_UNSUPPORTED_AST,
                 "representative lowerer requires an explicit builtin type");
     return 0;
@@ -372,9 +417,61 @@ static int lower_vardef(lower_state *state, ast_t statement) {
   return 1;
 }
 
+static int lower_assignment(lower_state *state, ast_t statement) {
+  size_t binding;
+  sir_id source;
+  sir_slot *slot;
+  sir_operation operation;
+  if (statement->data.assign.target == NULL ||
+      statement->data.assign.target->tag != identifier ||
+      !binding_index(state,
+                     statement->data.assign.target->data.identifier.id.lexeme,
+                     &binding)) {
+    lower_error(state, SIR_DIAGNOSTIC_UNSUPPORTED_AST,
+                "checkpoint assignment requires a local identifier");
+    return 0;
+  }
+  slot = &state->function.slots[state->bindings[binding].slot];
+  source = lower_expression(state, statement->data.assign.expr);
+  if (source == SIR_INVALID_ID)
+    return 0;
+  if (!sir_type_equal(state->function.values[source].type, slot->type) ||
+      state->function.values[source].representation != slot->representation) {
+    lower_error(state, SIR_DIAGNOSTIC_TYPE_MISMATCH,
+                "assignment value does not match its slot");
+    return 0;
+  }
+  operation = empty_operation(SIR_OP_ASSIGN_SLOT);
+  operation.slot = state->bindings[binding].slot;
+  operation.operands = &source;
+  operation.operand_count = 1;
+  if (!sir_block_add_operation(&state->function, state->block, &operation)) {
+    lower_error(state, SIR_DIAGNOSTIC_ALLOCATION_FAILED,
+                "could not append slot assignment");
+    return 0;
+  }
+  return 1;
+}
+
+static int append_end_slots(lower_state *state, size_t binding_base) {
+  size_t index;
+  for (index = state->binding_count; index > binding_base; index--) {
+    sir_operation operation = empty_operation(SIR_OP_END_SLOT);
+    operation.slot = state->bindings[index - 1].slot;
+    if (!sir_block_add_operation(&state->function, state->block, &operation)) {
+      lower_error(state, SIR_DIAGNOSTIC_ALLOCATION_FAILED,
+                  "could not append lexical slot cleanup");
+      return 0;
+    }
+  }
+  return 1;
+}
+
 static int lower_return(lower_state *state, ast_t statement) {
   sir_operation operation;
   sir_id value;
+  sir_id *cleanup_slots = NULL;
+  size_t index;
 
   if (state->function.return_type.kind == SIR_TYPE_VOID) {
     if (statement->data.ret.expr != NULL) {
@@ -400,12 +497,175 @@ static int lower_return(lower_state *state, ast_t statement) {
     operation.operands = &value;
     operation.operand_count = 1;
   }
+  if (state->binding_count != 0) {
+    cleanup_slots = malloc(state->binding_count * sizeof(*cleanup_slots));
+    if (cleanup_slots == NULL) {
+      lower_error(state, SIR_DIAGNOSTIC_ALLOCATION_FAILED,
+                  "could not allocate return unwind list");
+      return 0;
+    }
+    for (index = 0; index < state->binding_count; index++)
+      cleanup_slots[index] =
+          state->bindings[state->binding_count - index - 1].slot;
+    operation.cleanup_slots = cleanup_slots;
+    operation.cleanup_slot_count = state->binding_count;
+  }
   if (!sir_block_add_operation(&state->function, state->block, &operation)) {
+    free(cleanup_slots);
     lower_error(state, SIR_DIAGNOSTIC_ALLOCATION_FAILED,
                 "could not append return operation");
     return 0;
   }
+  free(cleanup_slots);
   return 1;
+}
+
+static int lower_statement(lower_state *state, ast_t statement,
+                           int *terminated);
+
+static int lower_scoped_body(lower_state *state, ast_t body, int *terminated) {
+  size_t binding_base = state->binding_count;
+  size_t index;
+  *terminated = 0;
+  if (body == NULL) {
+    lower_error(state, SIR_DIAGNOSTIC_UNSUPPORTED_AST,
+                "if branch body is missing");
+    return 0;
+  }
+  if (body->tag == compound) {
+    for (index = 0; index < (size_t)body->data.compound.stmts.length; index++) {
+      if (*terminated) {
+        lower_error(state, SIR_DIAGNOSTIC_UNSUPPORTED_AST,
+                    "statement after terminal return is not reachable");
+        return 0;
+      }
+      if (!lower_statement(state, body->data.compound.stmts.data[index],
+                           terminated))
+        return 0;
+    }
+  } else if (!lower_statement(state, body, terminated)) {
+    return 0;
+  }
+  if (!*terminated && !append_end_slots(state, binding_base))
+    return 0;
+  state->binding_count = binding_base;
+  return 1;
+}
+
+static int append_jump(lower_state *state, sir_id block, sir_id target) {
+  sir_operation jump = empty_operation(SIR_OP_JUMP);
+  jump.targets[0] = target;
+  jump.target_count = 1;
+  if (!sir_block_add_operation(&state->function, block, &jump)) {
+    lower_error(state, SIR_DIAGNOSTIC_ALLOCATION_FAILED,
+                "could not append semantic jump");
+    return 0;
+  }
+  return 1;
+}
+
+static int lower_if(lower_state *state, ast_t statement, int *terminated) {
+  sir_id condition;
+  sir_id condition_block = state->block;
+  sir_id true_block;
+  sir_id false_block;
+  sir_id true_end;
+  sir_id false_end;
+  sir_id join_block;
+  sir_operation branch;
+  int true_terminated;
+  int false_terminated = 0;
+
+  condition = lower_expression(state, statement->data.ifstmt.expression);
+  if (condition == SIR_INVALID_ID ||
+      state->function.values[condition].type.kind != SIR_TYPE_BOOL) {
+    lower_error(state, SIR_DIAGNOSTIC_TYPE_MISMATCH,
+                "if condition must be a bool value");
+    return 0;
+  }
+  true_block = sir_function_add_block(&state->function);
+  false_block = sir_function_add_block(&state->function);
+  if (true_block == SIR_INVALID_ID || false_block == SIR_INVALID_ID) {
+    lower_error(state, SIR_DIAGNOSTIC_ALLOCATION_FAILED,
+                "could not allocate if blocks");
+    return 0;
+  }
+  branch = empty_operation(SIR_OP_BRANCH);
+  branch.operands = &condition;
+  branch.operand_count = 1;
+  branch.targets[0] = true_block;
+  branch.targets[1] = false_block;
+  branch.target_count = 2;
+  if (!sir_block_add_operation(&state->function, condition_block, &branch)) {
+    lower_error(state, SIR_DIAGNOSTIC_ALLOCATION_FAILED,
+                "could not append semantic branch");
+    return 0;
+  }
+
+  state->block = true_block;
+  if (!lower_scoped_body(state, statement->data.ifstmt.body, &true_terminated))
+    return 0;
+  true_end = state->block;
+
+  state->block = false_block;
+  if (statement->data.ifstmt.elsestmt != NULL &&
+      !lower_scoped_body(state, statement->data.ifstmt.elsestmt,
+                         &false_terminated))
+    return 0;
+  false_end = state->block;
+
+  if (true_terminated && false_terminated) {
+    state->block = SIR_INVALID_ID;
+    *terminated = 1;
+    return 1;
+  }
+  join_block = sir_function_add_block(&state->function);
+  if (join_block == SIR_INVALID_ID ||
+      (!true_terminated && !append_jump(state, true_end, join_block)) ||
+      (!false_terminated && !append_jump(state, false_end, join_block))) {
+    if (join_block == SIR_INVALID_ID)
+      lower_error(state, SIR_DIAGNOSTIC_ALLOCATION_FAILED,
+                  "could not allocate if join block");
+    return 0;
+  }
+  state->block = join_block;
+  *terminated = 0;
+  return 1;
+}
+
+static int lower_statement(lower_state *state, ast_t statement,
+                           int *terminated) {
+  *terminated = 0;
+  if (statement != NULL && statement->tag == vardef)
+    return lower_vardef(state, statement);
+  if (statement != NULL && statement->tag == assign)
+    return lower_assignment(state, statement);
+  if (statement != NULL && statement->tag == ret) {
+    if (!lower_return(state, statement))
+      return 0;
+    *terminated = 1;
+    return 1;
+  }
+  if (statement != NULL && statement->tag == ifstmt)
+    return lower_if(state, statement, terminated);
+  if (statement != NULL && statement->tag == funcall) {
+    sir_id discarded = lower_call(state, statement);
+    sir_operation boundary;
+    if (discarded == SIR_INVALID_ID)
+      return 0;
+    boundary = empty_operation(SIR_OP_EXPRESSION_END);
+    boundary.operands = &discarded;
+    boundary.operand_count = 1;
+    if (!sir_block_add_operation(&state->function, state->block, &boundary)) {
+      lower_error(state, SIR_DIAGNOSTIC_ALLOCATION_FAILED,
+                  "could not append full-expression boundary");
+      return 0;
+    }
+    return 1;
+  }
+  lower_error(state, SIR_DIAGNOSTIC_UNSUPPORTED_AST,
+              "AST node has no primitive semantic lowering yet");
+  return 0;
 }
 
 sir_lower_options sir_lower_default_options(void) {
@@ -465,17 +725,19 @@ int sir_lower_signature(ast_t function_ast, uint32_t symbol_id,
     if (!metadata_for_type(
             definition->types.data[index], &parameters[index].type,
             &parameters[index].representation, &parameters[index].ownership) ||
-        parameters[index].type.kind != SIR_TYPE_STRING ||
-        parameters[index].ownership != SIR_OWNERSHIP_OWNED) {
+        (parameters[index].type.kind != SIR_TYPE_STRING &&
+         parameters[index].type.kind != SIR_TYPE_BOOL)) {
       free(parameters);
       if (diagnostic != NULL) {
         diagnostic->code = SIR_DIAGNOSTIC_TYPE_MISMATCH;
         diagnostic->message =
-            "checkpoint call parameters require owned strings";
+            "checkpoint call parameters require string or bool values";
       }
       return 0;
     }
-    parameters[index].mode = SIR_ARGUMENT_CONSUME;
+    parameters[index].mode = parameters[index].type.kind == SIR_TYPE_BOOL
+                                 ? SIR_ARGUMENT_SCALAR
+                                 : SIR_ARGUMENT_CONSUME;
   }
   signature->kind = SIR_CALLEE_USER;
   signature->symbol_id = symbol_id;
@@ -501,7 +763,7 @@ sir_lower_result sir_lower_function(ast_t function_ast,
   lower_state state;
   ast_fundef *definition;
   size_t index;
-  int saw_return = 0;
+  int terminated = 0;
 
   if (options == NULL || !options->enabled) {
     return SIR_LOWER_SKIPPED;
@@ -540,7 +802,9 @@ sir_lower_result sir_lower_function(ast_t function_ast,
     sir_slot slot;
     sir_id slot_id;
     if (!metadata_for_type(definition->types.data[index], &slot.type,
-                           &slot.representation, &slot.ownership)) {
+                           &slot.representation, &slot.ownership) ||
+        (slot.type.kind != SIR_TYPE_STRING &&
+         slot.type.kind != SIR_TYPE_BOOL)) {
       lower_error(&state, SIR_DIAGNOSTIC_UNKNOWN_TYPE,
                   "parameter type is not resolved by this checkpoint");
       goto failure;
@@ -568,40 +832,15 @@ sir_lower_result sir_lower_function(ast_t function_ast,
   for (index = 0; index < (size_t)definition->body->data.compound.stmts.length;
        index++) {
     ast_t statement = definition->body->data.compound.stmts.data[index];
-    if (saw_return) {
+    if (terminated) {
       lower_error(&state, SIR_DIAGNOSTIC_UNSUPPORTED_AST,
                   "statement after terminal return is not reachable");
       goto failure;
     }
-    if (statement != NULL && statement->tag == vardef) {
-      if (!lower_vardef(&state, statement)) {
-        goto failure;
-      }
-    } else if (statement != NULL && statement->tag == ret) {
-      if (!lower_return(&state, statement)) {
-        goto failure;
-      }
-      saw_return = 1;
-    } else if (statement != NULL && statement->tag == funcall) {
-      sir_id discarded = lower_call(&state, statement);
-      sir_operation boundary;
-      if (discarded == SIR_INVALID_ID)
-        goto failure;
-      boundary = empty_operation(SIR_OP_EXPRESSION_END);
-      boundary.operands = &discarded;
-      boundary.operand_count = 1;
-      if (!sir_block_add_operation(&state.function, state.block, &boundary)) {
-        lower_error(&state, SIR_DIAGNOSTIC_ALLOCATION_FAILED,
-                    "could not append full-expression boundary");
-        goto failure;
-      }
-    } else {
-      lower_error(&state, SIR_DIAGNOSTIC_UNSUPPORTED_AST,
-                  "AST node has no primitive semantic lowering yet");
+    if (!lower_statement(&state, statement, &terminated))
       goto failure;
-    }
   }
-  if (!saw_return) {
+  if (!terminated) {
     lower_error(&state, SIR_DIAGNOSTIC_INVALID_TERMINATOR,
                 "representative function path must end in return");
     goto failure;

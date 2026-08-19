@@ -5,6 +5,7 @@
 #include <string.h>
 
 static const plan_c_abi RIFT_ABI = {
+    .bool_type = "int",
     .string_type = "string",
     .string_retain = "__string_retain",
     .string_release = "__string_release",
@@ -108,7 +109,8 @@ static int c_identifier(const char *name) {
 }
 
 static int valid_abi(const plan_c_abi *abi) {
-  return abi != NULL && c_identifier(abi->string_type) &&
+  return abi != NULL && abi->bool_type != NULL &&
+         strcmp(abi->bool_type, "int") == 0 && c_identifier(abi->string_type) &&
          c_identifier(abi->string_retain) && c_identifier(abi->string_release);
 }
 
@@ -116,6 +118,12 @@ static int string_token(const ownership_token_view *token) {
   return token->kind == OWNERSHIP_TOKEN_MANAGED &&
          token->type.kind == SIR_TYPE_STRING && token->type.nominal_id == 0 &&
          token->representation == SIR_REP_STRING_DESCRIPTOR;
+}
+
+static int bool_token(const ownership_token_view *token) {
+  return token->kind == OWNERSHIP_TOKEN_SCALAR &&
+         token->type.kind == SIR_TYPE_BOOL && token->type.nominal_id == 0 &&
+         token->representation == SIR_REP_SCALAR;
 }
 
 static int token_name(const ownership_plan *plan, ownership_id token,
@@ -212,6 +220,52 @@ static int validate_operation(const ownership_plan *plan, ownership_id block,
       return 1;
     }
     break;
+  case OWNERSHIP_OP_DEFINE_SCALAR:
+    if (ownership_plan_token_at(plan, operation->result, &token) &&
+        bool_token(&token) &&
+        token_name(plan, operation->result, name_buffer, sizeof(name_buffer),
+                   &name) &&
+        (operation->bool_value == 0 || operation->bool_value == 1)) {
+      return 1;
+    }
+    break;
+  case OWNERSHIP_OP_COPY_SCALAR:
+    if (ownership_plan_token_at(plan, operation->result, &token) &&
+        bool_token(&token) &&
+        token_name(plan, operation->result, name_buffer, sizeof(name_buffer),
+                   &name) &&
+        ownership_plan_token_at(plan, operation->operand, &token) &&
+        bool_token(&token) &&
+        token_name(plan, operation->operand, name_buffer, sizeof(name_buffer),
+                   &name)) {
+      return 1;
+    }
+    break;
+  case OWNERSHIP_OP_REPLACE_SLOT: {
+    ownership_token_view target;
+    if (!ownership_plan_token_at(plan, operation->result, &target) ||
+        (!string_token(&target) && !bool_token(&target)) ||
+        target.origin_kind != OWNERSHIP_ORIGIN_SLOT ||
+        !token_name(plan, operation->result, name_buffer, sizeof(name_buffer),
+                    &name) ||
+        !ownership_plan_token_at(plan, operation->operand, &token) ||
+        token.kind != target.kind || !sir_type_equal(token.type, target.type) ||
+        token.representation != target.representation ||
+        !token_name(plan, operation->operand, name_buffer, sizeof(name_buffer),
+                    &name)) {
+      break;
+    }
+  }
+    return 1;
+  case OWNERSHIP_OP_END_SLOT:
+    if (ownership_plan_token_at(plan, operation->operand, &token) &&
+        (string_token(&token) || bool_token(&token)) &&
+        token.origin_kind == OWNERSHIP_ORIGIN_SLOT &&
+        token_name(plan, operation->operand, name_buffer, sizeof(name_buffer),
+                   &name)) {
+      return 1;
+    }
+    break;
   case OWNERSHIP_OP_CALL: {
     size_t argument_index;
     const char *callee = ownership_plan_callee_symbol(plan, operation->callee);
@@ -226,7 +280,7 @@ static int validate_operation(const ownership_plan *plan, ownership_id block,
          argument_index++) {
       if (!ownership_plan_token_at(plan, operation->operands[argument_index],
                                    &token) ||
-          !string_token(&token) ||
+          (!string_token(&token) && !bool_token(&token)) ||
           !token_name(plan, operation->operands[argument_index], name_buffer,
                       sizeof(name_buffer), &name)) {
         break;
@@ -245,10 +299,22 @@ static int validate_operation(const ownership_plan *plan, ownership_id block,
       return 1;
     }
     break;
-  case OWNERSHIP_OP_DEFINE_SCALAR:
-  case OWNERSHIP_OP_COPY_SCALAR:
   case OWNERSHIP_OP_JUMP:
+    if (operation->target_count == 1 &&
+        operation->targets[0] < ownership_plan_block_count(plan)) {
+      return 1;
+    }
+    break;
   case OWNERSHIP_OP_BRANCH:
+    if (ownership_plan_token_at(plan, operation->operand, &token) &&
+        bool_token(&token) && operation->target_count == 2 &&
+        operation->targets[0] < ownership_plan_block_count(plan) &&
+        operation->targets[1] < ownership_plan_block_count(plan) &&
+        token_name(plan, operation->operand, name_buffer, sizeof(name_buffer),
+                   &name)) {
+      return 1;
+    }
+    break;
   case OWNERSHIP_OP_UNKNOWN:
     break;
   }
@@ -297,19 +363,14 @@ int plan_c_validate(const ownership_plan *plan, const plan_c_abi *abi,
       return 0;
     }
   }
-  if (ownership_plan_block_count(plan) != 1) {
-    set_diagnostic(diagnostic, PLAN_C_DIAGNOSTIC_UNSUPPORTED_PLAN,
-                   OWNERSHIP_INVALID_ID, 0,
-                   "plan C checkpoint requires one straight-line block");
-    return 0;
-  }
-  block = ownership_plan_entry_block(plan);
-  for (index = 0; index < ownership_plan_operation_count(plan, block);
-       index++) {
-    ownership_operation_view operation;
-    if (!ownership_plan_operation_at(plan, block, index, &operation) ||
-        !validate_operation(plan, block, index, &operation, diagnostic)) {
-      return 0;
+  for (block = 0; block < ownership_plan_block_count(plan); block++) {
+    for (index = 0; index < ownership_plan_operation_count(plan, block);
+         index++) {
+      ownership_operation_view operation;
+      if (!ownership_plan_operation_at(plan, block, index, &operation) ||
+          !validate_operation(plan, block, index, &operation, diagnostic)) {
+        return 0;
+      }
     }
   }
   if (function.return_type.kind != SIR_TYPE_STRING ||
@@ -323,9 +384,12 @@ int plan_c_validate(const ownership_plan *plan, const plan_c_abi *abi,
   for (index = 0; index < ownership_plan_slot_count(plan); index++) {
     ownership_slot_view slot;
     (void)ownership_plan_slot_at(plan, (ownership_id)index, &slot);
-    if (slot.type.kind != SIR_TYPE_STRING ||
-        slot.representation != SIR_REP_STRING_DESCRIPTOR ||
-        slot.ownership != SIR_OWNERSHIP_OWNED) {
+    if (!((slot.type.kind == SIR_TYPE_STRING &&
+           slot.representation == SIR_REP_STRING_DESCRIPTOR &&
+           slot.ownership == SIR_OWNERSHIP_OWNED) ||
+          (slot.type.kind == SIR_TYPE_BOOL &&
+           slot.representation == SIR_REP_SCALAR &&
+           slot.ownership == SIR_OWNERSHIP_SCALAR))) {
       set_diagnostic(diagnostic, PLAN_C_DIAGNOSTIC_INVALID_DECLARATION,
                      OWNERSHIP_INVALID_ID, index,
                      "plan slot declaration is outside the string checkpoint");
@@ -349,7 +413,9 @@ static int emit_signature(FILE *output, const ownership_plan *plan,
       continue;
     if (emitted_parameter && fprintf(output, ", ") < 0)
       goto output_failure;
-    if (fprintf(output, "%s rift_plan_slot_%u", abi->string_type,
+    if (fprintf(output, "%s rift_plan_slot_%u",
+                slot.type.kind == SIR_TYPE_BOOL ? abi->bool_type
+                                                : abi->string_type,
                 (unsigned int)index) < 0)
       goto output_failure;
     emitted_parameter = 1;
@@ -449,83 +515,159 @@ int plan_c_emit_function_body(FILE *output, const ownership_plan *plan,
   }
   if (fprintf(output, ");\nreturn rift_plan_adapter_result;\n}\n") < 0 ||
       !emit_signature(output, plan, abi, function.c_symbol, diagnostic) ||
-      fprintf(output, "\n{\n") < 0)
+      fprintf(output, "\n{\ngoto rift_plan_block_%u;\n",
+              (unsigned int)ownership_plan_entry_block(plan)) < 0)
     goto output_failure;
-  block = ownership_plan_entry_block(plan);
-  for (index = 0; index < ownership_plan_operation_count(plan, block);
-       index++) {
-    ownership_operation_view operation;
-    char operand_buffer[64];
-    const char *operand;
-    (void)ownership_plan_operation_at(plan, block, index, &operation);
-    switch (operation.kind) {
-    case OWNERSHIP_OP_ACQUIRE:
-      if (!token_name(plan, operation.result, operand_buffer,
-                      sizeof(operand_buffer), &operand) ||
-          fprintf(output, "%s(%s);\n", abi->string_retain, operand) < 0)
-        goto output_failure;
-      break;
-    case OWNERSHIP_OP_ADOPT:
-      break;
-    case OWNERSHIP_OP_BORROW:
-      if (!emit_definition(output, plan, abi, operation.result,
-                           operation.operand, 0))
-        goto output_failure;
-      break;
-    case OWNERSHIP_OP_HOLD:
-      if (!emit_definition(output, plan, abi, operation.result,
-                           operation.operand, 1))
-        goto output_failure;
-      break;
-    case OWNERSHIP_OP_MOVE:
-      if (!emit_definition(output, plan, abi, operation.result,
-                           operation.operand, 0))
-        goto output_failure;
-      break;
-    case OWNERSHIP_OP_RELEASE:
-      if (!token_name(plan, operation.operand, operand_buffer,
-                      sizeof(operand_buffer), &operand) ||
-          fprintf(output, "%s(%s);\n", abi->string_release, operand) < 0)
-        goto output_failure;
-      break;
-    case OWNERSHIP_OP_END_BORROW:
-      break;
-    case OWNERSHIP_OP_CALL: {
-      size_t argument_index;
-      char result_buffer[64];
-      const char *result;
-      const char *callee = ownership_plan_callee_symbol(plan, operation.callee);
-      if (callee == NULL ||
-          !token_name(plan, operation.result, result_buffer,
-                      sizeof(result_buffer), &result) ||
-          fprintf(output, "%s %s = %s(", abi->string_type, result, callee) < 0)
-        goto output_failure;
-      for (argument_index = 0; argument_index < operation.operand_count;
-           argument_index++) {
-        char argument_buffer[64];
-        const char *argument;
-        if (!token_name(plan, operation.operands[argument_index],
-                        argument_buffer, sizeof(argument_buffer), &argument) ||
-            (argument_index != 0 && fprintf(output, ", ") < 0) ||
-            fprintf(output, "%s", argument) < 0)
-          goto output_failure;
-      }
-      if (fprintf(output, ");\n") < 0)
-        goto output_failure;
-      break;
-    }
-    case OWNERSHIP_OP_RETURN:
-      if (!token_name(plan, operation.operand, operand_buffer,
-                      sizeof(operand_buffer), &operand) ||
-          fprintf(output, "return %s;\n", operand) < 0)
-        goto output_failure;
-      break;
-    case OWNERSHIP_OP_DEFINE_SCALAR:
-    case OWNERSHIP_OP_COPY_SCALAR:
-    case OWNERSHIP_OP_JUMP:
-    case OWNERSHIP_OP_BRANCH:
-    case OWNERSHIP_OP_UNKNOWN:
+  for (block = 0; block < ownership_plan_block_count(plan); block++) {
+    if (fprintf(output, "rift_plan_block_%u: ;\n", (unsigned int)block) < 0)
       goto output_failure;
+    for (index = 0; index < ownership_plan_operation_count(plan, block);
+         index++) {
+      ownership_operation_view operation;
+      char operand_buffer[64];
+      const char *operand;
+      (void)ownership_plan_operation_at(plan, block, index, &operation);
+      switch (operation.kind) {
+      case OWNERSHIP_OP_ACQUIRE:
+        if (!token_name(plan, operation.result, operand_buffer,
+                        sizeof(operand_buffer), &operand) ||
+            fprintf(output, "%s(%s);\n", abi->string_retain, operand) < 0)
+          goto output_failure;
+        break;
+      case OWNERSHIP_OP_ADOPT:
+        break;
+      case OWNERSHIP_OP_BORROW:
+        if (!emit_definition(output, plan, abi, operation.result,
+                             operation.operand, 0))
+          goto output_failure;
+        break;
+      case OWNERSHIP_OP_HOLD:
+        if (!emit_definition(output, plan, abi, operation.result,
+                             operation.operand, 1))
+          goto output_failure;
+        break;
+      case OWNERSHIP_OP_MOVE:
+        if (!emit_definition(output, plan, abi, operation.result,
+                             operation.operand, 0))
+          goto output_failure;
+        break;
+      case OWNERSHIP_OP_RELEASE:
+        if (!token_name(plan, operation.operand, operand_buffer,
+                        sizeof(operand_buffer), &operand) ||
+            fprintf(output, "%s(%s);\n", abi->string_release, operand) < 0)
+          goto output_failure;
+        break;
+      case OWNERSHIP_OP_REPLACE_SLOT: {
+        ownership_token_view target;
+        char result_buffer[64];
+        const char *result;
+        if (!ownership_plan_token_at(plan, operation.result, &target) ||
+            !token_name(plan, operation.result, result_buffer,
+                        sizeof(result_buffer), &result) ||
+            !token_name(plan, operation.operand, operand_buffer,
+                        sizeof(operand_buffer), &operand))
+          goto output_failure;
+        if (string_token(&target) &&
+            fprintf(output, "%s(%s);\n", abi->string_release, result) < 0)
+          goto output_failure;
+        if (fprintf(output, "%s = %s;\n", result, operand) < 0)
+          goto output_failure;
+        break;
+      }
+      case OWNERSHIP_OP_END_SLOT: {
+        ownership_token_view ended;
+        if (!ownership_plan_token_at(plan, operation.operand, &ended) ||
+            !token_name(plan, operation.operand, operand_buffer,
+                        sizeof(operand_buffer), &operand))
+          goto output_failure;
+        if (string_token(&ended) &&
+            fprintf(output, "%s(%s);\n", abi->string_release, operand) < 0)
+          goto output_failure;
+        break;
+      }
+      case OWNERSHIP_OP_END_BORROW:
+        break;
+      case OWNERSHIP_OP_CALL: {
+        size_t argument_index;
+        char result_buffer[64];
+        const char *result;
+        const char *callee =
+            ownership_plan_callee_symbol(plan, operation.callee);
+        if (callee == NULL ||
+            !token_name(plan, operation.result, result_buffer,
+                        sizeof(result_buffer), &result) ||
+            fprintf(output, "%s %s = %s(", abi->string_type, result, callee) <
+                0)
+          goto output_failure;
+        for (argument_index = 0; argument_index < operation.operand_count;
+             argument_index++) {
+          char argument_buffer[64];
+          const char *argument;
+          if (!token_name(plan, operation.operands[argument_index],
+                          argument_buffer, sizeof(argument_buffer),
+                          &argument) ||
+              (argument_index != 0 && fprintf(output, ", ") < 0) ||
+              fprintf(output, "%s", argument) < 0)
+            goto output_failure;
+        }
+        if (fprintf(output, ");\n") < 0)
+          goto output_failure;
+        break;
+      }
+      case OWNERSHIP_OP_RETURN:
+        if (!token_name(plan, operation.operand, operand_buffer,
+                        sizeof(operand_buffer), &operand) ||
+            fprintf(output, "return %s;\n", operand) < 0)
+          goto output_failure;
+        break;
+      case OWNERSHIP_OP_DEFINE_SCALAR: {
+        ownership_token_view result_token;
+        ownership_slot_view slot;
+        char result_buffer[64];
+        const char *result;
+        if (!ownership_plan_token_at(plan, operation.result, &result_token) ||
+            !token_name(plan, operation.result, result_buffer,
+                        sizeof(result_buffer), &result))
+          goto output_failure;
+        if (result_token.origin_kind == OWNERSHIP_ORIGIN_SLOT &&
+            ownership_plan_slot_at(plan, result_token.origin, &slot) &&
+            slot.is_parameter)
+          break;
+        if (fprintf(output, "%s %s = %d;\n", abi->bool_type, result,
+                    operation.bool_value) < 0)
+          goto output_failure;
+        break;
+      }
+      case OWNERSHIP_OP_COPY_SCALAR: {
+        char result_buffer[64];
+        const char *result;
+        if (!token_name(plan, operation.result, result_buffer,
+                        sizeof(result_buffer), &result) ||
+            !token_name(plan, operation.operand, operand_buffer,
+                        sizeof(operand_buffer), &operand) ||
+            fprintf(output, "%s %s = %s;\n", abi->bool_type, result, operand) <
+                0)
+          goto output_failure;
+        break;
+      }
+      case OWNERSHIP_OP_JUMP:
+        if (fprintf(output, "goto rift_plan_block_%u;\n",
+                    (unsigned int)operation.targets[0]) < 0)
+          goto output_failure;
+        break;
+      case OWNERSHIP_OP_BRANCH:
+        if (!token_name(plan, operation.operand, operand_buffer,
+                        sizeof(operand_buffer), &operand) ||
+            fprintf(output,
+                    "if (%s) goto rift_plan_block_%u; else goto "
+                    "rift_plan_block_%u;\n",
+                    operand, (unsigned int)operation.targets[0],
+                    (unsigned int)operation.targets[1]) < 0)
+          goto output_failure;
+        break;
+      case OWNERSHIP_OP_UNKNOWN:
+        goto output_failure;
+      }
     }
   }
   if (fprintf(output, "}") < 0)

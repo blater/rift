@@ -33,6 +33,8 @@ typedef enum ownership_op_kind {
   OWNERSHIP_OP_BORROW,
   OWNERSHIP_OP_HOLD,
   OWNERSHIP_OP_MOVE,
+  OWNERSHIP_OP_REPLACE_SLOT,
+  OWNERSHIP_OP_END_SLOT,
   OWNERSHIP_OP_RELEASE,
   OWNERSHIP_OP_END_BORROW,
   OWNERSHIP_OP_CALL,
@@ -102,6 +104,7 @@ typedef struct ownership_operation_view {
   ownership_id operand;
   ownership_id callee;
   size_t parameter_index;
+  int bool_value;
   const ownership_id *operands;
   size_t operand_count;
   ownership_id targets[2];

@@ -130,6 +130,8 @@ typedef enum sir_op_kind {
   SIR_OP_LOAD_SLOT,
   SIR_OP_BORROW_SLOT,
   SIR_OP_INIT_SLOT,
+  SIR_OP_ASSIGN_SLOT,
+  SIR_OP_END_SLOT,
   SIR_OP_PREPARE_ARGUMENT,
   SIR_OP_PRIMITIVE,
   SIR_OP_CALL,
@@ -163,8 +165,11 @@ typedef struct sir_operation {
   sir_id slot;
   sir_id callee;
   size_t parameter_index;
+  int bool_value;
   sir_id *operands;
   size_t operand_count;
+  sir_id *cleanup_slots;
+  size_t cleanup_slot_count;
   sir_id targets[2];
   size_t target_count;
 } sir_operation;

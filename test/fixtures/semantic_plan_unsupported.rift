@@ -1,5 +1,5 @@
 sub unsupported(string value) returns string {
-  if true {
+  while true {
     return value;
   }
   return value;

@@ -1,0 +1,49 @@
+sub identity(string value) returns string {
+  return value;
+}
+
+sub choose(bool flag, string value) returns string {
+  string result := value;
+  flag := flag;
+  if flag {
+    string local := identity(result);
+    result := local;
+  } else {
+    result := identity(value);
+  }
+  return result;
+}
+
+sub maybe(bool flag, string value) returns string {
+  string result := value;
+  if flag {
+    string local := identity(result);
+    result := local;
+  }
+  return result;
+}
+
+sub early(bool flag, string value) returns string {
+  if flag {
+    string local := identity(value);
+    return local;
+  } else {
+    return identity(value);
+  }
+}
+
+sub exercise(string value) returns string {
+  string truthy := choose(true, value);
+  string falsey := choose(false, truthy);
+  string absent := maybe(false, falsey);
+  string early_true := early(true, absent);
+  return early(false, early_true);
+}
+
+sub main() {
+  string result := "seed";
+  for i := 1 to 200 {
+    result := exercise("branch");
+  }
+  print(result);
+}

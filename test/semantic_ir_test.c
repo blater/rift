@@ -169,11 +169,11 @@ static void test_lowerer_hard_errors(void) {
 
   sir_function_init(&function);
   ast = build_echo_function(nodes, arguments, types, statements);
-  nodes[2].tag = ifstmt;
+  nodes[2].tag = loop;
   expect(sir_lower_function(ast, &options, &function, &diagnostic) ==
                  SIR_LOWER_ERROR &&
              diagnostic.code == SIR_DIAGNOSTIC_UNSUPPORTED_AST,
-         "lowerer hard-errors on unsupported control flow");
+         "lowerer hard-errors on unsupported loop control flow");
   sir_function_destroy(&function);
 }
 

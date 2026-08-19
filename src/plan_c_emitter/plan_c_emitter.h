@@ -6,6 +6,7 @@
 #include <stdio.h>
 
 typedef struct plan_c_abi {
+  const char *bool_type;
   const char *string_type;
   const char *string_retain;
   const char *string_release;

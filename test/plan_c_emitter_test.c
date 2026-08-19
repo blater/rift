@@ -131,6 +131,8 @@ static ownership_plan *build_call_plan(void) {
   operation = sir_test_operation(SIR_OP_RETURN);
   operation.operands = &returned;
   operation.operand_count = 1;
+  operation.cleanup_slots = &slot_id;
+  operation.cleanup_slot_count = 1;
   (void)sir_block_add_operation(&semantic, block, &operation);
   if (!sir_verify_function(&semantic, &environment, &semantic_diagnostic)) {
     sir_function_destroy(&semantic);
@@ -378,7 +380,9 @@ static void test_preflight_is_output_free(void) {
   }
   ownership_plan_destroy(plan);
 
-  plan = build_plan("copy_int", "int");
+  plan = build_plan("echo", "string");
+  plan->blocks[plan->entry_block].operations[0].kind =
+      OWNERSHIP_OP_DEFINE_SCALAR;
   text = NULL;
   size = 0;
   output = open_memstream(&text, &size);
@@ -388,6 +392,28 @@ static void test_preflight_is_output_free(void) {
          "unsupported verified opcode is rejected before emission");
   fflush(output);
   expect(size == 0, "unsupported opcode rejection writes no output bytes");
+  fclose(output);
+  free(text);
+  ownership_plan_destroy(plan);
+
+  plan = build_plan("echo", "string");
+  {
+    ownership_operation *corrupt =
+        &plan->blocks[plan->entry_block].operations[0];
+    corrupt->kind = OWNERSHIP_OP_JUMP;
+    corrupt->result = OWNERSHIP_INVALID_ID;
+    corrupt->target_count = 1;
+    corrupt->targets[0] = OWNERSHIP_INVALID_ID;
+  }
+  text = NULL;
+  size = 0;
+  output = open_memstream(&text, &size);
+  expect(!plan_c_emit_function_body(output, plan, plan_c_rift_abi(),
+                                    &diagnostic) &&
+             diagnostic.code == PLAN_C_DIAGNOSTIC_UNSUPPORTED_PLAN,
+         "invalid sealed CFG target is rejected before emission");
+  fflush(output);
+  expect(size == 0, "invalid sealed CFG target writes no output bytes");
   fclose(output);
   free(text);
   ownership_plan_destroy(plan);

@@ -278,6 +278,133 @@ static void test_unbalanced_join_rejected(void) {
   ownership_plan_internal_destroy(&plan);
 }
 
+static void test_slot_owner_join_accepts_distinct_backing_tokens(void) {
+  ownership_plan plan;
+  ownership_diagnostic diagnostic;
+  ownership_operation op;
+  ownership_token slot_token = managed_string_token();
+  ownership_id entry;
+  ownership_id left;
+  ownership_id right;
+  ownership_id join;
+  ownership_id slot;
+  ownership_id left_value;
+  ownership_id right_value;
+  ownership_id condition;
+
+  ownership_plan_internal_init(&plan);
+  slot_token.origin_kind = OWNERSHIP_ORIGIN_SLOT;
+  slot_token.origin = 0;
+  slot = ownership_plan_internal_add_token(&plan, slot_token);
+  left_value = ownership_plan_internal_add_token(&plan, managed_string_token());
+  right_value =
+      ownership_plan_internal_add_token(&plan, managed_string_token());
+  condition = ownership_plan_internal_add_token(&plan, bool_token());
+  entry = ownership_plan_internal_add_block(&plan);
+  left = ownership_plan_internal_add_block(&plan);
+  right = ownership_plan_internal_add_block(&plan);
+  join = ownership_plan_internal_add_block(&plan);
+  plan.entry_block = entry;
+  op = operation(OWNERSHIP_OP_ADOPT);
+  op.result = slot;
+  (void)ownership_plan_internal_add_operation(&plan, entry, op);
+  op = operation(OWNERSHIP_OP_DEFINE_SCALAR);
+  op.result = condition;
+  (void)ownership_plan_internal_add_operation(&plan, entry, op);
+  op = operation(OWNERSHIP_OP_BRANCH);
+  op.operand = condition;
+  op.targets[0] = left;
+  op.targets[1] = right;
+  op.target_count = 2;
+  (void)ownership_plan_internal_add_operation(&plan, entry, op);
+
+  op = operation(OWNERSHIP_OP_ACQUIRE);
+  op.result = left_value;
+  (void)ownership_plan_internal_add_operation(&plan, left, op);
+  op = operation(OWNERSHIP_OP_REPLACE_SLOT);
+  op.result = slot;
+  op.operand = left_value;
+  (void)ownership_plan_internal_add_operation(&plan, left, op);
+  op = operation(OWNERSHIP_OP_JUMP);
+  op.targets[0] = join;
+  op.target_count = 1;
+  (void)ownership_plan_internal_add_operation(&plan, left, op);
+
+  op = operation(OWNERSHIP_OP_ACQUIRE);
+  op.result = right_value;
+  (void)ownership_plan_internal_add_operation(&plan, right, op);
+  op = operation(OWNERSHIP_OP_REPLACE_SLOT);
+  op.result = slot;
+  op.operand = right_value;
+  (void)ownership_plan_internal_add_operation(&plan, right, op);
+  op = operation(OWNERSHIP_OP_JUMP);
+  op.targets[0] = join;
+  op.target_count = 1;
+  (void)ownership_plan_internal_add_operation(&plan, right, op);
+
+  op = operation(OWNERSHIP_OP_RELEASE);
+  op.operand = slot;
+  (void)ownership_plan_internal_add_operation(&plan, join, op);
+  op = operation(OWNERSHIP_OP_RETURN);
+  (void)ownership_plan_internal_add_operation(&plan, join, op);
+  expect(ownership_plan_internal_verify_and_seal(&plan, &diagnostic),
+         "ownership join tracks the outer slot, not branch token identity");
+  ownership_plan_internal_destroy(&plan);
+}
+
+static void test_live_branch_loan_join_rejected(void) {
+  ownership_plan plan;
+  ownership_diagnostic diagnostic;
+  ownership_operation op;
+  ownership_id entry;
+  ownership_id left;
+  ownership_id right;
+  ownership_id join;
+  ownership_id owner;
+  ownership_id loan;
+  ownership_id condition;
+
+  ownership_plan_internal_init(&plan);
+  owner = ownership_plan_internal_add_token(&plan, managed_string_token());
+  loan = ownership_plan_internal_add_token(&plan, managed_string_token());
+  condition = ownership_plan_internal_add_token(&plan, bool_token());
+  entry = ownership_plan_internal_add_block(&plan);
+  left = ownership_plan_internal_add_block(&plan);
+  right = ownership_plan_internal_add_block(&plan);
+  join = ownership_plan_internal_add_block(&plan);
+  plan.entry_block = entry;
+  op = operation(OWNERSHIP_OP_ACQUIRE);
+  op.result = owner;
+  (void)ownership_plan_internal_add_operation(&plan, entry, op);
+  op = operation(OWNERSHIP_OP_DEFINE_SCALAR);
+  op.result = condition;
+  (void)ownership_plan_internal_add_operation(&plan, entry, op);
+  op = operation(OWNERSHIP_OP_BRANCH);
+  op.operand = condition;
+  op.targets[0] = left;
+  op.targets[1] = right;
+  op.target_count = 2;
+  (void)ownership_plan_internal_add_operation(&plan, entry, op);
+  op = operation(OWNERSHIP_OP_BORROW);
+  op.result = loan;
+  op.operand = owner;
+  (void)ownership_plan_internal_add_operation(&plan, left, op);
+  op = operation(OWNERSHIP_OP_JUMP);
+  op.targets[0] = join;
+  op.target_count = 1;
+  (void)ownership_plan_internal_add_operation(&plan, left, op);
+  (void)ownership_plan_internal_add_operation(&plan, right, op);
+  op = operation(OWNERSHIP_OP_RELEASE);
+  op.operand = owner;
+  (void)ownership_plan_internal_add_operation(&plan, join, op);
+  op = operation(OWNERSHIP_OP_RETURN);
+  (void)ownership_plan_internal_add_operation(&plan, join, op);
+  expect(!ownership_plan_internal_verify_and_seal(&plan, &diagnostic) &&
+             diagnostic.code == OWNERSHIP_DIAGNOSTIC_UNBALANCED_JOIN,
+         "ownership join rejects a branch-only live loan");
+  ownership_plan_internal_destroy(&plan);
+}
+
 static void test_use_after_move_rejected(void) {
   ownership_plan plan;
   ownership_diagnostic diagnostic;
@@ -428,12 +555,13 @@ static void test_unsupported_semantic_op_rejected(void) {
   ownership_diagnostic diagnostic;
   sir_value value;
   sir_operation constant;
+  sir_operation primitive;
   sir_operation return_op;
   sir_id value_id;
   sir_id block;
 
   sir_function_init(&semantic);
-  semantic.return_type = sir_builtin_type(SIR_TYPE_INT);
+  semantic.return_type = sir_builtin_type(SIR_TYPE_BOOL);
   semantic.return_representation = SIR_REP_SCALAR;
   semantic.return_ownership = SIR_OWNERSHIP_SCALAR;
   value.type = semantic.return_type;
@@ -445,8 +573,14 @@ static void test_unsupported_semantic_op_rejected(void) {
   constant = semantic_operation(SIR_OP_CONSTANT);
   constant.result = value_id;
   (void)sir_block_add_operation(&semantic, block, &constant);
+  primitive = semantic_operation(SIR_OP_PRIMITIVE);
+  primitive.primitive = SIR_PRIMITIVE_COPY;
+  primitive.operands = &value_id;
+  primitive.operand_count = 1;
+  primitive.result = sir_function_add_value(&semantic, value);
+  (void)sir_block_add_operation(&semantic, block, &primitive);
   return_op = semantic_operation(SIR_OP_RETURN);
-  return_op.operands = &value_id;
+  return_op.operands = &primitive.result;
   return_op.operand_count = 1;
   (void)sir_block_add_operation(&semantic, block, &return_op);
   expect(sir_verify_function(&semantic, NULL, &semantic_diagnostic),
@@ -464,6 +598,8 @@ int main(void) {
   test_borrow_provenance_rejected();
   test_double_release_rejected();
   test_unbalanced_join_rejected();
+  test_slot_owner_join_accepts_distinct_backing_tokens();
+  test_live_branch_loan_join_rejected();
   test_use_after_move_rejected();
   test_malformed_call_frames_rejected();
   test_unsupported_semantic_op_rejected();

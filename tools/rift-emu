@@ -114,7 +114,7 @@ class ZesaruxAdapter:
   def command(self, artifact):
     return [
         str(self.binary), "--noconfigfile", "--machine", "tbblue", "--vo", "null", "--ao", "null",
-        "--silent", "--noupdates", "--fastautoload", "--quickexit",
+        "--silent", "--noupdates", "--disable-search-menu", "--fastautoload", "--quickexit",
         "--enable-remoteprotocol", "--remoteprotocol-host", "127.0.0.1",
         "--remoteprotocol-port", str(self.port), "--hardware-debug-ports",
     ]

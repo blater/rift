@@ -13,7 +13,7 @@ DRIVER_OBJECTS = $(BUILD)driver_main.o $(BUILD)driver_options.o \
                  $(BUILD)driver_sidecar.o $(BUILD)driver_build_plan.o
 DEPS = $(OBJECTS:.o=.d) $(DRIVER_OBJECTS:.o=.d)
 
-.PHONY: all clean test-driver-locations test-driver-options test-driver-sidecar test-pools test-name-table test-type-method-autocast test-component-manifest test-asset-language test-negative test-refcount test-sprite-runtime test-zesarux-zrcp test-zesarux-maintenance test-zxn-assets test-zxn-sprite test-zxn test-zxn-tiny-print test-zxn-light-core test-autolink test-memory-profile test-zxn-size check-rift-rename
+.PHONY: all clean test-driver-locations test-driver-options test-driver-sidecar test-pools test-name-table test-type-method-autocast test-component-manifest test-asset-language test-negative test-refcount test-sprite-runtime test-zesarux-index-cache test-zesarux-zrcp test-zesarux-maintenance test-zxn-assets test-zxn-sprite test-zxn test-zxn-tiny-print test-zxn-light-core test-autolink test-memory-profile test-zxn-size check-rift-rename
 
 all: $(BUILD) riftc rift $(BUILD)verify-zxn-assets
 
@@ -153,6 +153,9 @@ test-refcount: riftc $(BUILD)string_refcount_test $(BUILD)fixed_array_set_test
 
 test-sprite-runtime:
 	sh test/test_sprite_runtime.sh
+
+test-zesarux-index-cache:
+	tools/test-zesarux-index-cache
 
 test-zesarux-zrcp:
 	tools/test-zesarux-zrcp

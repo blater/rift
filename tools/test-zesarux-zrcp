@@ -110,7 +110,8 @@ def probe(binary, timeout):
   port = reserve_port()
   command = [
       str(binary), "--noconfigfile", "--machine", "tbblue", "--vo", "null",
-      "--ao", "null", "--silent", "--noupdates", "--quickexit",
+      "--ao", "null", "--silent", "--noupdates", "--disable-search-menu",
+      "--quickexit",
       "--enable-remoteprotocol", "--remoteprotocol-host", "127.0.0.1",
       "--remoteprotocol-port", str(port),
   ]

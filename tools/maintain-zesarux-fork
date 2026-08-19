@@ -169,6 +169,7 @@ validate_stack() {
   make -C "$ZESARUX_SOURCE/src" -j"$JOBS"
   [[ -x "$binary" ]] || die "build did not produce executable: $binary"
 
+  ZESARUX_BIN="$binary" "$RIFT_ROOT/tools/test-zesarux-index-cache"
   ZESARUX_BIN="$binary" "$RIFT_ROOT/tools/test-zesarux-noupdates"
   ZESARUX_BIN="$binary" "$RIFT_ROOT/tools/test-zesarux-silent-startup"
   ZESARUX_BIN="$binary" "$RIFT_ROOT/tools/test-zesarux-zrcp"

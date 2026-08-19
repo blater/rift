@@ -48,8 +48,9 @@ def probe(binary):
         encoding="utf-8")
     result = run(binary, [
         "--configfile", str(config), "--machine", "tbblue", "--vo", "null",
-        "--ao", "null", "--nowelcomemessage", "--nosplash", "--quickexit",
-        "--exit-after", "1", "--verbose", "4",
+        "--ao", "null", "--nowelcomemessage", "--nosplash",
+        "--disable-search-menu", "--quickexit", "--exit-after", "1",
+        "--verbose", "4",
     ])
     output = result.stdout + result.stderr
     if result.returncode != 0:

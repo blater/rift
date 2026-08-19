@@ -22,6 +22,13 @@ step mode with the null video driver, checks the acknowledged partial t-state
 reset, and requires a clean emulator shutdown. Routine emulator output is
 captured, so it does not need a quiet-output patch.
 
+On macOS and Linux, ZEsarUX keeps `zesaruxrc` and the generated
+`zesarux_index_menu.idx` under `~/.zesar/`. It migrates both legacy files
+from the root of the home directory on startup. Windows retains its existing
+home-directory behavior. Verify fresh-home and migration behavior with
+`make test-zesarux-index-cache`. Headless Rift automation passes
+`--disable-search-menu`, so it neither needs nor rewrites the interactive index.
+
 `maintain-zesarux-fork` manages the canonical fork as one ordered, atomic patch
 stack. It keeps `main` as a clean upstream mirror, rebases the maintained stack
 once per upstream refresh, runs the full headless gates before publication, and

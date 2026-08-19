@@ -212,9 +212,15 @@ static int build_zxn(const driver_paths *paths,
            pragma_path);
   snprintf(include_option, sizeof(include_option), "-I%s", include_path);
   fprintf(stdout,
-          "ZXN profile: startup=%d, bump-pool=%u, longlived-pool=%u, "
+          "ZXN profile: startup=%d, memory=%s, bump-pool=%u, "
+          "longlived-pool=%u, "
           "tiny-core=%d, light-core=%d\n",
-          plan->startup, options->zxn_bump_pool,
+          plan->startup,
+          options->zxn_pool_overrides
+              ? "custom"
+              : options->memory_mode == DRIVER_MEMORY_COMPACT ? "compact"
+                                                              : "standard",
+          options->zxn_bump_pool,
           options->zxn_longlived_pool, plan->tiny_core, plan->light_core);
   argument_vector arguments = {0};
   argument_push(&arguments, "zcc");

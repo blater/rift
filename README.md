@@ -264,6 +264,21 @@ Build a `.nex` program with Z88DK:
 Rift uses Z88DK’s SDCC backend for this target and publishes the resulting
 NEX-format image with its standard `.nex` extension.
 
+Programs with modest dynamic-memory needs can trade allocation capacity for a
+smaller resident image without knowing how Rift's allocators are divided:
+
+```bash
+./rift --memory=compact hello.rift
+```
+
+`--memory=compact` provides 1.25 KiB of managed dynamic memory and saves 5,888
+bytes when the selected runtime uses the allocator. The default
+`--memory=standard` provides 7 KiB. An undersized configuration fails with a
+named out-of-memory error instead of overwriting other target memory. Advanced
+users can tune one or both capacities with `--zxn-bump-pool=BYTES` and
+`--zxn-longlived-pool=BYTES`; those options override the corresponding preset
+value regardless of their position on the command line.
+
 
 ## Test
 

@@ -17,7 +17,12 @@ void driver_print_usage(const char *program) {
           "  --zxn-test\n"
           "  --allocator-stats\n"
           "  --memory-profile=zxn\n"
+          "  --memory=compact|standard\n"
+          "      compact saves 5,888 bytes; standard gives more allocation "
+          "headroom (default)\n"
           "  --rtl=auto|all\n"
+          "\n"
+          "Advanced ZXN memory options:\n"
           "  --zxn-bump-pool=BYTES\n"
           "  --zxn-longlived-pool=BYTES\n"
           "  --debug\n"
@@ -63,13 +68,13 @@ static int parse_decimal(const char *option, const char *text,
 }
 
 static int validate_options(const driver_options *options,
-                            int pool_options_set) {
+                            int memory_option_set) {
   if (options->zxn_test && options->target != DRIVER_TARGET_ZXN) {
     fprintf(stderr, "--zxn-test requires --target=zxn\n");
     return 0;
   }
-  if (pool_options_set && options->target != DRIVER_TARGET_ZXN) {
-    fprintf(stderr, "ZXN pool capacity options require --target=zxn\n");
+  if (memory_option_set && options->target != DRIVER_TARGET_ZXN) {
+    fprintf(stderr, "ZXN memory options require --target=zxn\n");
     return 0;
   }
   unsigned longlived = options->zxn_longlived_pool;
@@ -98,11 +103,16 @@ int driver_parse_options(int argc, char **argv, driver_options *options) {
   *options = (driver_options){
       .target = DRIVER_TARGET_ZXN,
       .rtl_mode = DRIVER_RTL_AUTO,
+      .memory_mode = DRIVER_MEMORY_STANDARD,
       .zxn_bump_pool = 1024,
       .zxn_longlived_pool = 6144,
   };
   int positional_only = 0;
-  int pool_options_set = 0;
+  int memory_option_set = 0;
+  int bump_override_set = 0;
+  int longlived_override_set = 0;
+  unsigned bump_override = 0;
+  unsigned longlived_override = 0;
   for (int i = 1; i < argc; i++) {
     const char *arg = argv[i];
     if (!positional_only && strcmp(arg, "--") == 0) {
@@ -162,6 +172,25 @@ int driver_parse_options(int argc, char **argv, driver_options *options) {
       options->memory_profile_zxn = 1;
       continue;
     }
+    if (!positional_only && strcmp(arg, "--memory") == 0) {
+      fprintf(stderr, "--memory requires compact or standard\n");
+      return 0;
+    }
+    if (!positional_only && strncmp(arg, "--memory=", 9) == 0) {
+      const char *value = arg + 9;
+      if (strcmp(value, "compact") == 0)
+        options->memory_mode = DRIVER_MEMORY_COMPACT;
+      else if (strcmp(value, "standard") == 0)
+        options->memory_mode = DRIVER_MEMORY_STANDARD;
+      else {
+        fprintf(stderr,
+                "--memory requires compact or standard (received '%s')\n",
+                value);
+        return 0;
+      }
+      memory_option_set = 1;
+      continue;
+    }
     if (!positional_only && strcmp(arg, "--rtl=auto") == 0) {
       options->rtl_mode = DRIVER_RTL_AUTO;
       continue;
@@ -175,18 +204,19 @@ int driver_parse_options(int argc, char **argv, driver_options *options) {
       continue;
     }
     if (!positional_only && strncmp(arg, "--zxn-bump-pool=", 16) == 0) {
-      if (!parse_decimal("--zxn-bump-pool", arg + 16,
-                         &options->zxn_bump_pool))
+      if (!parse_decimal("--zxn-bump-pool", arg + 16, &bump_override))
         return 0;
-      pool_options_set = 1;
+      bump_override_set = 1;
+      memory_option_set = 1;
       continue;
     }
     if (!positional_only &&
         strncmp(arg, "--zxn-longlived-pool=", 21) == 0) {
       if (!parse_decimal("--zxn-longlived-pool", arg + 21,
-                         &options->zxn_longlived_pool))
+                         &longlived_override))
         return 0;
-      pool_options_set = 1;
+      longlived_override_set = 1;
+      memory_option_set = 1;
       continue;
     }
     if (!positional_only && arg[0] == '-') {
@@ -206,5 +236,13 @@ int driver_parse_options(int argc, char **argv, driver_options *options) {
     driver_print_usage(argv[0]);
     return 0;
   }
-  return validate_options(options, pool_options_set);
+  if (options->memory_mode == DRIVER_MEMORY_COMPACT) {
+    options->zxn_bump_pool = 256;
+    options->zxn_longlived_pool = 1024;
+  }
+  if (bump_override_set) options->zxn_bump_pool = bump_override;
+  if (longlived_override_set)
+    options->zxn_longlived_pool = longlived_override;
+  options->zxn_pool_overrides = bump_override_set || longlived_override_set;
+  return validate_options(options, memory_option_set);
 }

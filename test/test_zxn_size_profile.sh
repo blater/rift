@@ -34,8 +34,7 @@ build_debug general "$FIXTURES/zxn_size_general_string.rift"
 build_debug embedded "$FIXTURES/zxn_size_embedded_stdio.rift"
 build_debug sprite "$FIXTURES/sprite_type_methods.rift"
 build_debug hello_all "$FIXTURES/zxn_size_hello.rift" --rtl=all
-build_debug custom "$FIXTURES/zxn_size_general_string.rift" \
-  --zxn-bump-pool=256 --zxn-longlived-pool=1024
+build_debug compact "$FIXTURES/zxn_size_general_string.rift" --memory=compact
 
 EMPTY_NEX_BYTES=$(wc -c <"$TMPDIR_SIZE/empty.nex" | tr -d '[:space:]')
 EMPTY_PREWRAP_BYTES=$(wc -c <"$TMPDIR_SIZE/empty_CODE.bin" | tr -d '[:space:]')
@@ -75,7 +74,8 @@ if grep -q '^#define RIFT_ZXN_TINY_CORE' "$TMPDIR_SIZE/hello_all.exe.c"; then
   exit 1
 fi
 grep -q 'rift_pools_init(RIFT_ZXN_BUMP_POOL_CAPACITY' "$TMPDIR_SIZE/hello_all.exe.c"
-grep -q 'bump-pool=256, longlived-pool=1024' "$TMPDIR_SIZE/custom.log"
+grep -q 'memory=compact, bump-pool=256, longlived-pool=1024' \
+  "$TMPDIR_SIZE/compact.log"
 
 grep -q 'rift_print_bytes("hello world", 11)' "$TMPDIR_SIZE/hello.exe.c"
 grep -q 'RIFT_PROFILE:ZXN_TINY_CORE:STARTUP=31' "$TMPDIR_SIZE/hello.exe.c"
@@ -111,7 +111,7 @@ SPRITE_BYTES=$(wc -c <"$TMPDIR_SIZE/sprite_CODE.bin" | tr -d '[:space:]')
 HELLO_BYTES=$(wc -c <"$TMPDIR_SIZE/hello_CODE.bin" | tr -d '[:space:]')
 CONTROL_BYTES=$(wc -c <"$TMPDIR_SIZE/control_CODE.bin" | tr -d '[:space:]')
 GENERAL_BYTES=$(wc -c <"$TMPDIR_SIZE/general_CODE.bin" | tr -d '[:space:]')
-CUSTOM_BYTES=$(wc -c <"$TMPDIR_SIZE/custom_CODE.bin" | tr -d '[:space:]')
+COMPACT_BYTES=$(wc -c <"$TMPDIR_SIZE/compact_CODE.bin" | tr -d '[:space:]')
 
 if [ "$HELLO_BYTES" -ge "$GENERAL_BYTES" ]; then
   echo "FAIL: tiny hello ($HELLO_BYTES) is not smaller than full string build ($GENERAL_BYTES)" >&2
@@ -129,8 +129,8 @@ if [ $((CONTROL_BYTES - EMPTY_BYTES)) -gt 1400 ]; then
   echo "FAIL: lightweight console overhead exceeds 1400 bytes ($CONTROL_BYTES vs $EMPTY_BYTES)" >&2
   exit 1
 fi
-if [ $((GENERAL_BYTES - CUSTOM_BYTES)) -lt 5000 ]; then
-  echo "FAIL: custom pools did not reclaim the expected static footprint" >&2
+if [ $((GENERAL_BYTES - COMPACT_BYTES)) -ne 5888 ]; then
+  echo "FAIL: compact memory reclaimed $((GENERAL_BYTES - COMPACT_BYTES)) resident bytes, expected 5888" >&2
   exit 1
 fi
 
@@ -189,4 +189,4 @@ echo "PASS: empty tiny-core resident size is $EMPTY_BYTES bytes"
 echo "PASS: assetless byte-backed Sprite adds $((SPRITE_BYTES - EMPTY_BYTES)) resident bytes"
 echo "PASS: literal hello resident size is $HELLO_BYTES bytes"
 echo "PASS: escaped literal resident size is $CONTROL_BYTES bytes with the lightweight console"
-echo "PASS: dynamic-string lightweight core is $GENERAL_BYTES bytes; custom pools reduce it to $CUSTOM_BYTES bytes"
+echo "PASS: dynamic-string lightweight core is $GENERAL_BYTES bytes; compact memory reduces it to $COMPACT_BYTES bytes (saving $((GENERAL_BYTES - COMPACT_BYTES)) bytes)"

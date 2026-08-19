@@ -1,0 +1,10 @@
+sub echo(string value) returns string {
+  string copy := value;
+  return copy;
+}
+
+sub main() {
+  string source := concat("he", "llo");
+  string result := echo(source);
+  print(result);
+}

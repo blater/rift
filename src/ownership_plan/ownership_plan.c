@@ -108,6 +108,11 @@ static int static_operation_contract(const ownership_operation *operation) {
 }
 
 static int token_metadata_valid(const ownership_token *token) {
+  if (token->origin_kind == OWNERSHIP_ORIGIN_UNKNOWN ||
+      (token->origin_kind != OWNERSHIP_ORIGIN_SYNTHETIC &&
+       token->origin == OWNERSHIP_INVALID_ID)) {
+    return 0;
+  }
   switch (token->kind) {
   case OWNERSHIP_TOKEN_SCALAR:
     return token->type.nominal_id == 0 &&
@@ -146,12 +151,19 @@ void ownership_plan_internal_init(ownership_plan *plan) {
 
 void ownership_plan_internal_destroy(ownership_plan *plan) {
   size_t block_index;
+  size_t slot_index;
   if (plan == NULL) {
     return;
   }
   for (block_index = 0; block_index < plan->block_count; block_index++) {
     free(plan->blocks[block_index].operations);
   }
+  for (slot_index = 0; slot_index < plan->slot_count; slot_index++) {
+    free(plan->slots[slot_index].name);
+  }
+  free(plan->function_name);
+  free(plan->function_c_symbol);
+  free(plan->slots);
   free(plan->blocks);
   free(plan->tokens);
   ownership_plan_internal_init(plan);
@@ -202,7 +214,9 @@ int ownership_plan_internal_add_operation(ownership_plan *plan,
   return 1;
 }
 
-static ownership_token token_from_value(const sir_value *value) {
+static ownership_token token_from_value(const sir_value *value,
+                                        ownership_token_origin_kind origin_kind,
+                                        ownership_id origin) {
   ownership_token token;
   token.type = value->type;
   token.representation = value->representation;
@@ -216,15 +230,77 @@ static ownership_token token_from_value(const sir_value *value) {
   } else {
     token.kind = OWNERSHIP_TOKEN_UNKNOWN;
   }
+  token.origin_kind = origin_kind;
+  token.origin = origin;
   return token;
 }
 
-static ownership_token token_from_slot(const sir_slot *slot) {
+static ownership_token token_from_slot(const sir_slot *slot,
+                                       ownership_id slot_id) {
   sir_value value;
   value.type = slot->type;
   value.representation = slot->representation;
   value.ownership = slot->ownership;
-  return token_from_value(&value);
+  return token_from_value(&value, OWNERSHIP_ORIGIN_SLOT, slot_id);
+}
+
+static char *copy_name(string_view name) {
+  char *copy;
+  if ((name.data == NULL && name.length != 0) || name.length == SIZE_MAX) {
+    return NULL;
+  }
+  copy = malloc(name.length + 1);
+  if (copy == NULL) {
+    return NULL;
+  }
+  if (name.length != 0) {
+    memcpy(copy, name.data, name.length);
+  }
+  copy[name.length] = '\0';
+  return copy;
+}
+
+static int copy_declarations(const sir_function *function, ownership_plan *plan,
+                             ownership_diagnostic *diagnostic) {
+  size_t index;
+  plan->function_name = copy_name(function->name);
+  plan->function_c_symbol = copy_name(function->c_symbol);
+  plan->return_type = function->return_type;
+  plan->return_representation = function->return_representation;
+  plan->return_ownership = function->return_ownership;
+  if (plan->function_name == NULL || plan->function_c_symbol == NULL) {
+    set_diagnostic(diagnostic, OWNERSHIP_DIAGNOSTIC_ALLOCATION_FAILED, 0, 0,
+                   OWNERSHIP_INVALID_ID,
+                   "could not copy ownership function declaration");
+    return 0;
+  }
+  if (function->slot_count == 0) {
+    return 1;
+  }
+  plan->slots = calloc(function->slot_count, sizeof(*plan->slots));
+  if (plan->slots == NULL) {
+    set_diagnostic(diagnostic, OWNERSHIP_DIAGNOSTIC_ALLOCATION_FAILED, 0, 0,
+                   OWNERSHIP_INVALID_ID,
+                   "could not allocate ownership slot declarations");
+    return 0;
+  }
+  plan->slot_count = function->slot_count;
+  for (index = 0; index < function->slot_count; index++) {
+    ownership_slot *slot = &plan->slots[index];
+    slot->name = copy_name(function->slots[index].name);
+    slot->type = function->slots[index].type;
+    slot->representation = function->slots[index].representation;
+    slot->ownership = function->slots[index].ownership;
+    slot->is_parameter = function->slots[index].is_parameter;
+    slot->token = OWNERSHIP_INVALID_ID;
+    if (slot->name == NULL) {
+      set_diagnostic(diagnostic, OWNERSHIP_DIAGNOSTIC_ALLOCATION_FAILED, 0, 0,
+                     OWNERSHIP_INVALID_ID,
+                     "could not copy ownership slot declaration");
+      return 0;
+    }
+  }
+  return 1;
 }
 
 static int append_or_fail(ownership_plan *plan, ownership_id block,
@@ -327,6 +403,9 @@ ownership_plan *ownership_plan_build(const sir_function *function,
     return NULL;
   }
   ownership_plan_internal_init(built);
+  if (!copy_declarations(function, built, diagnostic)) {
+    goto failure;
+  }
   slot_tokens = malloc((function->slot_count == 0 ? 1 : function->slot_count) *
                        sizeof(*slot_tokens));
   value_tokens =
@@ -340,14 +419,19 @@ ownership_plan *ownership_plan_build(const sir_function *function,
   }
   for (index = 0; index < function->slot_count; index++) {
     slot_tokens[index] = add_token_or_fail(
-        built, token_from_slot(&function->slots[index]), diagnostic);
+        built, token_from_slot(&function->slots[index], (ownership_id)index),
+        diagnostic);
     if (slot_tokens[index] == OWNERSHIP_INVALID_ID) {
       goto failure;
     }
+    built->slots[index].token = slot_tokens[index];
   }
   for (index = 0; index < function->value_count; index++) {
     value_tokens[index] = add_token_or_fail(
-        built, token_from_value(&function->values[index]), diagnostic);
+        built,
+        token_from_value(&function->values[index], OWNERSHIP_ORIGIN_VALUE,
+                         (ownership_id)index),
+        diagnostic);
     if (value_tokens[index] == OWNERSHIP_INVALID_ID) {
       goto failure;
     }
@@ -398,8 +482,9 @@ ownership_plan *ownership_plan_build(const sir_function *function,
         source_token = value_tokens[source->operands[0]];
         if (function->values[source->operands[0]].ownership ==
             SIR_OWNERSHIP_BORROWED) {
-          ownership_token token =
-              token_from_value(&function->values[source->operands[0]]);
+          ownership_token token = token_from_value(
+              &function->values[source->operands[0]],
+              OWNERSHIP_ORIGIN_SYNTHETIC, OWNERSHIP_INVALID_ID);
           ownership_id held = add_token_or_fail(built, token, diagnostic);
           ownership_operation hold;
           if (held == OWNERSHIP_INVALID_ID) {
@@ -945,6 +1030,40 @@ void ownership_plan_destroy(ownership_plan *plan) {
 
 int ownership_plan_is_verified(const ownership_plan *plan) {
   return plan != NULL && plan->sealed;
+}
+
+int ownership_plan_function(const ownership_plan *plan,
+                            ownership_function_view *view) {
+  if (!ownership_plan_is_verified(plan) || view == NULL) {
+    return 0;
+  }
+  view->name = plan->function_name;
+  view->c_symbol = plan->function_c_symbol;
+  view->return_type = plan->return_type;
+  view->return_representation = plan->return_representation;
+  view->return_ownership = plan->return_ownership;
+  return 1;
+}
+
+size_t ownership_plan_slot_count(const ownership_plan *plan) {
+  return ownership_plan_is_verified(plan) ? plan->slot_count : 0;
+}
+
+int ownership_plan_slot_at(const ownership_plan *plan, ownership_id slot,
+                           ownership_slot_view *view) {
+  ownership_slot *source;
+  if (!ownership_plan_is_verified(plan) || view == NULL ||
+      slot >= plan->slot_count) {
+    return 0;
+  }
+  source = &plan->slots[slot];
+  view->name = source->name;
+  view->type = source->type;
+  view->representation = source->representation;
+  view->ownership = source->ownership;
+  view->is_parameter = source->is_parameter;
+  view->token = source->token;
+  return 1;
 }
 
 size_t ownership_plan_token_count(const ownership_plan *plan) {

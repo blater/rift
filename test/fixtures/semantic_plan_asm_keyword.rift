@@ -1,0 +1,8 @@
+sub asm(string asm) returns string {
+  string copy := asm;
+  return copy;
+}
+
+sub main() {
+  print(asm("asm"));
+}

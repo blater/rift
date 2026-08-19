@@ -1,6 +1,8 @@
 #ifndef SEMANTIC_IR_H
 #define SEMANTIC_IR_H
 
+#include "stringview.h"
+
 #include <stddef.h>
 #include <stdint.h>
 
@@ -143,6 +145,7 @@ typedef struct sir_value {
 } sir_value;
 
 typedef struct sir_slot {
+  string_view name;
   sir_type type;
   sir_representation representation;
   sir_ownership ownership;
@@ -169,6 +172,8 @@ typedef struct sir_block {
 } sir_block;
 
 typedef struct sir_function {
+  string_view name;
+  string_view c_symbol;
   sir_type return_type;
   sir_representation return_representation;
   sir_ownership return_ownership;

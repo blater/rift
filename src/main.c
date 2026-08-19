@@ -42,6 +42,7 @@ int main(int argc, char *argv[]) {
   int auto_cast = 0;
   int zxn_test = 0;
   int select_all_components = 0;
+  int semantic_plan = 0;
   char *manifest_path = NULL;
 
   for (int i = 1; i < argc; i++) {
@@ -73,6 +74,11 @@ int main(int argc, char *argv[]) {
       }
       else if (strcmp(arg, "--components=all") == 0) {
         select_all_components = 1;
+      }
+      else if (strcmp(arg, "--semantic-plan") == 0) {
+        /* Compiler-internal checkpoint gate. Deliberately omitted from the
+         * public driver and help text until the complete language is lowered. */
+        semantic_plan = 1;
       }
       //  else if (*(arg + 1) == 't' && !print_tree)
       //   print_tree = 1;
@@ -165,6 +171,7 @@ int main(int argc, char *argv[]) {
       .auto_cast = auto_cast,
       .zxn_test = zxn_test,
       .select_all_components = select_all_components,
+      .semantic_plan = semantic_plan,
   };
   generator_t *g = new_generator(cout, output, components, generator_config);
   transpile(g, p.prog);

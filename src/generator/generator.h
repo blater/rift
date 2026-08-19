@@ -22,6 +22,7 @@ typedef struct generator_options {
   int auto_cast;
   int zxn_test;
   int select_all_components;
+  int semantic_plan;
 } generator_options;
 
 generator_t *new_generator(char *filename, const char *output_base,

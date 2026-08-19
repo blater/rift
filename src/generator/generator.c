@@ -8,6 +8,7 @@
 #include "components.h"
 #include "ownership.h"
 #include "profile.h"
+#include "semantic_plan.h"
 #include "type_info.h"
 #include "semantic/resolve.h"
 #include "lib/alloc.h"
@@ -700,6 +701,7 @@ generator_t *new_generator(char *filename, const char *output_base,
            output_base);
   res->asset_decls = new_ast_array();
   res->select_all_components = options.select_all_components;
+  res->semantic_plan_enabled = options.semantic_plan;
 
   register_builtin_type(&res->table, "int");
   register_builtin_type(&res->table, "byte");
@@ -776,6 +778,7 @@ void kill_generator(generator_t *g) {
     fclose(g->pre_f);
   }
   asset_generator_free(g->assets);
+  semantic_plan_destroy(g->semantic_plans);
 }
 
 void generate_subscript(generator_t *g, ast_t expr) {
@@ -1285,7 +1288,11 @@ void generate_funcall(generator_t *g, ast_t fun) {
       fprintf(f, ")");
     } else {
       // Emit plain function call (mangled if the name is overloaded)
-      if (func_ref->tag == fundef && func_ref->data.fundef.emitted_c_name)
+      const char *semantic_symbol =
+          semantic_plan_function_symbol(g->semantic_plans, func_ref);
+      if (semantic_symbol)
+        fprintf(f, "%s", semantic_symbol);
+      else if (func_ref->tag == fundef && func_ref->data.fundef.emitted_c_name)
         fprintf(f, "%s", func_ref->data.fundef.emitted_c_name);
       else
         emit_fun_name(f, g, funcall.name.lexeme, funcall.args.length);
@@ -2376,7 +2383,8 @@ void generate_return(generator_t *g, ast_t ret_ast) {
      * wrap captured an extra reference to the return value's backing so
      * the release dec's it back to its pre-call refcount, then the
      * caller's transfer takes ownership. */
-    if (expr_returns_string(ret_ast->data.ret.expr, g->table)) {
+    if (!inferred_input &&
+        expr_returns_string(ret_ast->data.ret.expr, g->table)) {
       char retval[32];
       char source[32];
       int explicit_producer_release =
@@ -2560,6 +2568,12 @@ void generate_compound(generator_t *g, ast_t comp) {
 void generate_function_body(generator_t *g, ast_t fun) {
   FILE *f = g->f;
   ast_fundef fundef = fun->data.fundef;
+  if (g->semantic_plan_enabled && g->semantic_plans != NULL &&
+      semantic_plan_selects(g->semantic_plans, fun)) {
+    error(fundef.name.filename, fundef.name.line, fundef.name.col,
+          "internal semantic-plan error: selected body entered legacy lowering");
+    return;
+  }
   int bump_mark_id = g->bump_mark_counter++;
   fprintf(f, "{");
   fprintf(f, "rift_bump_mark __bm_%d = rift_bump_save();\n", bump_mark_id);
@@ -2608,6 +2622,26 @@ void generate_fundef(generator_t *g, ast_t fun) {
   ast_fundef fundef = fun->data.fundef;
   new_nt_scope(&g->table);
 
+  if (g->semantic_plan_enabled &&
+      semantic_plan_selects(g->semantic_plans, fun)) {
+    semantic_plan_diagnostic diagnostic;
+    if (!semantic_plan_emit_signature(g->semantic_plans, fun, f,
+                                      &diagnostic)) {
+      error(fundef.name.filename, fundef.name.line, fundef.name.col,
+            "semantic-plan signature emission failed: %s",
+            diagnostic.message ? diagnostic.message : "unknown error");
+    }
+    fprintf(f, "\n");
+    if (!semantic_plan_emit_body(g->semantic_plans, fun, f, &diagnostic)) {
+      error(fundef.name.filename, fundef.name.line, fundef.name.col,
+            "semantic-plan body emission failed: %s",
+            diagnostic.message ? diagnostic.message : "unknown error");
+    }
+    fprintf(f, "\n\n");
+    end_nt_scope(&g->table);
+    return;
+  }
+
   string_view emit_name;
   if (fundef.method_kind != METHOD_NONE)
     emit_name = sv_from_cstr(mangle_fundef_method(fundef));
@@ -2642,7 +2676,16 @@ void generate_fundef(generator_t *g, ast_t fun) {
       g->current_module_type = fundef.type_name.lexeme;
     int saved_global = g->in_global_scope;
     g->in_global_scope = 0;
-    generate_function_body(g, fun);
+    if (g->semantic_plan_enabled) {
+      semantic_plan_diagnostic diagnostic;
+      if (!semantic_plan_emit_body(g->semantic_plans, fun, f, &diagnostic)) {
+        error(fundef.name.filename, fundef.name.line, fundef.name.col,
+              "semantic-plan emission failed: %s",
+              diagnostic.message ? diagnostic.message : "unknown error");
+      }
+    } else {
+      generate_function_body(g, fun);
+    }
     g->in_global_scope = saved_global;
     g->current_module_type = saved_module_type;
     fprintf(f, "\n\n");
@@ -2810,6 +2853,18 @@ void generate_forward_defs(generator_t *g, ast_t program) {
       ast_fundef fundef = stmt->data.fundef;
       if (fundef.method_kind != METHOD_NONE ||
           svcmp(fundef.name.lexeme, sv_from_cstr("main")) != 0) {
+        if (g->semantic_plan_enabled &&
+            semantic_plan_selects(g->semantic_plans, stmt)) {
+          semantic_plan_diagnostic diagnostic;
+          if (!semantic_plan_emit_signature(g->semantic_plans, stmt, f,
+                                            &diagnostic)) {
+            error(fundef.name.filename, fundef.name.line, fundef.name.col,
+                  "semantic-plan signature emission failed: %s",
+                  diagnostic.message ? diagnostic.message : "unknown error");
+          }
+          fprintf(f, ";\n\n");
+          continue;
+        }
         generate_type(f, fundef.ret_type);
 
         if (fundef.method_kind != METHOD_NONE) {
@@ -2989,6 +3044,19 @@ void transpile(generator_t *g, ast_t program) {
 
   semantic_prepare_program(g, program);
   if (get_error_count() > 0) return;
+  if (g->semantic_plan_enabled) {
+    semantic_plan_diagnostic diagnostic;
+    g->semantic_plans = semantic_plan_prepare(program, &diagnostic);
+    if (g->semantic_plans == NULL) {
+      token_t location = diagnostic.function
+                             ? token_for_expr(diagnostic.function)
+                             : token_for_expr(program);
+      error(location.filename, location.line, location.col,
+            "semantic-plan preflight failed: %s",
+            diagnostic.message ? diagnostic.message : "unknown error");
+      return;
+    }
+  }
   g->assets = asset_generator_plan(g->asset_decls);
   if (get_error_count() > 0) return;
   generator_profile_analysis tiny = generator_analyse_profile(g->target, program);

@@ -87,17 +87,23 @@ static sir_operation semantic_operation(sir_op_kind kind) {
 
 static ownership_token managed_string_token(void) {
   ownership_token token;
+  memset(&token, 0, sizeof(token));
   token.kind = OWNERSHIP_TOKEN_MANAGED;
   token.type = sir_builtin_type(SIR_TYPE_STRING);
   token.representation = SIR_REP_STRING_DESCRIPTOR;
+  token.origin_kind = OWNERSHIP_ORIGIN_SYNTHETIC;
+  token.origin = OWNERSHIP_INVALID_ID;
   return token;
 }
 
 static ownership_token bool_token(void) {
   ownership_token token;
+  memset(&token, 0, sizeof(token));
   token.kind = OWNERSHIP_TOKEN_SCALAR;
   token.type = sir_builtin_type(SIR_TYPE_BOOL);
   token.representation = SIR_REP_SCALAR;
+  token.origin_kind = OWNERSHIP_ORIGIN_SYNTHETIC;
+  token.origin = OWNERSHIP_INVALID_ID;
   return token;
 }
 

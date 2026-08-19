@@ -1,0 +1,9 @@
+sub unsupported(string value) returns string {
+  if true {
+    return value;
+  }
+  return value;
+}
+
+sub main() {
+}

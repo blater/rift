@@ -1,0 +1,8 @@
+sub echo_collision(string __rift_plan_t_2) returns string {
+  string copy := __rift_plan_t_2;
+  return copy;
+}
+
+sub main() {
+  print(echo_collision("collision"));
+}

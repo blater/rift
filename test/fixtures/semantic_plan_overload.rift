@@ -1,0 +1,14 @@
+sub echo(string value) returns string {
+  string copy := value;
+  return copy;
+}
+
+sub echo(string first, string ignored) returns string {
+  string copy := first;
+  return copy;
+}
+
+sub main() {
+  print(echo("one"));
+  print(echo("two", "ignored"));
+}

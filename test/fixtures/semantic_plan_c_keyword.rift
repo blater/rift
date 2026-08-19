@@ -1,0 +1,8 @@
+sub restrict(string restrict) returns string {
+  string copy := restrict;
+  return copy;
+}
+
+sub main() {
+  print(restrict("restrict"));
+}

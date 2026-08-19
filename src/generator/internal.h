@@ -6,6 +6,8 @@
 #include "name_table.h"
 #include <stdio.h>
 
+typedef struct semantic_plan_program semantic_plan_program;
+
 typedef enum {
   TRACK_STRING,
   TRACK_ARRAY,
@@ -60,6 +62,8 @@ struct generator_t {
   int in_main_body;
   int main_needs_epilogue;
   int select_all_components;
+  int semantic_plan_enabled;
+  semantic_plan_program *semantic_plans;
   unsigned char opaque_value_used[COMPONENT_MANIFEST_MAX_INTERFACES];
   unsigned char opaque_array_used[COMPONENT_MANIFEST_MAX_INTERFACES];
   int zxn_tiny_eligible;

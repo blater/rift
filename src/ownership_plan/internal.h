@@ -12,7 +12,23 @@ typedef struct ownership_block {
   size_t operation_capacity;
 } ownership_block;
 
+typedef struct ownership_slot {
+  char *name;
+  sir_type type;
+  sir_representation representation;
+  sir_ownership ownership;
+  int is_parameter;
+  ownership_id token;
+} ownership_slot;
+
 struct ownership_plan {
+  char *function_name;
+  char *function_c_symbol;
+  sir_type return_type;
+  sir_representation return_representation;
+  sir_ownership return_ownership;
+  ownership_slot *slots;
+  size_t slot_count;
   ownership_token *tokens;
   size_t token_count;
   size_t token_capacity;

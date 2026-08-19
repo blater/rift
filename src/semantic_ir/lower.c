@@ -215,6 +215,7 @@ static int lower_vardef(lower_state *state, ast_t statement) {
     return 0;
   }
   slot.is_parameter = 0;
+  slot.name = statement->data.vardef.name.lexeme;
   slot_id = sir_function_add_slot(&state->function, slot);
   if (slot_id == SIR_INVALID_ID ||
       !add_binding(state, statement->data.vardef.name.lexeme, slot_id)) {
@@ -303,6 +304,8 @@ sir_lower_result sir_lower_function(ast_t function_ast,
     goto failure;
   }
   definition = &function_ast->data.fundef;
+  state.function.name = definition->name.lexeme;
+  state.function.c_symbol = definition->name.lexeme;
   if (!metadata_for_type(definition->ret_type, &state.function.return_type,
                          &state.function.return_representation,
                          &state.function.return_ownership)) {
@@ -326,6 +329,7 @@ sir_lower_result sir_lower_function(ast_t function_ast,
       goto failure;
     }
     slot.is_parameter = 1;
+    slot.name = definition->args.data[index].lexeme;
     slot_id = sir_function_add_slot(&state.function, slot);
     if (slot_id == SIR_INVALID_ID ||
         !add_binding(&state, definition->args.data[index].lexeme, slot_id)) {

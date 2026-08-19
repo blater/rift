@@ -8,13 +8,14 @@ OBJECTS = $(BUILD)alloc.o $(BUILD)ast.o $(BUILD)lexer.o $(BUILD)token.o \
           $(BUILD)parser.o $(BUILD)generator.o $(BUILD)generator_components.o $(BUILD)generator_ownership.o $(BUILD)generator_profile.o $(BUILD)generator_type_info.o $(BUILD)name_table.o \
           $(BUILD)stringview.o $(BUILD)error.o $(BUILD)component_manifest.o $(BUILD)asset_generator.o $(BUILD)typechecker.o \
           $(BUILD)semantic_resolve.o $(BUILD)semantic_ir.o $(BUILD)semantic_ir_lower.o \
-          $(BUILD)ownership_plan.o $(BUILD)main.o
+          $(BUILD)ownership_plan.o $(BUILD)plan_c_emitter.o \
+          $(BUILD)generator_semantic_plan.o $(BUILD)main.o
 DRIVER_OBJECTS = $(BUILD)driver_main.o $(BUILD)driver_options.o \
                  $(BUILD)driver_paths.o $(BUILD)driver_process.o \
                  $(BUILD)driver_sidecar.o $(BUILD)driver_build_plan.o
 DEPS = $(OBJECTS:.o=.d) $(DRIVER_OBJECTS:.o=.d)
 
-.PHONY: all clean test-driver-locations test-driver-options test-driver-sidecar test-arena test-pools test-name-table test-semantic-ir test-ownership-plan test-type-method-autocast test-component-manifest test-asset-language test-negative test-refcount test-sprite-runtime test-zesarux-index-cache test-zesarux-zrcp test-zesarux-maintenance test-zxn-assets test-zxn-sprite test-zxn test-zxn-tiny-print test-zxn-light-core test-autolink test-memory-options test-memory-profile test-zxn-size check-rift-rename
+.PHONY: all clean test-driver-locations test-driver-options test-driver-sidecar test-arena test-pools test-name-table test-semantic-ir test-ownership-plan test-semantic-plan test-type-method-autocast test-component-manifest test-asset-language test-negative test-refcount test-sprite-runtime test-zesarux-index-cache test-zesarux-zrcp test-zesarux-maintenance test-zxn-assets test-zxn-sprite test-zxn test-zxn-tiny-print test-zxn-light-core test-autolink test-memory-options test-memory-profile test-zxn-size check-rift-rename
 
 all: $(BUILD) riftc rift $(BUILD)verify-zxn-assets
 
@@ -49,6 +50,12 @@ $(BUILD)semantic_ir_lower.o: $(SRC)semantic_ir/lower.c | $(BUILD)
 	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
 
 $(BUILD)ownership_plan.o: $(SRC)ownership_plan/ownership_plan.c | $(BUILD)
+	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
+
+$(BUILD)plan_c_emitter.o: $(SRC)plan_c_emitter/plan_c_emitter.c | $(BUILD)
+	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
+
+$(BUILD)generator_semantic_plan.o: $(SRC)generator/semantic_plan.c | $(BUILD)
 	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
 
 $(BUILD)driver_%.o: $(SRC)driver/%.c | $(BUILD)
@@ -115,6 +122,17 @@ $(BUILD)ownership_plan_test: test/ownership_plan_test.c \
 
 test-ownership-plan: $(BUILD)ownership_plan_test
 	$(BUILD)ownership_plan_test
+
+$(BUILD)plan_c_emitter_test: test/plan_c_emitter_test.c \
+                               $(BUILD)semantic_ir.o \
+                               $(BUILD)semantic_ir_lower.o \
+                               $(BUILD)ownership_plan.o \
+                               $(BUILD)plan_c_emitter.o | $(BUILD)
+	$(CC) $(CFLAGS) -o $@ $^
+
+test-semantic-plan: riftc $(BUILD)plan_c_emitter_test
+	$(BUILD)plan_c_emitter_test
+	sh test/test_semantic_plan.sh
 
 test-driver-locations: rift riftc
 	sh test/build_locations_test.sh

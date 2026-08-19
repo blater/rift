@@ -491,14 +491,25 @@ component_manifest *load_component_manifest(const char *path) {
       entry->shutdown_hook = manifest_copy(fields[9]);
       entry->always = strcmp(fields[10], "always") == 0;
       entry->zxn_startup31_safe =
-          count == 12 && strcmp(fields[11], "startup31") == 0;
+          count == 12 && list_contains(fields[11], "startup31");
+      entry->zxn_pools_required =
+          count == 12 && list_contains(fields[11], "pools");
       if (entry->id[0] == '\0') manifest_error(path, line_number, "has an empty component ID");
       if (fields[10][0] && strcmp(fields[10], "always") != 0)
         manifest_error(path, line_number, "component selection must be empty or always");
-      if (count == 12 && fields[11][0] &&
-          strcmp(fields[11], "startup31") != 0)
-        manifest_error(path, line_number,
-                       "component ZXN capability must be empty or startup31");
+      if (count == 12) {
+        char capability[128];
+        int capability_count = component_parameter_count(fields[11]);
+        for (int i = 0; i < capability_count; i++) {
+          if (!component_parameter_at(fields[11], i, capability,
+                                      sizeof(capability)) ||
+              (strcmp(capability, "startup31") != 0 &&
+               strcmp(capability, "pools") != 0))
+            manifest_error(
+                path, line_number,
+                "component ZXN capabilities must contain only startup31 or pools");
+        }
+      }
       continue;
     }
 

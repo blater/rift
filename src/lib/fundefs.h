@@ -66,7 +66,8 @@ void  __handle_release(void *payload);
 /* Return materialisation for aggregate handles. Behaviourally identical
  * to __handle_retain — kept as a distinct symbol so ADR-0003 §16.3
  * structural greps can pick out return sites from generic retains. */
-#if defined(__SDCC) && defined(RIFT_ZXN_TINY_CORE)
+#if defined(__SDCC) && \
+    (defined(RIFT_ZXN_NO_POOLS) || defined(RIFT_ZXN_TINY_CORE))
 #define __return_handle(payload) (payload)
 #else
 static inline void *__return_handle(void *payload) {

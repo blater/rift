@@ -10,7 +10,7 @@ may not contain whitespace, shell syntax, absolute paths, or `..` path
 segments. The manifest is parsed as data and is never sourced or evaluated.
 
 ```text
-component|id|dependencies|headers|host-c|zxn-c|host-asm|zxn-asm|init|shutdown|always?
+component|id|dependencies|headers|host-c|zxn-c|host-asm|zxn-asm|init|shutdown|always?|zxn-capabilities
 builtin|rift-name|component|return-type|parameter-types|C-symbol|
 lowered|rift-name|component|return-type|parameter-types|C-symbol|
 opaque|Rift-type|component|constructor-name|C-symbol
@@ -20,7 +20,11 @@ method|owner|instance/type|name|component|return-type|parameter-types|C-symbol|
 ```
 
 Component IDs are lowercase C identifiers. Paths are relative to `src/lib`.
-`always` is the only non-empty selection flag. Headers describe public
+`always` is the only non-empty selection flag. ZXN capabilities are the
+comma-separated values `startup31` and `pools`: the former says the component
+is safe with startup 31, while the latter says its closure needs the allocator.
+These are independent—a pool-free component may still require startup 1.
+Headers describe public
 interfaces and are always included, so an opaque handle remains usable in
 parameters and aggregates without selecting its implementation. Calling an
 opaque constructor or registered builtin/method selects its direct component.
@@ -53,8 +57,11 @@ The compiler's profile is authoritative. The native driver translates it into
 toolchain startup and preprocessor options but does not reclassify the profile
 by inspecting selected component names.
 
-The sidecar begins with `RIFT_COMPONENTS_V1`, then an `@profile=full`,
-`core-31`, `tiny-31`, or `tiny-console-31` record, followed by component IDs.
+The sidecar begins with `RIFT_COMPONENTS_V1`, an
+`@pools=none|required` record, then an `@profile=full`, `core-31`, `tiny-31`,
+or `tiny-console-31` record, followed by component IDs. The driver maps the
+profile to startup/console flags and the pool record separately to
+`RIFT_ZXN_NO_POOLS`.
 `tiny-31`
 covers empty programs and plain-ASCII literal output through the smallest
 direct ULA writer. `tiny-console-31` adds Rift-owned newline, carriage-return,

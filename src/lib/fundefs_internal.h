@@ -6,7 +6,8 @@
 
 #define __INTERNAL_DYNAMIC_ARRAY_CAP 64
 
-#if defined(__SDCC) && defined(RIFT_ZXN_TINY_CORE)
+#if defined(__SDCC) && \
+    (defined(RIFT_ZXN_NO_POOLS) || defined(RIFT_ZXN_TINY_CORE))
 #define __internal_set_dynamic_array_initial_capacity(capacity) ((void)(capacity))
 #else
 void __internal_set_dynamic_array_initial_capacity(size_t capacity);
@@ -43,7 +44,8 @@ size_t __length_string(string s);
 #endif
 
 __internal_dynamic_array_t get_args(void);
-#if defined(__SDCC) && defined(RIFT_ZXN_TINY_CORE)
+#if defined(__SDCC) && \
+    (defined(RIFT_ZXN_NO_POOLS) || defined(RIFT_ZXN_TINY_CORE))
 #define fill_cmd_args(argc, argv) ((void)(argc), (void)(argv))
 #else
 void fill_cmd_args(int argc, char **argv);

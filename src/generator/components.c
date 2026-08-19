@@ -259,6 +259,7 @@ void generator_write_component_output(generator_t *g) {
     exit(1);
   }
   fprintf(file, "RIFT_COMPONENTS_V1\n");
+  fprintf(file, "@pools=%s\n", g->zxn_pools_required ? "required" : "none");
   fprintf(file, "@profile=%s\n",
           g->zxn_tiny_eligible
               ? (g->zxn_tiny_uses_stdout

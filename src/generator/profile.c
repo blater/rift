@@ -11,6 +11,23 @@ static int stdout_literal_is_simple(token_t tok) {
   return 1;
 }
 
+static int fundef_has_scalar_signature(ast_fundef function) {
+  if (!function.ret_type || function.ret_type->tag != type) return 0;
+  ast_type result = function.ret_type->data.type;
+  if (result.is_array ||
+      svcmp(result.name.lexeme, sv_from_cstr("string")) == 0)
+    return 0;
+  for (int i = 0; i < function.types.length; i++) {
+    if (!function.types.data[i] || function.types.data[i]->tag != type)
+      return 0;
+    ast_type parameter = function.types.data[i]->data.type;
+    if (parameter.is_array ||
+        svcmp(parameter.name.lexeme, sv_from_cstr("string")) == 0)
+      return 0;
+  }
+  return 1;
+}
+
 static void analyse_node(ast_t node, generator_profile_analysis *analysis) {
   if (!node || !analysis->eligible) return;
 
@@ -23,7 +40,7 @@ static void analyse_node(ast_t node, generator_profile_analysis *analysis) {
   }
   case fundef:
     if (node->data.fundef.method_kind != METHOD_NONE ||
-        svcmp(node->data.fundef.name.lexeme, sv_from_cstr("main")) != 0) {
+        !fundef_has_scalar_signature(node->data.fundef)) {
       analysis->eligible = 0;
       return;
     }
@@ -37,6 +54,13 @@ static void analyse_node(ast_t node, generator_profile_analysis *analysis) {
   }
   case funcall: {
     ast_funcall call = node->data.funcall;
+    if (call.resolved_target && call.resolved_target->tag == fundef &&
+        call.resolved_target->data.fundef.body != NULL &&
+        fundef_has_scalar_signature(call.resolved_target->data.fundef)) {
+      for (int i = 0; i < call.args.length; i++)
+        analyse_node(call.args.data[i], analysis);
+      return;
+    }
     if (svcmp(call.name.lexeme, sv_from_cstr("Sprite")) == 0) {
       if (call.args.length == 1)
         analyse_node(call.args.data[0], analysis);

@@ -1,7 +1,7 @@
 # Rift runtime component manifest v1.
 # Lists are comma-separated paths relative to src/lib. Empty fields are valid.
-# component|id|dependencies|headers|host_sources|zxn_sources|host_asm|zxn_asm|init|shutdown|always?|zxn-capability
-component|core|tiny_print,tiny_test,error_sink|pools.h,fundefs.h,fundefs_internal.h,typedefs.h,host_caps.h,zxn_test.h|pools.c,print_bytes.c,fundefs.c,fundefs_internal.c,asm_interop.c,host_caps.c,zxn_test.c,host/termbox2_impl.c|pools.c,fundefs.c,fundefs_internal.c,asm_interop.c,host_caps.c|||rift_rtl_init|rift_rtl_shutdown|always|startup31
+# component|id|dependencies|headers|host_sources|zxn_sources|host_asm|zxn_asm|init|shutdown|always?|zxn-capabilities
+component|core|tiny_print,tiny_test,error_sink|pools.h,fundefs.h,fundefs_internal.h,typedefs.h,host_caps.h,zxn_test.h|pools.c,print_bytes.c,fundefs.c,fundefs_internal.c,asm_interop.c,host_caps.c,zxn_test.c,host/termbox2_impl.c|pools.c,fundefs.c,fundefs_internal.c,asm_interop.c,host_caps.c|||rift_rtl_init|rift_rtl_shutdown|always|startup31,pools
 component|tiny_print||console.h||print_bytes.c||||||startup31
 component|tiny_test||||zxn_test.c||||||startup31
 component|error_sink|tiny_print|error_sink.h|error_sink.c|error_sink.c||||||startup31
@@ -22,7 +22,7 @@ component|sound|core|sound.h|sound.c|sound.c||||||
 component|input|keyboard|input.h|input.c|input.c||||||startup31
 component|line_input|core,input,tiny_print||line_input.c|line_input.c||||||startup31
 component|print_at|tiny_print,ink_paper|print_at.h|print_at.c|print_at.c||||||startup31
-component|plot|core|plot.h|plot.c|plot.c||||||startup31
+component|plot||plot.h|plot.c|plot.c||||||startup31
 component|draw|plot|draw.h|draw.c|draw.c||||||startup31
 component|polyline|draw|polyline.h|polyline.c|polyline.c||||||startup31
 component|circle|plot|circle.h|circle.c|circle.c||||||startup31

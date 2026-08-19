@@ -20,7 +20,7 @@ compile_with() {
 compile_with gcc "$WORK/host" "$FIXTURES/component_manifest_order.manifest"
 compile_with zxn "$WORK/zxn" "$FIXTURES/component_manifest_order.manifest"
 
-expected=$'RIFT_COMPONENTS_V1\n@profile=full\nalpha\nbeta\ngamma\ntop'
+expected=$'RIFT_COMPONENTS_V1\n@pools=required\n@profile=full\nalpha\nbeta\ngamma\ntop'
 [ "$(cat "$WORK/host.components")" = "$expected" ] || fail "wrong dependency order"
 cmp "$WORK/host.components" "$WORK/zxn.components" >/dev/null || \
   fail "host and ZXN closures differ"
@@ -60,7 +60,7 @@ fi
 
 "$ROOT/riftc" "$FIXTURES/sprite_type_methods.rift" "$WORK/sprite" \
   "--component-manifest=$ROOT/src/lib/components.manifest"
-[ "$(cat "$WORK/sprite.components")" = $'RIFT_COMPONENTS_V1\n@profile=full\ntiny_print\ntiny_test\nerror_sink\ncore\nsprite' ] || \
+[ "$(cat "$WORK/sprite.components")" = $'RIFT_COMPONENTS_V1\n@pools=required\n@profile=full\ntiny_print\ntiny_test\nerror_sink\ncore\nsprite' ] || \
   fail "Sprite type-method use did not select the component exactly once"
 grep -q '^byte sprite = (byte)(3);$' "$WORK/sprite.c" || \
   fail "Sprite constructor did not lower to its byte representation"
@@ -76,7 +76,7 @@ if grep -qE 'Sprite_new|sprite_component_(init|shutdown)' "$WORK/sprite.c"; then
   fail "Sprite value emitted a constructor function or lifecycle hook"
 fi
 
-for fixture in cycle unknown duplicate_source unsafe_path bad_constructor duplicate_opaque unknown_owner; do
+for fixture in cycle unknown duplicate_source unsafe_path bad_constructor duplicate_opaque unknown_owner bad_capability; do
   if "$ROOT/riftc" "$FIXTURES/component_manifest_order.rift" "$WORK/bad" \
       "--component-manifest=$FIXTURES/component_manifest_${fixture}.manifest" \
       >"$WORK/$fixture.log" 2>&1; then
@@ -93,17 +93,19 @@ grep -q 'duplicate opaque owner' "$WORK/duplicate_opaque.log" || \
   fail "duplicate opaque owner diagnostic missing"
 grep -q 'method owner is not a declared opaque interface or namespace' "$WORK/unknown_owner.log" || \
   fail "unknown native method owner diagnostic missing"
+grep -q 'capabilities must contain only startup31 or pools' \
+  "$WORK/bad_capability.log" || fail "bad ZXN capability diagnostic missing"
 
 (
   cd /tmp
   "$ROOT/riftc" "$FIXTURES/zxn_size_empty.rift" "$WORK/direct"
 )
-[ "$(cat "$WORK/direct.components")" = $'RIFT_COMPONENTS_V1\n@profile=full\ntiny_print\ntiny_test\nerror_sink\ncore' ] || \
+[ "$(cat "$WORK/direct.components")" = $'RIFT_COMPONENTS_V1\n@pools=required\n@profile=full\ntiny_print\ntiny_test\nerror_sink\ncore' ] || \
   fail "direct riftc default manifest depends on working directory"
 
 "$ROOT/riftc" "$FIXTURES/native_name_shadow.rift" "$WORK/shadow" \
   "--component-manifest=$ROOT/src/lib/components.manifest"
-[ "$(cat "$WORK/shadow.components")" = $'RIFT_COMPONENTS_V1\n@profile=full\ntiny_print\ntiny_test\nerror_sink\ncore' ] || \
+[ "$(cat "$WORK/shadow.components")" = $'RIFT_COMPONENTS_V1\n@pools=required\n@profile=full\ntiny_print\ntiny_test\nerror_sink\ncore' ] || \
   fail "user function shadow incorrectly selected a native component"
 grep -q '^sleep(3);$' "$WORK/shadow.c" || fail "resolved user sleep call was lowered as native"
 if grep -q '^rift_sleep(3);$' "$WORK/shadow.c"; then fail "native lowering ignored resolved target"; fi
@@ -135,7 +137,11 @@ for target in gcc zxn; do
   "$ROOT/riftc" "$FIXTURES/clock_trig_components.rift" \
     "$WORK/clock-trig-$target" --target="$target" \
     "--component-manifest=$ROOT/src/lib/components.manifest"
-  expected_clock_trig=$'RIFT_COMPONENTS_V1\n@profile=full\ntiny_print\ntiny_test\nerror_sink\ncore\nclock\ntrig'
+  if [ "$target" = zxn ]; then
+    expected_clock_trig=$'RIFT_COMPONENTS_V1\n@pools=none\n@profile=full\nclock\ntrig'
+  else
+    expected_clock_trig=$'RIFT_COMPONENTS_V1\n@pools=required\n@profile=full\ntiny_print\ntiny_test\nerror_sink\ncore\nclock\ntrig'
+  fi
   [ "$(cat "$WORK/clock-trig-$target.components")" = "$expected_clock_trig" ] || \
     fail "clock/trig selected the wrong $target component closure"
   grep -q 'rift_sin(phase)' "$WORK/clock-trig-$target.c" || \
@@ -155,6 +161,18 @@ grep -q '^@profile=core-31$' "$WORK/graphics-core.components" || \
   fail "direct core graphics calls were incorrectly accepted by the tiny profile"
 grep -q '^core$' "$WORK/graphics-core.components" || \
   fail "direct core graphics calls lost their core component"
+grep -q '^@pools=required$' "$WORK/graphics-core.components" || \
+  fail "direct core graphics calls lost their pool requirement"
+
+"$ROOT/riftc" "$FIXTURES/zxn_graphics_pool_free.rift" \
+  "$WORK/graphics-pool-free" --target=zxn \
+  "--component-manifest=$ROOT/src/lib/components.manifest"
+[ "$(cat "$WORK/graphics-pool-free.components")" = \
+    $'RIFT_COMPONENTS_V1\n@pools=none\n@profile=tiny-31\nplot\nover\ndraw\ncircle' ] || \
+  fail "scalar graphics did not select the pool-free startup-31 closure"
+if grep -q '^core$' "$WORK/graphics-pool-free.components"; then
+  fail "scalar graphics retained the monolithic core component"
+fi
 
 "$ROOT/riftc" "$ROOT/test/input_ownership_test.rift" "$WORK/input-ownership" \
   "--component-manifest=$ROOT/src/lib/components.manifest"

@@ -67,6 +67,7 @@ struct generator_t {
   int zxn_tiny_uses_stdout;
   int zxn_tiny_simple_stdout;
   int zxn_light_core_eligible;
+  int zxn_pools_required;
 };
 
 #endif

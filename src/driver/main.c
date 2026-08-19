@@ -229,6 +229,8 @@ static int build_zxn(const driver_paths *paths,
   if (options->zxn_test) argument_push(&arguments, "-DRIFT_ZXN_TEST");
   if (options->allocator_stats)
     argument_push(&arguments, "-DRIFT_ALLOCATOR_STATS");
+  if (!plan->pools_required)
+    argument_push(&arguments, "-DRIFT_ZXN_NO_POOLS");
   argument_push(&arguments, bump_define);
   argument_push(&arguments, longlived_define);
   if (plan->tiny_core) argument_push(&arguments, "-DRIFT_ZXN_TINY_CORE");

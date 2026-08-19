@@ -2918,24 +2918,19 @@ void transpile(generator_t *g, ast_t program) {
   }
   generator_compute_component_closure(g);
   int closure_startup31_safe = 1;
+  g->zxn_pools_required = 0;
   for (int i = 0; i < g->components->component_count; i++) {
-    if (g->closed_components[i] &&
-        !g->components->components[i].zxn_startup31_safe) {
-      closure_startup31_safe = 0;
-      break;
+    if (g->closed_components[i]) {
+      if (!g->components->components[i].zxn_startup31_safe)
+        closure_startup31_safe = 0;
+      if (g->components->components[i].zxn_pools_required)
+        g->zxn_pools_required = 1;
     }
   }
   if (tiny.eligible && !closure_startup31_safe) {
     tiny.eligible = 0;
     g->zxn_tiny_eligible = 0;
     g->zxn_light_core_eligible = 0;
-    int core = component_index(g, "core");
-    if (core >= 0) g->direct_components[core] = 1;
-    memset(g->closed_components, 0,
-           (size_t)g->components->component_count *
-               sizeof(*g->closed_components));
-    g->component_order_count = 0;
-    generator_compute_component_closure(g);
   } else if (!tiny.eligible && g->zxn_light_core_eligible) {
     g->zxn_light_core_eligible = closure_startup31_safe;
   }

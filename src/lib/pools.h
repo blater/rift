@@ -43,7 +43,8 @@ typedef struct rift_block_header {
 
 /* Initialise the pools. Must be called before any other pool API.
  * On allocation failure to obtain backing memory, prints diagnostic and exits. */
-#if defined(__SDCC) && defined(RIFT_ZXN_TINY_CORE)
+#if defined(__SDCC) && \
+    (defined(RIFT_ZXN_NO_POOLS) || defined(RIFT_ZXN_TINY_CORE))
 #define rift_pools_init(bump_capacity, longlived_capacity) ((void)0)
 #define rift_pools_deinit() ((void)0)
 #else
@@ -62,7 +63,8 @@ void *rift_bump_alloc(size_t bytes);
 /* Bump save/restore for stack-disciplined region scopes. */
 typedef size_t rift_bump_mark;
 
-#if defined(__SDCC) && defined(RIFT_ZXN_TINY_CORE)
+#if defined(__SDCC) && \
+    (defined(RIFT_ZXN_NO_POOLS) || defined(RIFT_ZXN_TINY_CORE))
 #define rift_bump_save() ((rift_bump_mark)0)
 #define rift_bump_restore(mark) ((void)(mark))
 #else

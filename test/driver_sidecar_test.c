@@ -27,6 +27,8 @@ int main(int argc, char **argv) {
         "valid authoritative sidecar is accepted");
   check(requirements.profile == DRIVER_PROFILE_TINY,
         "tiny compiler profile is preserved");
+  check(!requirements.pools_required,
+        "pool requirement is preserved independently of startup profile");
   check(requirements.component_count == 1 &&
             strcmp(requirements.components[0]->id, "sprite") == 0,
         "selected component order is preserved");

@@ -1,3 +1,4 @@
 RIFT_COMPONENTS_V1
+@pools=required
 @profile=surprise
 sprite

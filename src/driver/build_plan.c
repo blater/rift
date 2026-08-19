@@ -52,6 +52,7 @@ int driver_make_build_plan(const char *root, const driver_options *options,
                            driver_build_plan *plan) {
   memset(plan, 0, sizeof(*plan));
   plan->startup = 1;
+  plan->pools_required = requirements->pools_required;
   if (options->target == DRIVER_TARGET_ZXN &&
       options->rtl_mode == DRIVER_RTL_AUTO) {
     switch (requirements->profile) {

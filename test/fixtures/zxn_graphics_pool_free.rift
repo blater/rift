@@ -1,0 +1,10 @@
+sub draw_dot(byte x) {
+  plot(x, to_byte(2));
+}
+
+sub main() {
+  draw_dot(to_byte(1));
+  draw(to_byte(1), to_byte(2), to_byte(3), to_byte(4));
+  circle(to_byte(8), to_byte(8), to_byte(4));
+  over(to_byte(1));
+}

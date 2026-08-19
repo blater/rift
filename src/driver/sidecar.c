@@ -29,6 +29,7 @@ int driver_read_requirements(const char *path, component_manifest *manifest,
   char line[4096];
   int line_number = 0;
   int profile_seen = 0;
+  int pools_seen = 0;
   while (fgets(line, sizeof(line), file)) {
     line_number++;
     size_t length = strlen(line);
@@ -52,6 +53,19 @@ int driver_read_requirements(const char *path, component_manifest *manifest,
         return 0;
       }
       profile_seen = 1;
+      continue;
+    }
+    if (strncmp(line, "@pools=", 7) == 0) {
+      const char *value = line + 7;
+      if (pools_seen ||
+          (strcmp(value, "none") != 0 && strcmp(value, "required") != 0)) {
+        fprintf(stderr, "build failed: invalid pool requirement '%s'\n",
+                value);
+        fclose(file);
+        return 0;
+      }
+      requirements->pools_required = strcmp(value, "required") == 0;
+      pools_seen = 1;
       continue;
     }
     if (line[0] == '@') {
@@ -81,8 +95,9 @@ int driver_read_requirements(const char *path, component_manifest *manifest,
     requirements->components[requirements->component_count++] = component;
   }
   fclose(file);
-  if (line_number == 0 || !profile_seen) {
-    fprintf(stderr, "build failed: component sidecar has no profile\n");
+  if (line_number == 0 || !profile_seen || !pools_seen) {
+    fprintf(stderr,
+            "build failed: component sidecar has no profile or pool requirement\n");
     return 0;
   }
   return 1;

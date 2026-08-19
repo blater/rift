@@ -18,6 +18,7 @@ typedef struct {
   int light_core;
   int tiny_print_direct;
   int tiny_print_controls;
+  int pools_required;
 } driver_build_plan;
 
 int driver_make_build_plan(const char *root, const driver_options *options,

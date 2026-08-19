@@ -1,0 +1,41 @@
+// Fixed-point translation of examples/clock.bas.
+//
+// The ROM FRAMES counter supplies a 50 Hz time base. sin/cos take a byte phase
+// where 0..255 is one turn and return a signed value scaled by 256.
+
+sub draw_second_hand(byte second) {
+  byte phase := second * 256 / 60;
+  int dx := sin(phase) * 72 / 256;
+  int dy := cos(phase) * 72 / 256;
+  draw(131, 91, 131 + dx, 91 - dy);
+}
+
+sub main() {
+  paper(7);
+  ink(0);
+  cls();
+
+  // Place the twelve hour numbers around the face without floating point.
+  for hour := 1 to 12 {
+    byte phase := hour * 256 / 12;
+    int column := 16 + sin(phase) * 10 / 256;
+    int row := 10 - cos(phase) * 10 / 256;
+    print(column, row, hour);
+  }
+
+  // XOR drawing lets the same line erase the previous hand exactly.
+  over(1);
+  dword shown_second := clock_ticks() / 50;
+  byte second := shown_second % 60;
+  draw_second_hand(second);
+
+  while 1 {
+    dword current_second := clock_ticks() / 50;
+    if current_second != shown_second {
+      draw_second_hand(second);
+      shown_second := current_second;
+      second := shown_second % 60;
+      draw_second_hand(second);
+    }
+  }
+}

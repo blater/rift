@@ -1,0 +1,237 @@
+// Structured Rift translation of examples/hangman.bas.
+// All graphics use Rift's top-left coordinate system directly.
+
+sub draw_person(int centre_x) {
+  circle(centre_x, 59, 8);
+  plot(centre_x + 4, 57);
+  plot(centre_x - 4, 57);
+  plot(centre_x, 60);
+
+  draw(centre_x, 68, centre_x, 88);
+  draw(centre_x, 90, centre_x, 109);
+
+  draw(centre_x - 15, 125, centre_x, 110);
+  draw(centre_x, 110, centre_x + 15, 125);
+  draw(centre_x - 15, 74, centre_x, 89);
+  draw(centre_x, 89, centre_x + 15, 74);
+}
+
+sub draw_neutral_mouth(int centre_x) {
+  draw(centre_x - 2, 63, centre_x + 2, 63);
+}
+
+sub draw_smile(int centre_x) {
+  draw(centre_x - 4, 61, centre_x, 64);
+  draw(centre_x, 64, centre_x + 4, 61);
+}
+
+sub draw_frown(int centre_x) {
+  draw(centre_x - 4, 64, centre_x, 61);
+  draw(centre_x, 61, centre_x + 4, 64);
+}
+
+sub draw_gallows_part(int stage) {
+  if stage = 1 {
+    draw(120, 126, 255, 126);
+  } else if stage = 2 {
+    draw(184, 126, 184, 35);
+  } else if stage = 3 {
+    draw(168, 126, 184, 110);
+  } else if stage = 4 {
+    draw(184, 110, 200, 126);
+  } else if stage = 5 {
+    draw(184, 35, 252, 35);
+  } else if stage = 6 {
+    draw(184, 51, 200, 35);
+  } else if stage = 7 {
+    draw(204, 35, 184, 55);
+  } else if stage = 8 {
+    draw(240, 35, 240, 51);
+  }
+}
+
+sub show_freed_person() {
+  over(1);
+  draw_person(240);
+  draw_neutral_mouth(240);
+  over(0);
+
+  draw_person(146);
+  draw_smile(146);
+}
+
+sub show_hanged_person() {
+  // Open the trapdoor and remove the original mouth, arms, and legs with XOR.
+  over(1);
+  draw(255, 126, 207, 126);
+  draw(207, 126, 207, 174);
+  draw_neutral_mouth(240);
+  draw(225, 74, 240, 89);
+  draw(240, 89, 255, 74);
+  draw(225, 125, 240, 110);
+  draw(240, 110, 255, 125);
+  over(0);
+
+  draw(236, 110, 240, 89);
+  draw(240, 89, 244, 68);
+  draw(236, 131, 240, 110);
+  draw(240, 110, 244, 131);
+  draw_frown(240);
+}
+
+sub is_letter(char value) returns int {
+  char uppercase := upcase(value);
+  if uppercase >= 'A' && uppercase <= 'Z' {
+    return 1;
+  }
+  return 0;
+}
+
+sub is_valid_secret(string candidate) returns int {
+  int candidate_length := length(candidate);
+  if candidate_length < 1 || candidate_length > 20 {
+    return 0;
+  }
+
+  for index := 0 to candidate_length - 1 {
+    if is_letter(charAt(candidate, index)) = 0 {
+      return 0;
+    }
+  }
+  return 1;
+}
+
+sub uppercase_copy(string source) returns string {
+  string result := "";
+  for index := 0 to length(source) - 1 {
+    result := concat(result, upcase(charAt(source, index)));
+  }
+  return result;
+}
+
+sub read_secret_word() returns string {
+  while 1 {
+    cls();
+    println("HANGMAN");
+    println("Player 1: enter a secret word");
+    println("Use 1-20 letters, then press Enter.");
+    string candidate := input();
+    if is_valid_secret(candidate) != 0 {
+      return uppercase_copy(candidate);
+    }
+    println("Please use letters only.");
+    println("Press a key to try again.");
+    keypress();
+  }
+}
+
+sub make_hidden_word(int letter_count) returns string {
+  string hidden_word := "";
+  for index := 1 to letter_count {
+    hidden_word := concat(hidden_word, '_');
+  }
+  return hidden_word;
+}
+
+sub contains_letter(string letters, char wanted) returns int {
+  for index := 0 to length(letters) - 1 {
+    if charAt(letters, index) = wanted {
+      return 1;
+    }
+  }
+  return 0;
+}
+
+sub show_guess(char guessed_letter, int guess_count) {
+  int column := 8 + guess_count;
+  int row := 0;
+  if column > 31 {
+    column := column - 24;
+    row := 1;
+  }
+  putchar_at(column, row, guessed_letter);
+}
+
+sub read_new_guess(string guessed_letters, int guess_count) returns char {
+  while 1 {
+    print(0, 22, "Guess a letter: ");
+    char guessed_letter := upcase(keypress());
+    putchar_at(16, 22, guessed_letter);
+    if is_letter(guessed_letter) != 0 &&
+       contains_letter(guessed_letters, guessed_letter) = 0 {
+      show_guess(guessed_letter, guess_count);
+      return guessed_letter;
+    }
+    print(0, 23, "Choose a new letter.          ");
+  }
+}
+
+sub play_round() {
+  string secret_word := read_secret_word();
+  string hidden_word := make_hidden_word(length(secret_word));
+  string guessed_letters := "";
+  int guess_count := 0;
+  int mistake_count := 0;
+
+  cls();
+  draw_person(240);
+  draw_neutral_mouth(240);
+  print(0, 0, "Guesses:");
+  print(0, 20, hidden_word);
+
+  while mistake_count < 8 && equals(hidden_word, secret_word) = 0 {
+    char guessed_letter := read_new_guess(guessed_letters, guess_count);
+    guessed_letters := concat(guessed_letters, guessed_letter);
+    guess_count := guess_count + 1;
+
+    int found_letter := 0;
+    for index := 0 to length(secret_word) - 1 {
+      if charAt(secret_word, index) = guessed_letter {
+        setCharAt(hidden_word, index, guessed_letter);
+        found_letter := 1;
+      }
+    }
+
+    print(0, 20, hidden_word);
+    print(0, 23, "                              ");
+    if found_letter = 0 {
+      mistake_count := mistake_count + 1;
+      draw_gallows_part(mistake_count);
+    }
+  }
+
+  if equals(hidden_word, secret_word) != 0 {
+    show_freed_person();
+    print(0, 18, "You saved them!");
+  } else {
+    show_hanged_person();
+    print(0, 18, "The word was:");
+    print(0, 19, secret_word);
+  }
+}
+
+sub wants_another_round() returns int {
+  print(0, 23, "Play again? Y/N              ");
+  while 1 {
+    char answer := upcase(keypress());
+    if answer = 'Y' {
+      return 1;
+    }
+    if answer = 'N' {
+      return 0;
+    }
+  }
+}
+
+sub main() {
+  ink(0);
+  paper(7);
+
+  int keep_playing := 1;
+  while keep_playing != 0 {
+    play_round();
+    keep_playing := wants_another_round();
+  }
+  cls();
+  println("Thanks for playing Hangman.");
+}

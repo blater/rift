@@ -126,6 +126,8 @@ static int build_host(const driver_paths *paths,
   snprintf(memory_defines[5], sizeof(memory_defines[5]),
            "-DRIFT_MEMORY_RESERVE_PRESENT=0");
   for (int i = 0; i < 6; i++) argument_push(&arguments, memory_defines[i]);
+  if (!plan->bump_required)
+    argument_push(&arguments, "-DRIFT_ZXN_NO_BUMP_POOL");
   argument_push(&arguments, "-o");
   argument_push(&arguments, paths->work_base);
   argument_push(&arguments, generated_c);

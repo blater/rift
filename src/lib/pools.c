@@ -314,6 +314,25 @@ static int arena_grow_longlived(unsigned int wanted_order) {
   if (available > arena_uncommitted_bytes()) available = arena_uncommitted_bytes();
   if (bytes_for_order(wanted_order) > available) return 0;
 
+#ifdef RIFT_ZXN_NO_BUMP_POOL
+  /* With no opposing frontier, expose every whole quantum of the remaining
+   * arena immediately. Largest-first decomposition is derived solely from
+   * the acquired region and preserves large requests. */
+  while (available >= ll_quantum &&
+         buddy_root_count < RIFT_BUDDY_MAX_ROOTS) {
+    order = buddy_order_count - 1;
+    while (bytes_for_order(order) > available) order--;
+    root_size = bytes_for_order(order);
+    root = (rift_block_header *)(ll_base + ll_cap);
+    buddy_roots[buddy_root_count].offset = (rift_pool_offset_t)ll_cap;
+    buddy_roots[buddy_root_count].max_order = order;
+    buddy_root_count++;
+    ll_cap += root_size;
+    available -= root_size;
+    core_insert(root, order);
+  }
+  return 1;
+#else
   /* Geometric roots keep metadata bounded without claiming the whole arena
    * for the first small allocation. Fall back to the largest root that fits
    * near a cap or the opposing bump frontier. */
@@ -332,6 +351,7 @@ static int arena_grow_longlived(unsigned int wanted_order) {
   ll_cap += root_size;
   core_insert(root, order);
   return 1;
+#endif
 }
 
 static void arena_release_free_tail_roots(void) {

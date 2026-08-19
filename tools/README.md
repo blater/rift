@@ -129,18 +129,22 @@ screen.
 ## ZXN memory-aware linking
 
 ZXN builds link only the runtime components referenced by generated C. This is
-the default `--rtl=auto` behaviour and is essential for leaving room below the
-reserved high stack for a Rift program's BSS pools and data. Use `--rtl=all`
-only when hand-written embedded C calls an RTL symbol that the generated code
-cannot expose to the linker; it is a diagnostic compatibility mode and can
-consume the flat target address space.
+the default `--rtl=auto` behaviour and leaves the largest possible gap between
+linked data/BSS and the protected high stack for automatic managed memory. Use
+`--rtl=all` only when hand-written embedded C calls an RTL symbol that the
+generated code cannot expose to the linker; it is a diagnostic mode that can
+shrink the managed gap enough for a build-time minimum check or runtime demand
+to fail.
 
-The target begins at `$5B00`, reserves `$F758-$FF58` (2 KiB) for the Z80
-stack, and uses fixed BSS pools of 1 KiB bump space plus 6 KiB long-lived
-space. `rift` requests a Z88DK link map for every ZXN build and rejects the
-artifact if its BSS would enter the stack reservation. Intermediates live in a
-private `/tmp/rift-build-*` workspace. `--debug` reports and retains that
-workspace; normal builds remove it after the check.
+The target begins at `$5B00`; the shared pragma exports stack top `$FF58` and a
+2 KiB stack size. After linking, the managed arena begins at aligned
+`__BSS_END_tail` and ends at the aligned stack floor, less any explicit reserve
+or total cap. No fixed bump or long-lived backing arrays occupy BSS. `rift`
+requests a Z88DK link map for every ZXN build, validates those exported symbols
+and the requested minimum, and rejects any image whose BSS enters protected
+high memory. Intermediates live in a private `/tmp/rift-build-*` workspace.
+`--debug` reports and retains that workspace; normal builds remove it after the
+check.
 
 The successful-build status line includes exact byte sizes. Native builds
 report the executable size. ZXN builds report the final `.nex` size first and

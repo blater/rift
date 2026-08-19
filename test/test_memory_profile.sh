@@ -1,7 +1,7 @@
 #!/bin/sh
-# Run ownership regressions with the exact 1 KiB bump / 6 KiB long-lived
-# profile used by generated ZX Next programs. This is a host execution test:
-# it makes constrained-pool exhaustion deterministic without an emulator.
+# Run ownership regressions with a 7 KiB total managed-memory ceiling. This is
+# a host execution test: it makes automatic-arena exhaustion deterministic
+# without exposing or recreating allocator-specific partitions.
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -23,6 +23,6 @@ for source in \
 do
   name=$(basename "$source" .rift)
   output="$tmpdir/$name"
-  "$root/rift" --target=gcc --memory-profile=zxn "$root/$source" "$output"
+  "$root/rift" --target=gcc --memory-max=7168 "$root/$source" "$output"
   "$output.exe"
 done

@@ -17,10 +17,9 @@ int main(void) {
   char *default_argv[] = {"rift", "program.rift"};
   check(driver_parse_options(2, default_argv, &options) &&
             options.target == DRIVER_TARGET_ZXN &&
-            options.memory_mode == DRIVER_MEMORY_STANDARD &&
-            options.zxn_bump_pool == 1024 &&
-            options.zxn_longlived_pool == 6144,
-        "unqualified builds use standard ZX Next memory");
+            !options.memory_max_set && !options.memory_min_set &&
+            !options.memory_reserve_set,
+        "unqualified builds automatically share available ZX Next memory");
 
   char *gcc_argv[] = {"rift", "--target=gcc", "program.rift"};
   check(driver_parse_options(3, gcc_argv, &options) &&
@@ -32,52 +31,55 @@ int main(void) {
             options.target == DRIVER_TARGET_HOST,
         "-t gcc explicitly selects the host target");
 
-  char *compact_argv[] = {"rift", "--memory=compact", "program.rift"};
-  check(driver_parse_options(3, compact_argv, &options) &&
-            options.memory_mode == DRIVER_MEMORY_COMPACT &&
-            options.zxn_bump_pool == 256 &&
-            options.zxn_longlived_pool == 1024 &&
-            !options.zxn_pool_overrides &&
-            !options.zxn_bump_pool_override,
-        "compact memory selects example-sized capacities");
+  char *hints_argv[] = {"rift", "--memory-max=16384",
+                         "--memory-min=8192", "--memory-reserve=4096",
+                         "program.rift"};
+  check(driver_parse_options(5, hints_argv, &options) &&
+            options.memory_max_set && options.memory_max == 16384 &&
+            options.memory_min_set && options.memory_min == 8192 &&
+            options.memory_reserve_set && options.memory_reserve == 4096,
+        "purpose-level memory bounds are parsed without allocator details");
 
-  char *standard_argv[] = {"rift", "--memory=standard", "program.rift"};
-  check(driver_parse_options(3, standard_argv, &options) &&
-            options.memory_mode == DRIVER_MEMORY_STANDARD &&
-            options.zxn_bump_pool == 1024 &&
-            options.zxn_longlived_pool == 6144,
-        "standard memory explicitly selects the default capacities");
+  char *zero_argv[] = {"rift", "--memory-min=0", "--memory-reserve=0",
+                        "program.rift"};
+  check(driver_parse_options(4, zero_argv, &options) &&
+            options.memory_min_set && options.memory_min == 0 &&
+            options.memory_reserve_set && options.memory_reserve == 0,
+        "literal zero hints remain distinct from absent automatic defaults");
 
-  char *custom_after_argv[] = {"rift", "--memory=compact",
-                               "--zxn-longlived-pool=2048", "program.rift"};
-  check(driver_parse_options(4, custom_after_argv, &options) &&
-            options.zxn_bump_pool == 256 &&
-            options.zxn_longlived_pool == 2048 &&
-            options.zxn_pool_overrides &&
-            !options.zxn_bump_pool_override,
-        "expert capacity overrides the corresponding compact value");
+  char *zero_max_argv[] = {"rift", "--memory-max=0", "program.rift"};
+  check(!driver_parse_options(3, zero_max_argv, &options),
+        "zero maximum is rejected instead of meaning automatic");
 
-  char *custom_before_argv[] = {"rift", "--zxn-bump-pool=512",
-                                "--memory=compact", "program.rift"};
-  check(driver_parse_options(4, custom_before_argv, &options) &&
-            options.zxn_bump_pool == 512 &&
-            options.zxn_longlived_pool == 1024 &&
-            options.zxn_pool_overrides &&
-            options.zxn_bump_pool_override,
-        "expert capacity precedence is independent of argument order");
+  char *bad_relation_argv[] = {"rift", "--memory-max=4096",
+                                "--memory-min=8192", "program.rift"};
+  check(!driver_parse_options(4, bad_relation_argv, &options),
+        "minimum memory cannot exceed the explicit maximum");
 
-  char *invalid_argv[] = {"rift", "--memory=small", "program.rift"};
-  check(!driver_parse_options(3, invalid_argv, &options),
-        "unknown memory preset is rejected");
+  char *removed_preset_argv[] = {"rift", "--memory=compact", "program.rift"};
+  check(!driver_parse_options(3, removed_preset_argv, &options),
+        "obsolete memory presets are rejected");
 
-  char *missing_argv[] = {"rift", "--memory", "program.rift"};
-  check(!driver_parse_options(3, missing_argv, &options),
-        "missing memory preset is rejected");
+  char *removed_pool_argv[] = {"rift", "--zxn-longlived-pool=8192",
+                                "program.rift"};
+  check(!driver_parse_options(3, removed_pool_argv, &options),
+        "allocator-specific pool options are rejected");
 
-  char *host_memory_argv[] = {"rift", "--target=gcc", "--memory=compact",
-                              "program.rift"};
-  check(!driver_parse_options(4, host_memory_argv, &options),
-        "ZX Next memory preset is rejected for host builds");
+  char *removed_profile_argv[] = {"rift", "--memory-profile=zxn",
+                                   "program.rift"};
+  check(!driver_parse_options(3, removed_profile_argv, &options),
+        "obsolete memory profiles are rejected");
+
+  char *host_memory_argv[] = {"rift", "--target=gcc", "--memory-max=8192",
+                              "--memory-min=4096", "program.rift"};
+  check(driver_parse_options(5, host_memory_argv, &options) &&
+            options.memory_max == 8192 && options.memory_min == 4096,
+        "host builds accept total managed-memory minimum and maximum hints");
+
+  char *host_reserve_argv[] = {"rift", "--target=gcc",
+                               "--memory-reserve=4096", "program.rift"};
+  check(!driver_parse_options(4, host_reserve_argv, &options),
+        "host builds reject target-address-space reserve hints");
 
   return failures ? 1 : 0;
 }

@@ -21,6 +21,14 @@ static int tests_run    = 0;
 static int tests_passed = 0;
 static int tests_failed = 0;
 
+static void init_test_arena(size_t total_capacity) {
+  rift_arena_options options = {
+      .memory_max = total_capacity,
+      .memory_max_present = 1,
+  };
+  rift_pools_init(&options);
+}
+
 #define EXPECT(cond, msg)                                                    \
   do {                                                                        \
     if (!(cond)) {                                                            \
@@ -73,7 +81,7 @@ static string make_produced_string(const char *data, size_t length) {
 /* ---- Tests ---- */
 
 static void retain_release_on_null_backing_is_noop(void) {
-  rift_pools_init(BUMP_CAP, LL_CAP);
+  init_test_arena(BUMP_CAP + LL_CAP);
   string s;
   s.data     = "hello";  /* static literal-ish */
   s.length   = 5;
@@ -91,7 +99,7 @@ static void retain_release_on_null_backing_is_noop(void) {
 }
 
 static void retain_release_on_static_sentinel_is_noop(void) {
-  rift_pools_init(BUMP_CAP, LL_CAP);
+  init_test_arena(BUMP_CAP + LL_CAP);
 
   /* Synthesise a static-sentinel block: header in static storage, refcount = 0xFFFF. */
   static char static_block[sizeof(rift_block_header) + 8];
@@ -119,7 +127,7 @@ static void retain_release_on_static_sentinel_is_noop(void) {
 }
 
 static void retain_increments_longlived_refcount(void) {
-  rift_pools_init(BUMP_CAP, LL_CAP);
+  init_test_arena(BUMP_CAP + LL_CAP);
   string s = make_longlived_string("hello", 5);
   EXPECT(s.backing->refcount == 1, "fresh longlived block starts at rc=1");
   __string_retain(s);
@@ -130,7 +138,7 @@ static void retain_increments_longlived_refcount(void) {
 }
 
 static void release_decrements_longlived_refcount(void) {
-  rift_pools_init(BUMP_CAP, LL_CAP);
+  init_test_arena(BUMP_CAP + LL_CAP);
   string s = make_longlived_string("hello", 5);
   __string_retain(s);
   __string_retain(s);
@@ -144,7 +152,7 @@ static void release_decrements_longlived_refcount(void) {
 }
 
 static void release_to_zero_frees_block(void) {
-  rift_pools_init(BUMP_CAP, LL_CAP);
+  init_test_arena(BUMP_CAP + LL_CAP);
   string s = make_longlived_string("hello", 5);
   /* rc = 1 from make; release should drop to 0 and free. */
   __string_release(s);
@@ -156,7 +164,7 @@ static void release_to_zero_frees_block(void) {
 }
 
 static void freed_block_can_be_reallocated(void) {
-  rift_pools_init(BUMP_CAP, LL_CAP);
+  init_test_arena(BUMP_CAP + LL_CAP);
   string s1 = make_longlived_string("first", 5);
   void *first_payload = s1.data;
   __string_release(s1);  /* freed */
@@ -170,7 +178,7 @@ static void freed_block_can_be_reallocated(void) {
 }
 
 static void multiple_descriptors_share_backing(void) {
-  rift_pools_init(BUMP_CAP, LL_CAP);
+  init_test_arena(BUMP_CAP + LL_CAP);
   string a = make_longlived_string("shared", 6);
   string b = a;  /* descriptor copy; same backing */
   __string_retain(b);  /* simulating an assignment that retains */
@@ -185,7 +193,7 @@ static void multiple_descriptors_share_backing(void) {
 }
 
 static void produced_capacity_uses_allocator_payload(void) {
-  rift_pools_init(BUMP_CAP, LL_CAP);
+  init_test_arena(BUMP_CAP + LL_CAP);
   string s = make_produced_string("ab", 2);
   EXPECT(s.capacity == (size_t)s.backing->size - 1,
          "produced capacity must expose the complete allocator payload");
@@ -196,7 +204,7 @@ static void produced_capacity_uses_allocator_payload(void) {
 }
 
 static void append_reuses_unique_capacity(void) {
-  rift_pools_init(BUMP_CAP, LL_CAP);
+  init_test_arena(BUMP_CAP + LL_CAP);
   string target = make_produced_string("ab", 2);
   string base = target;
   char *original_data = target.data;
@@ -216,7 +224,7 @@ static void append_reuses_unique_capacity(void) {
 }
 
 static void append_copy_on_write_preserves_alias(void) {
-  rift_pools_init(BUMP_CAP, LL_CAP);
+  init_test_arena(BUMP_CAP + LL_CAP);
   string target = make_produced_string("ab", 2);
   string alias = target;
   string base = target;
@@ -237,7 +245,7 @@ static void append_copy_on_write_preserves_alias(void) {
 }
 
 static void self_append_is_alias_safe(void) {
-  rift_pools_init(BUMP_CAP, LL_CAP);
+  init_test_arena(BUMP_CAP + LL_CAP);
   string target = make_produced_string("xy", 2);
   string base = target;
   string suffix = target;
@@ -254,7 +262,7 @@ static void self_append_is_alias_safe(void) {
 }
 
 static void repeated_append_allocations_are_logarithmic(void) {
-  rift_pools_init(BUMP_CAP, LL_CAP);
+  init_test_arena(BUMP_CAP + LL_CAP);
   string s = make_produced_string("", 0);
   rift_allocator_stats_reset();
   for (int i = 0; i < 1000; i++)
@@ -279,7 +287,7 @@ static void jump_on_oom(const char *pool_name, size_t requested,
 }
 
 static void append_oom_leaves_source_unchanged(void) {
-  rift_pools_init(64, 64);
+  init_test_arena(128);
   string s = make_produced_string("ab", 2);
   char *original_data = s.data;
   rift_block_header *original_backing = s.backing;
@@ -304,7 +312,7 @@ static void append_length_overflow_halts(void) {
   EXPECT(child >= 0, "fork failed");
   if (child == 0) {
     string s;
-    rift_pools_init(BUMP_CAP, LL_CAP);
+    init_test_arena(BUMP_CAP + LL_CAP);
     s = make_produced_string("ab", 2);
     __concat_append_owned(&s, "x", SIZE_MAX, 1);
     _exit(0);
@@ -328,7 +336,7 @@ static void returning_oom_handler_still_halts_string_construction(void) {
   EXPECT(child >= 0, "fork failed");
   if (child == 0) {
     string s;
-    rift_pools_init(64, 64);
+    init_test_arena(128);
     rift_set_oom_handler(observe_oom_and_return);
     __rift_make_longlived_string(&s, 1000);
     _exit(0);
@@ -345,7 +353,7 @@ static void impossible_string_length_halts_before_wraparound(void) {
   EXPECT(child >= 0, "fork failed");
   if (child == 0) {
     string s;
-    rift_pools_init(BUMP_CAP, LL_CAP);
+    init_test_arena(BUMP_CAP + LL_CAP);
     __rift_make_longlived_string(&s, SIZE_MAX);
     _exit(0);
   }
@@ -357,7 +365,7 @@ static void impossible_string_length_halts_before_wraparound(void) {
 /* ---- Phase F: __return_string ---- */
 
 static void return_static_passes_through_unchanged(void) {
-  rift_pools_init(BUMP_CAP, LL_CAP);
+  init_test_arena(BUMP_CAP + LL_CAP);
   static char static_block[sizeof(rift_block_header) + 8];
   rift_block_header *h = (rift_block_header *)static_block;
   h->size = 8;
@@ -379,7 +387,7 @@ static void return_static_passes_through_unchanged(void) {
 }
 
 static void return_longlived_increments_refcount(void) {
-  rift_pools_init(BUMP_CAP, LL_CAP);
+  init_test_arena(BUMP_CAP + LL_CAP);
   string s = make_longlived_string("hello", 5);
   EXPECT(s.backing->refcount == 1, "fresh block starts at rc=1");
   string r = __return_string(s);
@@ -394,7 +402,7 @@ static void return_longlived_increments_refcount(void) {
 }
 
 static void return_bump_allocates_longlived_copy(void) {
-  rift_pools_init(BUMP_CAP, LL_CAP);
+  init_test_arena(BUMP_CAP + LL_CAP);
   /* Synthesise a bump-backed descriptor: backing == NULL, data points at
    * a buffer we allocate from the bump pool. */
   char *bump_payload = (char *)rift_bump_alloc(8);
@@ -420,14 +428,14 @@ static void return_bump_allocates_longlived_copy(void) {
 /* ---- Aggregate handle helpers (Phase F step 3) ---- */
 
 static void handle_retain_release_on_null_is_noop(void) {
-  rift_pools_init(BUMP_CAP, LL_CAP);
+  init_test_arena(BUMP_CAP + LL_CAP);
   EXPECT(__handle_retain(NULL) == NULL, "retain(NULL) returns NULL");
   __handle_release(NULL);  /* must not crash */
   rift_pools_deinit();
 }
 
 static void handle_retain_increments_refcount(void) {
-  rift_pools_init(BUMP_CAP, LL_CAP);
+  init_test_arena(BUMP_CAP + LL_CAP);
   void *payload = rift_longlived_alloc(64);
   rift_block_header *h = ((rift_block_header *)payload) - 1;
   EXPECT(h->refcount == 1, "fresh handle rc=1");
@@ -442,7 +450,7 @@ static void handle_retain_increments_refcount(void) {
 }
 
 static void return_handle_increments_refcount(void) {
-  rift_pools_init(BUMP_CAP, LL_CAP);
+  init_test_arena(BUMP_CAP + LL_CAP);
   void *payload = rift_longlived_alloc(32);
   rift_block_header *h = ((rift_block_header *)payload) - 1;
   EXPECT(h->refcount == 1, "fresh rc=1");

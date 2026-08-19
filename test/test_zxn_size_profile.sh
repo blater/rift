@@ -1,5 +1,5 @@
 #!/bin/sh
-# Verify the conservative ZXN tiny-core profile and configurable pool sizes.
+# Verify ZXN component sizing and the elastic managed arena boundary.
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -34,9 +34,9 @@ build_debug general "$FIXTURES/zxn_size_general_string.rift"
 build_debug embedded "$FIXTURES/zxn_size_embedded_stdio.rift"
 build_debug sprite "$FIXTURES/sprite_type_methods.rift"
 build_debug hello_all "$FIXTURES/zxn_size_hello.rift" --rtl=all
-build_debug compact "$FIXTURES/zxn_size_general_string.rift" --memory=compact
+build_debug limited "$FIXTURES/zxn_size_general_string.rift" --memory-max=16384
+build_debug reserved "$FIXTURES/zxn_size_general_string.rift" --memory-reserve=4096
 build_debug clock "$ROOT/examples/clock.rift"
-build_debug clock_bump "$ROOT/examples/clock.rift" --zxn-bump-pool=512
 
 EMPTY_NEX_BYTES=$(wc -c <"$TMPDIR_SIZE/empty.nex" | tr -d '[:space:]')
 EMPTY_PREWRAP_BYTES=$(wc -c <"$TMPDIR_SIZE/empty_CODE.bin" | tr -d '[:space:]')
@@ -75,9 +75,9 @@ if grep -q '^#define RIFT_ZXN_TINY_CORE' "$TMPDIR_SIZE/hello_all.exe.c"; then
   echo "FAIL: --rtl=all retained an active generated tiny-core macro" >&2
   exit 1
 fi
-grep -q 'rift_pools_init(RIFT_ZXN_BUMP_POOL_CAPACITY' "$TMPDIR_SIZE/hello_all.exe.c"
-grep -q 'memory=compact, bump-pool=256 (omitted), longlived-pool=1024' \
-  "$TMPDIR_SIZE/compact.log"
+grep -q 'rift_pools_init(NULL)' "$TMPDIR_SIZE/hello_all.exe.c"
+grep -q 'memory=auto, memory-max=16384, .*bump=omitted' \
+  "$TMPDIR_SIZE/limited.log"
 grep -q 'ZXN profile: startup=1, .*tiny-core=0, light-core=0' \
   "$TMPDIR_SIZE/clock.log"
 grep -q -- '-DRIFT_ZXN_NO_POOLS' "$TMPDIR_SIZE/clock.log"
@@ -89,16 +89,6 @@ if grep -qE 'zxn_(bump|longlived)_pool_storage' "$TMPDIR_SIZE/clock.map"; then
   echo "FAIL: pool-free Clock build retained static pool storage" >&2
   exit 1
 fi
-grep -q 'bump-pool=512, longlived-pool=6144' "$TMPDIR_SIZE/clock_bump.log"
-grep -q '/lib/pools.c' "$TMPDIR_SIZE/clock_bump.log"
-if grep -q -- '-DRIFT_ZXN_NO_POOLS\|-DRIFT_ZXN_NO_BUMP_POOL' \
-    "$TMPDIR_SIZE/clock_bump.log"; then
-  echo "FAIL: explicit bump override was disabled by a no-pool target define" >&2
-  exit 1
-fi
-grep -q 'zxn_bump_pool_storage' "$TMPDIR_SIZE/clock_bump.map"
-grep -q 'zxn_longlived_pool_storage' "$TMPDIR_SIZE/clock_bump.map"
-
 grep -q 'rift_print_bytes("hello world", 11)' "$TMPDIR_SIZE/hello.exe.c"
 grep -q 'RIFT_PROFILE:ZXN_TINY_CORE:STARTUP=31' "$TMPDIR_SIZE/hello.exe.c"
 grep -q -- '-DRIFT_ZXN_TINY_PRINT_DIRECT' "$TMPDIR_SIZE/hello.log"
@@ -132,13 +122,33 @@ if grep -q 'zxn_bump_pool_storage' "$TMPDIR_SIZE/general.map"; then
   echo "FAIL: bump-free managed string build retained static bump storage" >&2
   exit 1
 fi
+if grep -q 'zxn_longlived_pool_storage' "$TMPDIR_SIZE/general.map"; then
+  echo "FAIL: managed string build retained static long-lived storage" >&2
+  exit 1
+fi
+grep -q '_rift_zxn_arena_link_start' "$TMPDIR_SIZE/general.map"
+grep -q 'ZXN profile: startup=31, memory=auto, memory-max=auto, .*bump=omitted' \
+  "$TMPDIR_SIZE/general.log"
+ARENA_BYTES=$(awk '/ZXN managed arena:/ { value = $5; sub(/^\(/, "", value); print value; exit }' \
+  "$TMPDIR_SIZE/general.log")
+if [ -z "$ARENA_BYTES" ] || [ "$ARENA_BYTES" -lt 20000 ]; then
+  echo "FAIL: auto managed arena is only ${ARENA_BYTES:-unknown} bytes" >&2
+  exit 1
+fi
+RESERVED_ARENA_BYTES=$(awk '/ZXN managed arena:/ { value = $5; sub(/^\(/, "", value); print value; exit }' \
+  "$TMPDIR_SIZE/reserved.log")
+if [ $((ARENA_BYTES - RESERVED_ARENA_BYTES)) -ne 4096 ]; then
+  echo "FAIL: --memory-reserve=4096 changed arena by $((ARENA_BYTES - RESERVED_ARENA_BYTES)) bytes" >&2
+  exit 1
+fi
+grep -q 'high-memory reserve=4096 bytes' "$TMPDIR_SIZE/reserved.log"
 
 EMPTY_BYTES=$(wc -c <"$TMPDIR_SIZE/empty_CODE.bin" | tr -d '[:space:]')
 SPRITE_BYTES=$(wc -c <"$TMPDIR_SIZE/sprite_CODE.bin" | tr -d '[:space:]')
 HELLO_BYTES=$(wc -c <"$TMPDIR_SIZE/hello_CODE.bin" | tr -d '[:space:]')
 CONTROL_BYTES=$(wc -c <"$TMPDIR_SIZE/control_CODE.bin" | tr -d '[:space:]')
 GENERAL_BYTES=$(wc -c <"$TMPDIR_SIZE/general_CODE.bin" | tr -d '[:space:]')
-COMPACT_BYTES=$(wc -c <"$TMPDIR_SIZE/compact_CODE.bin" | tr -d '[:space:]')
+LIMITED_BYTES=$(wc -c <"$TMPDIR_SIZE/limited_CODE.bin" | tr -d '[:space:]')
 CLOCK_BYTES=$(wc -c <"$TMPDIR_SIZE/clock_CODE.bin" | tr -d '[:space:]')
 
 if [ "$HELLO_BYTES" -ge "$GENERAL_BYTES" ]; then
@@ -157,8 +167,13 @@ if [ $((CONTROL_BYTES - EMPTY_BYTES)) -gt 1400 ]; then
   echo "FAIL: lightweight console overhead exceeds 1400 bytes ($CONTROL_BYTES vs $EMPTY_BYTES)" >&2
   exit 1
 fi
-if [ $((GENERAL_BYTES - COMPACT_BYTES)) -ne 5120 ]; then
-  echo "FAIL: compact memory reclaimed $((GENERAL_BYTES - COMPACT_BYTES)) resident bytes, expected 5120 when bump storage is omitted" >&2
+MEMORY_LIMIT_DELTA=$((GENERAL_BYTES - LIMITED_BYTES))
+if [ "$MEMORY_LIMIT_DELTA" -lt -128 ] || [ "$MEMORY_LIMIT_DELTA" -gt 128 ]; then
+  echo "FAIL: user-level memory cap changed resident storage by $MEMORY_LIMIT_DELTA bytes" >&2
+  exit 1
+fi
+if [ "$GENERAL_BYTES" -ge 11000 ]; then
+  echo "FAIL: elastic managed-string resident size is $GENERAL_BYTES bytes, expected less than 11000" >&2
   exit 1
 fi
 if [ "$CLOCK_BYTES" -ge 12000 ]; then
@@ -166,45 +181,43 @@ if [ "$CLOCK_BYTES" -ge 12000 ]; then
   exit 1
 fi
 
-if "$ROOT/rift" --target=zxn --zxn-bump-pool=invalid \
+if "$ROOT/rift" --target=zxn --memory-max=invalid \
     "$FIXTURES/zxn_size_empty.rift" "$TMPDIR_SIZE/invalid.exe" \
     >"$TMPDIR_SIZE/invalid.log" 2>&1; then
   echo "FAIL: invalid pool capacity was accepted" >&2
   exit 1
 fi
-grep -q -- '--zxn-bump-pool requires a decimal byte count' "$TMPDIR_SIZE/invalid.log"
+grep -q -- '--memory-max requires a decimal byte count' "$TMPDIR_SIZE/invalid.log"
 
-if "$ROOT/rift" --target=zxn --zxn-bump-pool=0016 \
+if "$ROOT/rift" --target=zxn --memory-max=0016 \
     "$FIXTURES/zxn_size_empty.rift" "$TMPDIR_SIZE/leading-zero.exe" \
     >"$TMPDIR_SIZE/leading-zero.log" 2>&1; then
   echo "FAIL: leading-zero pool capacity was accepted" >&2
   exit 1
 fi
-grep -q 'canonical decimal values without leading zeros' "$TMPDIR_SIZE/leading-zero.log"
+grep -q 'canonical decimal without leading zeros' "$TMPDIR_SIZE/leading-zero.log"
 
-if "$ROOT/rift" --target=zxn --zxn-bump-pool=99999999999999999999 \
+if "$ROOT/rift" --target=zxn --memory-max=99999999999999999999 \
     "$FIXTURES/zxn_size_empty.rift" "$TMPDIR_SIZE/overlong.exe" \
     >"$TMPDIR_SIZE/overlong.log" 2>&1; then
   echo "FAIL: overlong pool capacity was accepted" >&2
   exit 1
 fi
-grep -q "fit the target's 16-bit pool offsets" "$TMPDIR_SIZE/overlong.log"
+grep -q "exceeds this host's addressable size" "$TMPDIR_SIZE/overlong.log"
 
-if "$ROOT/rift" --target=zxn --zxn-longlived-pool=5008 \
-    "$FIXTURES/zxn_size_general_string.rift" "$TMPDIR_SIZE/invalid-roots.exe" \
-    >"$TMPDIR_SIZE/invalid-roots.log" 2>&1; then
-  echo "FAIL: unsupported buddy-root capacity was accepted" >&2
+"$ROOT/rift" --target=zxn --memory-max=8192 \
+  "$FIXTURES/zxn_size_general_string.rift" "$TMPDIR_SIZE/larger-limit.exe" \
+  >"$TMPDIR_SIZE/larger-limit.log" 2>&1
+grep -q 'memory=auto, memory-max=8192, .*bump=omitted' \
+  "$TMPDIR_SIZE/larger-limit.log"
+
+if "$ROOT/rift" --target=zxn --memory-min=65520 \
+    "$FIXTURES/zxn_size_general_string.rift" "$TMPDIR_SIZE/minimum.exe" \
+    >"$TMPDIR_SIZE/minimum.log" 2>&1; then
+  echo "FAIL: impossible --memory-min was accepted" >&2
   exit 1
 fi
-grep -q 'at most two power-of-two buddy roots' "$TMPDIR_SIZE/invalid-roots.log"
-
-if "$ROOT/rift" --target=zxn --zxn-longlived-pool=8192 \
-    "$FIXTURES/zxn_size_general_string.rift" "$TMPDIR_SIZE/invalid-order.exe" \
-    >"$TMPDIR_SIZE/invalid-order.log" 2>&1; then
-  echo "FAIL: unsupported buddy order was accepted" >&2
-  exit 1
-fi
-grep -q 'multiple of 16 in the range 16..6144' "$TMPDIR_SIZE/invalid-order.log"
+grep -q 'below --memory-min=65520' "$TMPDIR_SIZE/minimum.log"
 
 "$ROOT/rift" --target=gcc "$FIXTURES/zxn_size_hello.rift" \
   "$TMPDIR_SIZE/hello-host" >"$TMPDIR_SIZE/host-build.log" 2>&1
@@ -221,5 +234,7 @@ echo "PASS: empty tiny-core resident size is $EMPTY_BYTES bytes"
 echo "PASS: assetless byte-backed Sprite adds $((SPRITE_BYTES - EMPTY_BYTES)) resident bytes"
 echo "PASS: literal hello resident size is $HELLO_BYTES bytes"
 echo "PASS: escaped literal resident size is $CONTROL_BYTES bytes with the lightweight console"
-echo "PASS: dynamic-string lightweight core is $GENERAL_BYTES bytes; compact memory reduces it to $COMPACT_BYTES bytes (saving $((GENERAL_BYTES - COMPACT_BYTES)) bytes)"
+echo "PASS: dynamic-string lightweight core is $GENERAL_BYTES bytes with a $ARENA_BYTES-byte automatic arena"
+echo "PASS: --memory-max does not reserve resident storage (delta $MEMORY_LIMIT_DELTA bytes)"
+echo "PASS: --memory-reserve removed exactly 4096 bytes and --memory-min guards headroom"
 echo "PASS: pool-free full-profile Clock resident size is $CLOCK_BYTES bytes"

@@ -103,8 +103,6 @@ verify_startup_cost() {
     "$prefix.exe.c" >"$prefix-control.c"
   zcc +zxn -m -vn -subtype=nex -startup=31 -clib=sdcc_iy --opt-code-size \
     -create-app \
-    -DRIFT_ZXN_BUMP_POOL_CAPACITY=1024 \
-    -DRIFT_ZXN_LONGLIVED_POOL_CAPACITY=6144 \
     -DRIFT_ZXN_TINY_CORE -DRIFT_ZXN_TINY_PRINT_DIRECT \
     -pragma-include:"$ROOT/src/lib/zxn/zpragma_zxn.inc" \
     -I"$ROOT/src/lib" -lm \

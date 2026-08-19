@@ -57,16 +57,16 @@ The compiler's profile is authoritative. The native driver translates it into
 toolchain startup and preprocessor options but does not reclassify the profile
 by inspecting selected component names.
 
-The sidecar begins with `RIFT_COMPONENTS_V1`, an
+The sidecar begins with `RIFT_COMPONENTS_V2`, a required
 `@pools=none|required` record, an independent `@bump=none|required` record,
 then an `@profile=full`, `core-31`, `tiny-31`, or `tiny-console-31` record,
 followed by component IDs. The driver maps the profile to startup/console
 flags, the pool record to `RIFT_ZXN_NO_POOLS`, and an unused bump lifetime to
-`RIFT_ZXN_NO_BUMP_POOL`. An explicit `--zxn-bump-pool` or `--rtl=all` keeps
-that storage even when the compiler reports `@bump=none`. Embedded C is
+`RIFT_ZXN_NO_BUMP_POOL`. `--rtl=all` keeps bump support even when the compiler
+reports `@bump=none`. Embedded C is
 conservatively `@bump=required`, because its allocator calls are opaque to the
-AST collector. For compatibility with older V1 sidecars, an absent `@pools`
-or `@bump` record conservatively means `required`.
+AST collector. V1 sidecars and incomplete V2 metadata are rejected rather than
+guessing allocator requirements.
 `tiny-31`
 covers empty programs and plain-ASCII literal output through the smallest
 direct ULA writer. `tiny-console-31` adds Rift-owned newline, carriage-return,

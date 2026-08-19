@@ -20,7 +20,7 @@ compile_with() {
 compile_with gcc "$WORK/host" "$FIXTURES/component_manifest_order.manifest"
 compile_with zxn "$WORK/zxn" "$FIXTURES/component_manifest_order.manifest"
 
-expected=$'RIFT_COMPONENTS_V1\n@pools=required\n@bump=none\n@profile=full\nalpha\nbeta\ngamma\ntop'
+expected=$'RIFT_COMPONENTS_V2\n@pools=required\n@bump=none\n@profile=full\nalpha\nbeta\ngamma\ntop'
 [ "$(cat "$WORK/host.components")" = "$expected" ] || fail "wrong dependency order"
 cmp "$WORK/host.components" "$WORK/zxn.components" >/dev/null || \
   fail "host and ZXN closures differ"
@@ -36,7 +36,8 @@ grep -q '__strtmp_.*data = NULL' "$WORK/host.c" || fail "produced native string 
 
 gcc -Wall -Werror -Wno-unused-variable -Wno-implicit-function-declaration \
   -I"$FIXTURES" -I"$ROOT/src/lib" -I"$ROOT/src/ext/lib" -o "$WORK/lifecycle" "$WORK/host.c" \
-  "$FIXTURES/component_lifecycle.c" "$ROOT/src/lib/pools.c" \
+  "$FIXTURES/component_lifecycle.c" "$ROOT/src/lib/arena_host.c" \
+  "$ROOT/src/lib/pools.c" \
   "$ROOT/src/lib/print_bytes.c" "$ROOT/src/lib/fundefs.c" \
   "$ROOT/src/lib/error_sink.c" \
   "$ROOT/src/lib/fundefs_internal.c" "$ROOT/src/lib/handle_runtime.c" \
@@ -50,7 +51,8 @@ gcc -Wall -Werror -Wno-unused-variable -Wno-implicit-function-declaration \
   "--component-manifest=$FIXTURES/component_manifest_unknown_hook.manifest"
 if gcc -Wno-implicit-function-declaration -I"$ROOT/src/lib" -I"$ROOT/src/ext/lib" \
     -o "$WORK/missing-hook" "$WORK/missing-hook.c" \
-    "$ROOT/src/lib/pools.c" "$ROOT/src/lib/print_bytes.c" \
+    "$ROOT/src/lib/arena_host.c" "$ROOT/src/lib/pools.c" \
+    "$ROOT/src/lib/print_bytes.c" \
     "$ROOT/src/lib/error_sink.c" \
     "$ROOT/src/lib/fundefs.c" "$ROOT/src/lib/fundefs_internal.c" \
     "$ROOT/src/lib/handle_runtime.c" "$ROOT/src/lib/termination.c" \
@@ -62,7 +64,7 @@ fi
 
 "$ROOT/riftc" "$FIXTURES/sprite_type_methods.rift" "$WORK/sprite" \
   "--component-manifest=$ROOT/src/lib/components.manifest"
-[ "$(cat "$WORK/sprite.components")" = $'RIFT_COMPONENTS_V1\n@pools=required\n@bump=none\n@profile=full\ntiny_print\nerror_sink\nhost_ui\ncore\nsprite' ] || \
+[ "$(cat "$WORK/sprite.components")" = $'RIFT_COMPONENTS_V2\n@pools=required\n@bump=none\n@profile=full\ntiny_print\nerror_sink\nhost_ui\ncore\nsprite' ] || \
   fail "Sprite type-method use did not select the component exactly once"
 grep -q '^byte sprite = (byte)(3);$' "$WORK/sprite.c" || \
   fail "Sprite constructor did not lower to its byte representation"
@@ -102,12 +104,12 @@ grep -q 'capabilities must contain only startup31 or pools' \
   cd /tmp
   "$ROOT/riftc" "$FIXTURES/zxn_size_empty.rift" "$WORK/direct"
 )
-[ "$(cat "$WORK/direct.components")" = $'RIFT_COMPONENTS_V1\n@pools=required\n@bump=none\n@profile=full\ntiny_print\nerror_sink\nhost_ui\ncore' ] || \
+[ "$(cat "$WORK/direct.components")" = $'RIFT_COMPONENTS_V2\n@pools=required\n@bump=none\n@profile=full\ntiny_print\nerror_sink\nhost_ui\ncore' ] || \
   fail "direct riftc default manifest depends on working directory"
 
 "$ROOT/riftc" "$FIXTURES/native_name_shadow.rift" "$WORK/shadow" \
   "--component-manifest=$ROOT/src/lib/components.manifest"
-[ "$(cat "$WORK/shadow.components")" = $'RIFT_COMPONENTS_V1\n@pools=required\n@bump=none\n@profile=full\ntiny_print\nerror_sink\nhost_ui\ncore' ] || \
+[ "$(cat "$WORK/shadow.components")" = $'RIFT_COMPONENTS_V2\n@pools=required\n@bump=none\n@profile=full\ntiny_print\nerror_sink\nhost_ui\ncore' ] || \
   fail "user function shadow incorrectly selected a native component"
 grep -q '^sleep(3);$' "$WORK/shadow.c" || fail "resolved user sleep call was lowered as native"
 if grep -q '^rift_sleep(3);$' "$WORK/shadow.c"; then fail "native lowering ignored resolved target"; fi
@@ -135,7 +137,7 @@ grep -q "undefined function printf" "$WORK/printf-undefined.log" || \
 grep -q '^@profile=full$' "$WORK/beep.components" || \
   fail "ROM BEEPER was incorrectly admitted to a startup-31 profile"
 [ "$(cat "$WORK/beep.components")" = \
-    $'RIFT_COMPONENTS_V1\n@pools=none\n@bump=none\n@profile=full\nscalar_casts\nsound' ] || \
+    $'RIFT_COMPONENTS_V2\n@pools=none\n@bump=none\n@profile=full\nscalar_casts\nsound' ] || \
   fail "scalar sound retained managed core or pools"
 
 for target in gcc zxn; do
@@ -143,9 +145,9 @@ for target in gcc zxn; do
     "$WORK/clock-trig-$target" --target="$target" \
     "--component-manifest=$ROOT/src/lib/components.manifest"
   if [ "$target" = zxn ]; then
-    expected_clock_trig=$'RIFT_COMPONENTS_V1\n@pools=none\n@bump=none\n@profile=full\nclock\ntrig'
+    expected_clock_trig=$'RIFT_COMPONENTS_V2\n@pools=none\n@bump=none\n@profile=full\nclock\ntrig'
   else
-    expected_clock_trig=$'RIFT_COMPONENTS_V1\n@pools=required\n@bump=none\n@profile=full\ntiny_print\nerror_sink\nhost_ui\ncore\nclock\ntrig'
+    expected_clock_trig=$'RIFT_COMPONENTS_V2\n@pools=required\n@bump=none\n@profile=full\ntiny_print\nerror_sink\nhost_ui\ncore\nclock\ntrig'
   fi
   [ "$(cat "$WORK/clock-trig-$target.components")" = "$expected_clock_trig" ] || \
     fail "clock/trig selected the wrong $target component closure"
@@ -163,14 +165,14 @@ done
 "$ROOT/riftc" "$FIXTURES/zxn_graphics_core_profile.rift" "$WORK/graphics-core" \
   --target=zxn "--component-manifest=$ROOT/src/lib/components.manifest"
 [ "$(cat "$WORK/graphics-core.components")" = \
-    $'RIFT_COMPONENTS_V1\n@pools=none\n@bump=none\n@profile=tiny-31\nhost_ui' ] || \
+    $'RIFT_COMPONENTS_V2\n@pools=none\n@bump=none\n@profile=tiny-31\nhost_ui' ] || \
   fail "graphics lifecycle calls retained managed core or pools"
 
 "$ROOT/riftc" "$FIXTURES/zxn_graphics_pool_free.rift" \
   "$WORK/graphics-pool-free" --target=zxn \
   "--component-manifest=$ROOT/src/lib/components.manifest"
 [ "$(cat "$WORK/graphics-pool-free.components")" = \
-    $'RIFT_COMPONENTS_V1\n@pools=none\n@bump=none\n@profile=tiny-31\nscalar_casts\nplot\nover\ndraw\ncircle' ] || \
+    $'RIFT_COMPONENTS_V2\n@pools=none\n@bump=none\n@profile=tiny-31\nscalar_casts\nplot\nover\ndraw\ncircle' ] || \
   fail "scalar graphics did not select the pool-free startup-31 closure"
 if grep -q '^core$' "$WORK/graphics-pool-free.components"; then
   fail "scalar graphics retained the monolithic core component"
@@ -180,14 +182,14 @@ fi
   "$WORK/scalar-services" --target=zxn \
   "--component-manifest=$ROOT/src/lib/components.manifest"
 [ "$(cat "$WORK/scalar-services.components")" = \
-    $'RIFT_COMPONENTS_V1\n@pools=none\n@bump=none\n@profile=tiny-31\nscalar_casts\nrandom\nhelpers\nfmath' ] || \
+    $'RIFT_COMPONENTS_V2\n@pools=none\n@bump=none\n@profile=tiny-31\nscalar_casts\nrandom\nhelpers\nfmath' ] || \
   fail "scalar helpers, random, or fmath retained managed core or pools"
 
 "$ROOT/riftc" "$FIXTURES/zxn_raw_memory_component.rift" \
   "$WORK/raw-memory" --target=zxn \
   "--component-manifest=$ROOT/src/lib/components.manifest"
 [ "$(cat "$WORK/raw-memory.components")" = \
-    $'RIFT_COMPONENTS_V1\n@pools=none\n@bump=none\n@profile=tiny-31\nscalar_casts\nasm_interop' ] || \
+    $'RIFT_COMPONENTS_V2\n@pools=none\n@bump=none\n@profile=tiny-31\nscalar_casts\nasm_interop' ] || \
   fail "peek/poke did not select only the raw-memory component"
 
 "$ROOT/riftc" "$FIXTURES/zxn_size_general_string.rift" \
@@ -200,7 +202,7 @@ grep -q '^tiny_test$' "$WORK/test-profile.components" || \
   "$WORK/string-only" --target=zxn \
   "--component-manifest=$ROOT/src/lib/components.manifest"
 [ "$(cat "$WORK/string-only.components")" = \
-    $'RIFT_COMPONENTS_V1\n@pools=required\n@bump=none\n@profile=core-31\ntiny_print\nerror_sink\nhost_ui\ncore' ] || \
+    $'RIFT_COMPONENTS_V2\n@pools=required\n@bump=none\n@profile=core-31\ntiny_print\nerror_sink\nhost_ui\ncore' ] || \
   fail "string-only closure retained arrays, handles, file I/O, or argv"
 
 "$ROOT/riftc" "$FIXTURES/runtime_array_component.rift" \

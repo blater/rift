@@ -23,13 +23,13 @@ debug_dir=$(sed -n 's/^rift: debug workspace: //p' "$tmpdir/build.log" | head -1
   --timeout-seconds 6 --artifacts "$tmpdir/artifacts" --require-emulator \
   test "$tmpdir/probe.nex"
 
-# Exercise capacity-class string growth under the compact target budget. This
-# fixture intentionally avoids Assert.rift so the test measures the managed
-# string path rather than the full test-helper closure.
-"$root/rift" --target=zxn --zxn-test --memory=compact \
+# Exercise capacity-class string growth under automatic memory. This fixture
+# intentionally avoids Assert.rift so the test measures the managed string
+# path rather than the full test-helper closure.
+"$root/rift" --target=zxn --zxn-test \
   "$root/test/fixtures/string_growth_zxn_smoke.rift" "$tmpdir/growth.exe" \
   >"$tmpdir/growth.log" 2>&1
-grep -q 'ZXN profile: startup=31, memory=compact, .*light-core=1' \
+grep -q 'ZXN profile: startup=31, memory=auto, .*light-core=1' \
   "$tmpdir/growth.log"
 "$root/tools/rift-emu" --target zxn --emulator-bin "$emulator" \
   --timeout-seconds 6 --artifacts "$tmpdir/growth-artifacts" --require-emulator \

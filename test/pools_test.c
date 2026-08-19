@@ -15,6 +15,14 @@ static int tests_run    = 0;
 static int tests_passed = 0;
 static int tests_failed = 0;
 
+static void init_test_arena(size_t total_capacity) {
+  rift_arena_options options = {
+      .memory_max = total_capacity,
+      .memory_max_present = 1,
+  };
+  rift_pools_init(&options);
+}
+
 #define EXPECT(cond, msg)                                                      \
   do {                                                                          \
     if (!(cond)) {                                                              \
@@ -40,14 +48,14 @@ static int tests_failed = 0;
 /* ---- Bump pool ---- */
 
 static void bump_alloc_returns_nonnull(void) {
-  rift_pools_init(BUMP_CAP, LL_CAP);
+  init_test_arena(BUMP_CAP + LL_CAP);
   void *p = rift_bump_alloc(64);
   EXPECT(p != NULL, "bump_alloc returned NULL");
   rift_pools_deinit();
 }
 
 static void bump_alloc_advances_top(void) {
-  rift_pools_init(BUMP_CAP, LL_CAP);
+  init_test_arena(BUMP_CAP + LL_CAP);
   size_t before = rift_bump_used();
   rift_bump_alloc(64);
   EXPECT(rift_bump_used() == before + 64, "bump top did not advance by 64");
@@ -55,7 +63,7 @@ static void bump_alloc_advances_top(void) {
 }
 
 static void bump_save_restore(void) {
-  rift_pools_init(BUMP_CAP, LL_CAP);
+  init_test_arena(BUMP_CAP + LL_CAP);
   rift_bump_alloc(32);
   rift_bump_mark mark = rift_bump_save();
   rift_bump_alloc(128);
@@ -67,7 +75,7 @@ static void bump_save_restore(void) {
 }
 
 static void bump_save_restore_nested(void) {
-  rift_pools_init(BUMP_CAP, LL_CAP);
+  init_test_arena(BUMP_CAP + LL_CAP);
   rift_bump_mark m0 = rift_bump_save();
   rift_bump_alloc(16);
   rift_bump_mark m1 = rift_bump_save();
@@ -84,7 +92,7 @@ static void bump_save_restore_nested(void) {
 }
 
 static void bump_alignment(void) {
-  rift_pools_init(BUMP_CAP, LL_CAP);
+  init_test_arena(BUMP_CAP + LL_CAP);
   /* Allocate odd sizes; every result must meet the runtime alignment. */
   void *a = rift_bump_alloc(1);
   void *b = rift_bump_alloc(1);
@@ -98,7 +106,7 @@ static void bump_alignment(void) {
 /* ---- Longlived pool ---- */
 
 static void longlived_alloc_returns_payload(void) {
-  rift_pools_init(BUMP_CAP, LL_CAP);
+  init_test_arena(BUMP_CAP + LL_CAP);
   void *p = rift_longlived_alloc(16);
   EXPECT(p != NULL, "longlived_alloc returned NULL");
   rift_block_header *h = ((rift_block_header *)p) - 1;
@@ -108,7 +116,7 @@ static void longlived_alloc_returns_payload(void) {
 }
 
 static void longlived_size_rounds_to_alignment(void) {
-  rift_pools_init(BUMP_CAP, LL_CAP);
+  init_test_arena(BUMP_CAP + LL_CAP);
   void *p = rift_longlived_alloc(20);
   rift_block_header *h = ((rift_block_header *)p) - 1;
   EXPECT(h->size >= 20, "size is below request");
@@ -117,7 +125,7 @@ static void longlived_size_rounds_to_alignment(void) {
 }
 
 static void longlived_free_marks_free(void) {
-  rift_pools_init(BUMP_CAP, LL_CAP);
+  init_test_arena(BUMP_CAP + LL_CAP);
   void *p = rift_longlived_alloc(16);
   rift_longlived_free(p);
   rift_block_header *h = ((rift_block_header *)p) - 1;
@@ -127,7 +135,7 @@ static void longlived_free_marks_free(void) {
 }
 
 static void longlived_free_then_realloc_reuses(void) {
-  rift_pools_init(BUMP_CAP, LL_CAP);
+  init_test_arena(BUMP_CAP + LL_CAP);
   void *p1 = rift_longlived_alloc(16);
   rift_longlived_free(p1);
   void *p2 = rift_longlived_alloc(16);
@@ -136,7 +144,7 @@ static void longlived_free_then_realloc_reuses(void) {
 }
 
 static void longlived_static_sentinel_not_freed(void) {
-  rift_pools_init(BUMP_CAP, LL_CAP);
+  init_test_arena(BUMP_CAP + LL_CAP);
   void *p = rift_longlived_alloc(16);
   rift_block_header *h = ((rift_block_header *)p) - 1;
   h->refcount = RIFT_RC_STATIC;
@@ -146,7 +154,7 @@ static void longlived_static_sentinel_not_freed(void) {
 }
 
 static void longlived_payload_writable(void) {
-  rift_pools_init(BUMP_CAP, LL_CAP);
+  init_test_arena(BUMP_CAP + LL_CAP);
   char *p = (char *)rift_longlived_alloc(64);
   memset(p, 0xAB, 64);
   for (int i = 0; i < 64; i++) {
@@ -156,7 +164,7 @@ static void longlived_payload_writable(void) {
 }
 
 static void longlived_payload_alignment(void) {
-  rift_pools_init(BUMP_CAP, LL_CAP);
+  init_test_arena(BUMP_CAP + LL_CAP);
   void *a = rift_longlived_alloc(1);
   void *b = rift_longlived_alloc(17);
   void *c = rift_longlived_alloc(63);
@@ -169,26 +177,26 @@ static void longlived_payload_alignment(void) {
 /* ---- Reclaim ---- */
 
 static void reclaim_drains_magazines_and_coalesces_buddies(void) {
-  rift_pools_init(BUMP_CAP, LL_CAP);
+  init_test_arena(BUMP_CAP + LL_CAP);
   void *p1 = rift_longlived_alloc(16);
   void *p2 = rift_longlived_alloc(16);
   rift_longlived_free(p1);
   rift_longlived_free(p2);
-  rift_longlived_reclaim();
+  rift_collect();
   EXPECT(rift_longlived_largest_free_block() >= 32,
          "collection did not make a larger buddy class available");
   rift_pools_deinit();
 }
 
 static void reclaim_does_not_merge_live_with_free(void) {
-  rift_pools_init(BUMP_CAP, LL_CAP);
+  init_test_arena(BUMP_CAP + LL_CAP);
   void *p1 = rift_longlived_alloc(16);
   void *p2 = rift_longlived_alloc(16);
   void *p3 = rift_longlived_alloc(16);
   rift_longlived_free(p1);
   rift_longlived_free(p3);
   /* p2 is live between two free blocks; reclaim must not merge across it. */
-  rift_longlived_reclaim();
+  rift_collect();
   rift_block_header *h1 = ((rift_block_header *)p1) - 1;
   rift_block_header *h2 = ((rift_block_header *)p2) - 1;
   rift_block_header *h3 = ((rift_block_header *)p3) - 1;
@@ -201,27 +209,28 @@ static void reclaim_does_not_merge_live_with_free(void) {
 }
 
 static void reclaim_chains_three_adjacent(void) {
-  rift_pools_init(BUMP_CAP, LL_CAP);
+  init_test_arena(BUMP_CAP + LL_CAP);
   void *p1 = rift_longlived_alloc(16);
   void *p2 = rift_longlived_alloc(16);
   void *p3 = rift_longlived_alloc(16);
   rift_longlived_free(p1);
   rift_longlived_free(p2);
   rift_longlived_free(p3);
-  rift_longlived_reclaim();
+  rift_collect();
   EXPECT(rift_longlived_largest_free_block() >= 32,
          "three frees did not restore a useful buddy class");
   rift_pools_deinit();
 }
 
 static void coalesced_region_serves_smaller_allocation(void) {
-  rift_pools_init(BUMP_CAP, 256);
+  init_test_arena(256);
   void *p1 = rift_longlived_alloc(16);
   void *p2 = rift_longlived_alloc(16);
   void *p3 = rift_longlived_alloc(16);
   rift_longlived_free(p1);
   rift_longlived_free(p2);
   rift_longlived_free(p3);
+  rift_collect();
   EXPECT(rift_longlived_largest_free_block() >= 48,
          "three freed blocks were not coalesced into a reusable region");
   void *reuse = rift_longlived_alloc(32);
@@ -230,7 +239,7 @@ static void coalesced_region_serves_smaller_allocation(void) {
 }
 
 static void common_short_lived_workload_has_constant_scan_depth(void) {
-  rift_pools_init(1024, 6144);
+  init_test_arena(7168);
   rift_allocator_stats_reset();
   for (int i = 0; i < 50; i++) {
     void *number = rift_longlived_alloc(8);
@@ -248,7 +257,7 @@ static void common_short_lived_workload_has_constant_scan_depth(void) {
 }
 
 static void hot_small_block_cache_avoids_a_list_scan(void) {
-  rift_pools_init(1024, 1024);
+  init_test_arena(2048);
   void *before = rift_longlived_alloc(16);
   void *hot = rift_longlived_alloc(8);
   void *after = rift_longlived_alloc(16);
@@ -266,7 +275,7 @@ static void hot_small_block_cache_avoids_a_list_scan(void) {
 }
 
 static void collect_reclaims_magazines_for_a_larger_class(void) {
-  rift_pools_init(1024, 128);
+  init_test_arena(128);
   void *blocks[4];
   for (int i = 0; i < 4; i++) blocks[i] = rift_longlived_alloc(1);
   for (int i = 0; i < 4; i++) rift_longlived_free(blocks[i]);
@@ -283,8 +292,26 @@ static void collect_reclaims_magazines_for_a_larger_class(void) {
   rift_pools_deinit();
 }
 
+static void allocation_pressure_collects_before_oom(void) {
+  init_test_arena(128);
+  void *blocks[4];
+  for (int i = 0; i < 4; i++) blocks[i] = rift_longlived_alloc(1);
+  for (int i = 0; i < 4; i++) rift_longlived_free(blocks[i]);
+  EXPECT(rift_longlived_largest_free_block() < 16,
+         "fixture must hold capacity in smaller magazines");
+  rift_allocator_stats_reset();
+  void *larger = rift_longlived_alloc(16);
+  rift_allocator_stats stats = rift_allocator_stats_get();
+  EXPECT(larger != NULL,
+         "allocation reported a false OOM instead of draining magazines");
+  EXPECT(stats.collect_calls == 1,
+         "allocation pressure must perform exactly one automatic collection");
+  rift_longlived_free(larger);
+  rift_pools_deinit();
+}
+
 static void fragmented_large_request_uses_bounded_buddy_classes(void) {
-  rift_pools_init(1024, 1024);
+  init_test_arena(1024);
   void *blocks[16];
   for (int i = 0; i < 16; i++) blocks[i] = rift_longlived_alloc(16);
   for (int i = 0; i < 16; i += 2) rift_longlived_free(blocks[i]);
@@ -313,7 +340,7 @@ static void capture_oom(const char *pool, size_t requested, size_t avail) {
 }
 
 static void bump_oom_invokes_handler(void) {
-  rift_pools_init(64, LL_CAP);
+  init_test_arena(64);
   oom_called = 0; oom_pool = NULL;
   rift_set_oom_handler(capture_oom);
   rift_bump_alloc(128); /* exceeds cap */
@@ -324,7 +351,7 @@ static void bump_oom_invokes_handler(void) {
 }
 
 static void longlived_oom_invokes_handler(void) {
-  rift_pools_init(BUMP_CAP, 32);
+  init_test_arena(32);
   oom_called = 0; oom_pool = NULL;
   rift_set_oom_handler(capture_oom);
   rift_longlived_alloc(128); /* exceeds cap */
@@ -337,7 +364,7 @@ static void longlived_oom_invokes_handler(void) {
 /* ---- Diagnostics ---- */
 
 static void diagnostics_track_usage(void) {
-  rift_pools_init(BUMP_CAP, LL_CAP);
+  init_test_arena(BUMP_CAP + LL_CAP);
   EXPECT(rift_bump_used() == 0, "bump used should start at 0");
   EXPECT(rift_longlived_used() == 0, "longlived used should start at 0");
   rift_bump_alloc(64);
@@ -354,12 +381,32 @@ static void diagnostics_track_usage(void) {
 }
 
 static void free_bytes_reflects_available_classes(void) {
-  rift_pools_init(BUMP_CAP, LL_CAP);
+  init_test_arena(BUMP_CAP + LL_CAP);
   size_t before = rift_longlived_free_bytes();
   void *p = rift_longlived_alloc(64);
   EXPECT(rift_longlived_free_bytes() < before, "allocation did not consume free capacity");
   rift_longlived_free(p);
   EXPECT(rift_longlived_free_bytes() > 0, "free bytes should reflect recovered capacity");
+  rift_pools_deinit();
+}
+
+static void allocator_kinds_share_one_uncommitted_extent(void) {
+  init_test_arena(256);
+  size_t initial_bump_capacity = rift_bump_capacity();
+  void *block = rift_longlived_alloc(64);
+  size_t claimed_bump_capacity = rift_bump_capacity();
+  EXPECT(claimed_bump_capacity < initial_bump_capacity,
+         "long-lived growth did not consume the shared extent");
+  rift_longlived_free(block);
+  rift_collect();
+  EXPECT(rift_bump_capacity() == initial_bump_capacity,
+         "tail-root release did not return capacity to bump allocation");
+  rift_bump_mark mark = rift_bump_save();
+  rift_bump_alloc(128);
+  size_t claimed_longlived_capacity = rift_longlived_capacity();
+  rift_bump_restore(mark);
+  EXPECT(rift_longlived_capacity() > claimed_longlived_capacity,
+         "bump restore did not return capacity to long-lived allocation");
   rift_pools_deinit();
 }
 
@@ -387,6 +434,7 @@ int main(void) {
   RUN(common_short_lived_workload_has_constant_scan_depth);
   RUN(hot_small_block_cache_avoids_a_list_scan);
   RUN(collect_reclaims_magazines_for_a_larger_class);
+  RUN(allocation_pressure_collects_before_oom);
   RUN(fragmented_large_request_uses_bounded_buddy_classes);
 
   RUN(bump_oom_invokes_handler);
@@ -394,6 +442,7 @@ int main(void) {
 
   RUN(diagnostics_track_usage);
   RUN(free_bytes_reflects_available_classes);
+  RUN(allocator_kinds_share_one_uncommitted_extent);
 
   printf("\n%d/%d passed (%d failed)\n", tests_passed, tests_run, tests_failed);
   return tests_failed == 0 ? 0 : 1;

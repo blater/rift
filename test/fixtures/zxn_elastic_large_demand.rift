@@ -1,0 +1,4 @@
+sub main() {
+  byte[7000] values;
+  zxn_test_pass();
+}

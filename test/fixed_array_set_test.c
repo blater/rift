@@ -52,8 +52,12 @@ static int check_poisoned_string_append(void) {
 int main(int argc, char **argv) {
   __internal_dynamic_array_t sprites;
   byte slot;
+  rift_arena_options arena_options = {
+      .memory_max = POOL_CAPACITY,
+      .memory_max_present = 1,
+  };
 
-  rift_pools_init(POOL_CAPACITY, POOL_CAPACITY);
+  rift_pools_init(&arena_options);
   sprites = __internal_make_array(sizeof(byte), 3);
 
   if (argc == 2 && strcmp(argv[1], "gap") == 0) {

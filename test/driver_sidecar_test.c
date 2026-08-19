@@ -35,12 +35,8 @@ int main(int argc, char **argv) {
   check(requirements.component_count == 1 &&
             strcmp(requirements.components[0]->id, "sprite") == 0,
         "selected component order is preserved");
-  check(driver_read_requirements(argv[3], manifest, &requirements),
-        "legacy V1 sidecar without pool metadata is accepted");
-  check(requirements.pools_required,
-        "legacy V1 sidecar conservatively requires pools");
-  check(requirements.bump_required,
-        "legacy V1 sidecar conservatively requires bump storage");
+  check(!driver_read_requirements(argv[3], manifest, &requirements),
+        "legacy V1 sidecar is rejected instead of guessing memory needs");
   check(!driver_read_requirements(argv[4], manifest, &requirements),
         "unknown compiler profile is rejected");
   check(!driver_read_requirements(argv[5], manifest, &requirements),

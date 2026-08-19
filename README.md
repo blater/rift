@@ -264,25 +264,29 @@ Build a `.nex` program with Z88DK:
 Rift uses Z88DK’s SDCC backend for this target and publishes the resulting
 NEX-format image with its standard `.nex` extension.
 
-Programs with modest dynamic-memory needs can trade allocation capacity for a
-smaller resident image without knowing how Rift's allocators are divided:
+Managed memory is automatic by default. Rift starts its arena after the linked
+program and grows it on demand toward the protected hardware-stack boundary;
+unused capacity is not stored in the NEX resident image. The build reports the
+exact arena bounds and capacity.
+
+Most programs need no memory option. Purpose-level bounds are available when a
+program has an external memory contract:
 
 ```bash
-./rift --memory=compact hello.rift
+./rift --memory-max=16384 --memory-min=8192 hello.rift
 ```
 
-`--memory=compact` reserves 1.25 KiB across the managed pools and saves up to
-5,888 bytes when the selected runtime uses the allocator. The default
-`--memory=standard` reserves 7 KiB across those pools. An undersized
-configuration fails with a named out-of-memory error instead of overwriting
-other target memory. Independently of this preset, the compiler automatically
-omits the bump pool when the program has no bump-lifetime allocation path; in
-that common case compact saves 5,120 bytes, and the build profile reports the
-unused pool as `bump-pool=... (omitted)`. Advanced users can
-tune one or both capacities with
-`--zxn-bump-pool=BYTES` and `--zxn-longlived-pool=BYTES`; those options override
-the corresponding preset value regardless of their position on the command
-line.
+`--memory-max=BYTES` limits the total automatic arena, while
+`--memory-min=BYTES` rejects a build whose linked program leaves less than the
+required headroom. Managed programs that also coordinate with raw-address or
+MMU code can use `--memory-reserve=BYTES` to leave an additional high-memory
+region outside the arena. Explicit memory bounds require a selected runtime
+closure with managed allocation. Inputs are decimal byte counts; Rift aligns
+the effective target arena bounds and cap internally, without exposing an
+allocator split. The compiler automatically omits bump support when the
+program has no bump-lifetime allocation path. Freed managed blocks coalesce
+immediately or enter small bounded caches; allocation pressure drains those
+caches and retries once before reporting a named out-of-memory error.
 
 
 ## Test

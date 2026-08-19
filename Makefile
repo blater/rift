@@ -14,7 +14,7 @@ DRIVER_OBJECTS = $(BUILD)driver_main.o $(BUILD)driver_options.o \
                  $(BUILD)driver_sidecar.o $(BUILD)driver_build_plan.o
 DEPS = $(OBJECTS:.o=.d) $(DRIVER_OBJECTS:.o=.d)
 
-.PHONY: all clean test-driver-locations test-driver-options test-driver-sidecar test-pools test-name-table test-semantic-ir test-ownership-plan test-type-method-autocast test-component-manifest test-asset-language test-negative test-refcount test-sprite-runtime test-zesarux-index-cache test-zesarux-zrcp test-zesarux-maintenance test-zxn-assets test-zxn-sprite test-zxn test-zxn-tiny-print test-zxn-light-core test-autolink test-memory-profile test-zxn-size check-rift-rename
+.PHONY: all clean test-driver-locations test-driver-options test-driver-sidecar test-arena test-pools test-name-table test-semantic-ir test-ownership-plan test-type-method-autocast test-component-manifest test-asset-language test-negative test-refcount test-sprite-runtime test-zesarux-index-cache test-zesarux-zrcp test-zesarux-maintenance test-zxn-assets test-zxn-sprite test-zxn test-zxn-tiny-print test-zxn-light-core test-autolink test-memory-options test-memory-profile test-zxn-size check-rift-rename
 
 all: $(BUILD) riftc rift $(BUILD)verify-zxn-assets
 
@@ -60,7 +60,10 @@ $(BUILD)asset_generator.o: $(SRC)generator/assets.c | $(BUILD)
 $(BUILD)alloc.o: $(LIB)alloc.c | $(BUILD)
 	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
 
-$(BUILD)pools.o: $(LIB)pools.c $(LIB)pools.h | $(BUILD)
+$(BUILD)arena_host.o: $(LIB)arena_host.c $(LIB)arena.h | $(BUILD)
+	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
+
+$(BUILD)pools.o: $(LIB)pools.c $(LIB)pools.h $(LIB)arena.h | $(BUILD)
 	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
 
 riftc: $(OBJECTS)
@@ -74,13 +77,20 @@ $(BUILD)verify-zxn-assets: tools/verify-zxn-assets.c | $(BUILD)
 
 # Phase A.2 — pool runtime test harness.
 # Standalone C test, no Rift language integration yet.
-$(BUILD)pools_test: test/pools_test.c $(BUILD)pools.o \
+$(BUILD)pools_test: test/pools_test.c $(BUILD)pools.o $(BUILD)arena_host.o \
                      $(BUILD)error_sink_for_test.o | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ test/pools_test.c $(BUILD)pools.o \
+		$(BUILD)arena_host.o \
 		$(BUILD)error_sink_for_test.o
 
 test-pools: $(BUILD)pools_test
 	$(BUILD)pools_test
+
+$(BUILD)arena_test: test/arena_test.c $(BUILD)arena_host.o | $(BUILD)
+	$(CC) $(CFLAGS) -o $@ $^
+
+test-arena: $(BUILD)arena_test
+	$(BUILD)arena_test
 
 $(BUILD)name_table_test: test/name_table_test.c $(BUILD)name_table.o \
                          $(BUILD)ast.o $(BUILD)alloc.o $(BUILD)stringview.o | $(BUILD)
@@ -174,6 +184,7 @@ RUNTIME_TEST_SUPPORT_OBJECTS = $(BUILD)error_sink_for_test.o \
                                $(BUILD)termination_for_test.o \
                                $(BUILD)termbox2_for_test.o
 $(BUILD)string_refcount_test: test/string_refcount_test.c $(BUILD)pools.o \
+                              $(BUILD)arena_host.o \
                               $(BUILD)fundefs_for_test.o \
                               $(BUILD)fundefs_internal_for_test.o \
                               $(BUILD)print_bytes_for_test.o \
@@ -181,6 +192,7 @@ $(BUILD)string_refcount_test: test/string_refcount_test.c $(BUILD)pools.o \
 	$(CC) $(RUNTIME_CFLAGS) -o $@ $^
 
 $(BUILD)fixed_array_set_test: test/fixed_array_set_test.c $(BUILD)pools.o \
+                              $(BUILD)arena_host.o \
                               $(BUILD)fundefs_for_test.o \
                               $(BUILD)fundefs_internal_for_test.o \
                               $(BUILD)print_bytes_for_test.o \
@@ -240,8 +252,11 @@ test-autolink: riftc
 
 # Host execution under the exact constrained pool sizes used by the ZX Next
 # target. Ownership loops must complete without pool exhaustion or UAF.
-test-memory-profile: riftc
+test-memory-profile: rift riftc
 	sh test/test_memory_profile.sh
+
+test-memory-options: rift riftc
+	sh test/test_memory_options.sh
 
 # Verify literal-print lowering, conservative CRT/tiny-core selection, and
 # configurable target pool capacities without requiring an emulator.

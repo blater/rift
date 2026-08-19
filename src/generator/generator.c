@@ -2383,8 +2383,7 @@ void generate_return(generator_t *g, ast_t ret_ast) {
      * wrap captured an extra reference to the return value's backing so
      * the release dec's it back to its pre-call refcount, then the
      * caller's transfer takes ownership. */
-    if (!inferred_input &&
-        expr_returns_string(ret_ast->data.ret.expr, g->table)) {
+    if (expr_returns_string(ret_ast->data.ret.expr, g->table)) {
       char retval[32];
       char source[32];
       int explicit_producer_release =

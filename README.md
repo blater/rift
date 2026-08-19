@@ -127,6 +127,30 @@ Runtime components are selected from resolved calls through
 `src/lib/components.manifest`; the same dependency closure drives host and ZX
 Next builds.
 
+The ZX Next console is length-aware and does not link Z88DK stdio for ordinary
+Rift I/O. `print` and `println` accept strings, characters, booleans, and all
+numeric scalar types; positioned forms use character cells or an exact ULA
+top-scanline address:
+
+```rift
+paper(0);
+border(0);
+cls();
+print(to_byte(10), to_byte(5), "score=");
+println(42);
+putchar_at(to_byte(31), to_byte(23), '!');
+putchar_addr(to_word(16384), 'A');
+string line := input(); // echoed, blocking, maximum 255 characters
+```
+
+The former Rift `printf` builtin has been removed; use `print`/`println`.
+Embedded C may still call C stdio and consequently selects the full CRT.
+
+`examples/cat_walk.rift` uses the regenerated
+`examples/assets/cat/walk.spr`: twelve complete 16×16 8bpp frames derived from
+`assets/cat/walk2.png`. Each source frame is normalized into its own 16-pixel
+cell before packing, so animation poses are not horizontally truncated.
+
 #### Tagged unions and match
 ```rift
   union Token {
@@ -156,7 +180,7 @@ you need:
 - `gcc`
 - [Z88DK](https://z88dk.org/) with `zcc` available on your `PATH`
 
-ZX Spectrum Next `.zxn` programs are the default build target and use Z88DK.
+ZX Spectrum Next `.nex` programs are the default build target and use Z88DK.
 Native programs use GCC when selected with `--target=gcc`.
 `SpritePattern` build inputs are generated directly by the compiler; the build
 has no Perl or external asset-packing dependency.
@@ -190,7 +214,7 @@ Build it for the default ZX Spectrum Next target:
 ```
 
 The `rift` driver translates the source to C, compiles it with Z88DK, and
-creates `hello.zxn`.
+creates `hello.nex`.
 
 To build and run it as a native host program instead:
 
@@ -229,7 +253,7 @@ Build a native executable with GCC:
 
 ### ZX Spectrum Next
 
-Build a `.zxn` program with Z88DK:
+Build a `.nex` program with Z88DK:
 
 ```bash
 ./rift hello.rift
@@ -237,9 +261,8 @@ Build a `.zxn` program with Z88DK:
 ./rift hello.rift --target=zxn
 ```
 
-Rift uses Z88DK’s SDCC backend for this target. Z88DK creates a NEX-format
-image internally; the driver publishes the final program with Rift's `.zxn`
-extension.
+Rift uses Z88DK’s SDCC backend for this target and publishes the resulting
+NEX-format image with its standard `.nex` extension.
 
 
 ## Test

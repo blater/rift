@@ -6,7 +6,7 @@
 ## Build, Test, and Development Commands
 - `make` — compiles everything under `src/` into `riftc` using `gcc -Werror -Wall -Wextra`. Run it before testing or submitting patches.
 - `make clean` — removes `build/` and `riftc`.
-- `./rift path/to/foo.rift [foo]` — transpiles via `riftc` then builds `foo.zxn` for the default ZX Next target (requires the `zcc +zxn` toolchain). Pass `--target=gcc` to build `foo.exe` for the host. Intermediates stay under `/tmp`; `--debug` reports and retains that workspace.
+- `./rift path/to/foo.rift [foo]` — transpiles via `riftc` then builds `foo.nex` for the default ZX Next target (requires the `zcc +zxn` toolchain). Pass `--target=gcc` to build `foo.exe` for the host. Intermediates stay under `/tmp`; `--debug` reports and retains that workspace.
 - `./run_tests.sh [test/substring_test.rift]` — compiles each `.rift` with `./rift --target=gcc` and runs the resulting binaries; provide a path to iterate on a single test.
 
 ## Coding Style & Naming Conventions

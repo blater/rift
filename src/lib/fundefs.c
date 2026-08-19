@@ -26,11 +26,26 @@ void __rift_make_string(string *out, const char *data, size_t length) {
  * (refcount = 1 from rift_longlived_alloc). The caller writes `length+1`
  * bytes into out->data (including the null terminator). */
 void __rift_make_longlived_string(string *out, size_t length) {
-  char *payload = (char *)rift_longlived_alloc(length + 1);
+  char *payload;
+  if (length == SIZE_MAX) {
+    rift_error_text("string: length exceeds addressable storage\n");
+    exit_rift(1);
+  }
+  payload = (char *)rift_longlived_alloc(length + 1);
+  if (payload == NULL) {
+    /* A custom OOM observer is allowed to return. String construction cannot
+     * produce a valid descriptor without backing, so fail deterministically
+     * rather than dereferencing a missing allocation. */
+    rift_error_text("string: allocation failed\n");
+    exit_rift(1);
+  }
   out->data     = payload;
   out->length   = length;
-  out->capacity = length;
   out->backing  = ((rift_block_header *)payload) - 1;
+  /* The buddy class may contain more payload than the requested length.
+   * Record that already-paid space so unique concat assignments can grow
+   * without another allocation. */
+  out->capacity = (size_t)out->backing->size - 1;
 }
 
 char charAt(string s, int n) {
@@ -72,7 +87,7 @@ void __concat_char(string *out, string s, char c) {
     out->data[1] = 0;
     return;
   }
-  __rift_make_longlived_string(out, s.length + 1);
+  __rift_make_longlived_string(out, __concat_checked_add(s.length, 1));
   memcpy(out->data, s.data, s.length);
   out->data[s.length] = c;
   out->data[s.length + 1] = 0;
@@ -81,12 +96,13 @@ void __concat_char(string *out, string s, char c) {
 void __concat_str(string *out, string s1, string s2) {
   size_t len1 = (s1.data == NULL) ? 0 : s1.length;
   size_t len2 = (s2.data == NULL) ? 0 : s2.length;
-  __rift_make_longlived_string(out, len1 + len2);
+  size_t total = __concat_checked_add(len1, len2);
+  __rift_make_longlived_string(out, total);
   if (s1.data != NULL)
     memcpy(out->data, s1.data, len1);
   if (s2.data != NULL)
     memcpy(&out->data[len1], s2.data, len2);
-  out->data[len1 + len2] = 0;
+  out->data[total] = 0;
 }
 
 size_t __concat_checked_add(size_t total, size_t addition) {
@@ -99,8 +115,55 @@ size_t __concat_checked_add(size_t total, size_t addition) {
 
 size_t __concat_append_bytes(string out, size_t offset,
                              const char *data, size_t length) {
+  if (offset > out.length || length > out.length - offset) {
+    rift_error_text("concat: append exceeds allocated result\n");
+    exit_rift(1);
+  }
   if (data != NULL && length != 0) memcpy(out.data + offset, data, length);
   return offset + length;
+}
+
+void __concat_append_owned(string *value, const char *data, size_t length,
+                           unsigned int owned_refcount) {
+  size_t total = __concat_checked_add(value->length, length);
+  size_t backing_capacity = 0;
+  int can_reuse = 0;
+
+  if (length != 0 && data == NULL) {
+    rift_error_text("concat: non-empty source has no data\n");
+    exit_rift(1);
+  }
+
+  if (value->backing != NULL &&
+      value->backing->refcount == owned_refcount &&
+      value->backing->refcount != RIFT_RC_STATIC &&
+      value->backing->refcount != RIFT_RC_FREE &&
+      value->backing->refcount != RIFT_RC_MAGAZINE &&
+      value->data == (char *)(value->backing + 1) &&
+      value->backing->size != 0) {
+    backing_capacity = (size_t)value->backing->size - 1;
+    can_reuse = value->capacity == backing_capacity && total <= backing_capacity;
+  }
+
+  if (can_reuse) {
+    if (length != 0)
+      memmove(value->data + value->length, data, length);
+    value->length = total;
+    value->data[total] = 0;
+    return;
+  }
+
+  {
+    string replacement;
+    __rift_make_longlived_string(&replacement, total);
+    if (value->data != NULL && value->length != 0)
+      memcpy(replacement.data, value->data, value->length);
+    if (length != 0)
+      memcpy(replacement.data + value->length, data, length);
+    replacement.data[total] = 0;
+    __string_release(*value);
+    *value = replacement;
+  }
 }
 
 void new_string(string *out, string s) {

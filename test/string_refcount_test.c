@@ -10,6 +10,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <setjmp.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #define BUMP_CAP   (1u * 1024u * 1024u)
 #define LL_CAP     (1u * 1024u * 1024u)
@@ -56,6 +59,14 @@ static string make_longlived_string(const char *data, size_t length) {
   s.length   = length;
   s.capacity = length;
   s.backing  = ((rift_block_header *)payload) - 1;
+  return s;
+}
+
+static string make_produced_string(const char *data, size_t length) {
+  string s;
+  __rift_make_longlived_string(&s, length);
+  memcpy(s.data, data, length);
+  s.data[length] = 0;
   return s;
 }
 
@@ -173,6 +184,176 @@ static void multiple_descriptors_share_backing(void) {
   rift_pools_deinit();
 }
 
+static void produced_capacity_uses_allocator_payload(void) {
+  rift_pools_init(BUMP_CAP, LL_CAP);
+  string s = make_produced_string("ab", 2);
+  EXPECT(s.capacity == (size_t)s.backing->size - 1,
+         "produced capacity must expose the complete allocator payload");
+  EXPECT(s.capacity >= s.length,
+         "produced capacity must cover the visible string");
+  __string_release(s);
+  rift_pools_deinit();
+}
+
+static void append_reuses_unique_capacity(void) {
+  rift_pools_init(BUMP_CAP, LL_CAP);
+  string target = make_produced_string("ab", 2);
+  string base = target;
+  char *original_data = target.data;
+  __string_retain(base);
+  rift_allocator_stats_reset();
+  __concat_append_owned(&base, "c", 1, 2);
+  EXPECT(rift_allocator_stats_get().allocations == 0,
+         "unique assignment backing with spare capacity must be reused");
+  EXPECT(base.data == original_data && base.length == 3,
+         "in-place append must preserve backing and update length");
+  EXPECT(memcmp(base.data, "abc", 3) == 0,
+         "in-place append produced incorrect bytes");
+  __string_release(target);
+  target = base;
+  __string_release(target);
+  rift_pools_deinit();
+}
+
+static void append_copy_on_write_preserves_alias(void) {
+  rift_pools_init(BUMP_CAP, LL_CAP);
+  string target = make_produced_string("ab", 2);
+  string alias = target;
+  string base = target;
+  char *old_data = target.data;
+  __string_retain(alias);
+  __string_retain(base);
+  __concat_append_owned(&base, "c", 1, 2);
+  EXPECT(base.data != old_data,
+         "an external alias must force copy-on-write");
+  EXPECT(alias.length == 2 && memcmp(alias.data, "ab", 2) == 0,
+         "copy-on-write must preserve aliased bytes");
+  EXPECT(base.length == 3 && memcmp(base.data, "abc", 3) == 0,
+         "copy-on-write result has incorrect bytes");
+  __string_release(target);
+  __string_release(alias);
+  __string_release(base);
+  rift_pools_deinit();
+}
+
+static void self_append_is_alias_safe(void) {
+  rift_pools_init(BUMP_CAP, LL_CAP);
+  string target = make_produced_string("xy", 2);
+  string base = target;
+  string suffix = target;
+  __string_retain(base);
+  __string_retain(suffix);
+  __concat_append_owned(&base, suffix.data, suffix.length, 2);
+  EXPECT(base.length == 4 && memcmp(base.data, "xyxy", 4) == 0,
+         "self append must preserve the source while growing");
+  __string_release(suffix);
+  __string_release(target);
+  target = base;
+  __string_release(target);
+  rift_pools_deinit();
+}
+
+static void repeated_append_allocations_are_logarithmic(void) {
+  rift_pools_init(BUMP_CAP, LL_CAP);
+  string s = make_produced_string("", 0);
+  rift_allocator_stats_reset();
+  for (int i = 0; i < 1000; i++)
+    __concat_append_owned(&s, ".", 1, 1);
+  EXPECT(s.length == 1000, "repeated append produced the wrong length");
+  EXPECT(rift_allocator_stats_get().allocations <= 9,
+         "repeated append must grow by allocator capacity classes");
+  for (size_t i = 0; i < s.length; i++)
+    EXPECT(s.data[i] == '.', "repeated append corrupted content");
+  __string_release(s);
+  rift_pools_deinit();
+}
+
+static jmp_buf append_oom_jump;
+
+static void jump_on_oom(const char *pool_name, size_t requested,
+                        size_t available) {
+  (void)pool_name;
+  (void)requested;
+  (void)available;
+  longjmp(append_oom_jump, 1);
+}
+
+static void append_oom_leaves_source_unchanged(void) {
+  rift_pools_init(64, 64);
+  string s = make_produced_string("ab", 2);
+  char *original_data = s.data;
+  rift_block_header *original_backing = s.backing;
+  rift_set_oom_handler(jump_on_oom);
+  if (setjmp(append_oom_jump) == 0) {
+    __concat_append_owned(&s, "0123456789012345678901234567890123456789",
+                          40, 1);
+    EXPECT(0, "append should report OOM when replacement cannot be allocated");
+  }
+  rift_set_oom_handler(NULL);
+  EXPECT(s.data == original_data && s.backing == original_backing &&
+             s.length == 2 && memcmp(s.data, "ab", 2) == 0,
+         "failed growth must leave the source descriptor and bytes unchanged");
+  __string_release(s);
+  rift_pools_deinit();
+}
+
+static void append_length_overflow_halts(void) {
+  fflush(NULL);
+  pid_t child = fork();
+  int status = 0;
+  EXPECT(child >= 0, "fork failed");
+  if (child == 0) {
+    string s;
+    rift_pools_init(BUMP_CAP, LL_CAP);
+    s = make_produced_string("ab", 2);
+    __concat_append_owned(&s, "x", SIZE_MAX, 1);
+    _exit(0);
+  }
+  EXPECT(waitpid(child, &status, 0) == child, "waitpid failed");
+  EXPECT(WIFEXITED(status) && WEXITSTATUS(status) != 0,
+         "append length overflow must halt before pointer arithmetic");
+}
+
+static void observe_oom_and_return(const char *pool_name, size_t requested,
+                                   size_t available) {
+  (void)pool_name;
+  (void)requested;
+  (void)available;
+}
+
+static void returning_oom_handler_still_halts_string_construction(void) {
+  fflush(NULL);
+  pid_t child = fork();
+  int status = 0;
+  EXPECT(child >= 0, "fork failed");
+  if (child == 0) {
+    string s;
+    rift_pools_init(64, 64);
+    rift_set_oom_handler(observe_oom_and_return);
+    __rift_make_longlived_string(&s, 1000);
+    _exit(0);
+  }
+  EXPECT(waitpid(child, &status, 0) == child, "waitpid failed");
+  EXPECT(WIFEXITED(status) && WEXITSTATUS(status) != 0,
+         "a returning OOM observer must not lead to a NULL backing dereference");
+}
+
+static void impossible_string_length_halts_before_wraparound(void) {
+  fflush(NULL);
+  pid_t child = fork();
+  int status = 0;
+  EXPECT(child >= 0, "fork failed");
+  if (child == 0) {
+    string s;
+    rift_pools_init(BUMP_CAP, LL_CAP);
+    __rift_make_longlived_string(&s, SIZE_MAX);
+    _exit(0);
+  }
+  EXPECT(waitpid(child, &status, 0) == child, "waitpid failed");
+  EXPECT(WIFEXITED(status) && WEXITSTATUS(status) != 0,
+         "SIZE_MAX string length must halt instead of wrapping length + 1");
+}
+
 /* ---- Phase F: __return_string ---- */
 
 static void return_static_passes_through_unchanged(void) {
@@ -287,6 +468,15 @@ int main(void) {
   RUN(release_to_zero_frees_block);
   RUN(freed_block_can_be_reallocated);
   RUN(multiple_descriptors_share_backing);
+  RUN(produced_capacity_uses_allocator_payload);
+  RUN(append_reuses_unique_capacity);
+  RUN(append_copy_on_write_preserves_alias);
+  RUN(self_append_is_alias_safe);
+  RUN(repeated_append_allocations_are_logarithmic);
+  RUN(append_oom_leaves_source_unchanged);
+  RUN(append_length_overflow_halts);
+  RUN(returning_oom_handler_still_halts_string_construction);
+  RUN(impossible_string_length_halts_before_wraparound);
 
   RUN(return_static_passes_through_unchanged);
   RUN(return_longlived_increments_refcount);

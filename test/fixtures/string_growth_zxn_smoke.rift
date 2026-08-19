@@ -1,0 +1,9 @@
+sub main() {
+  string value := "";
+  for iteration := 1 to 80 {
+    value := concat(value, '.');
+  }
+  if length(value) != 80 {
+    halt(1);
+  }
+}

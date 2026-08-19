@@ -1,0 +1,77 @@
+include "Assert.rift"
+
+Assert as;
+string growth_source := "old";
+int suffix_calls := 0;
+int visit_order := 0;
+int producer_calls := 0;
+
+sub replace_growth_source() returns string {
+  suffix_calls := suffix_calls + 1;
+  growth_source := "changed";
+  return "-right";
+}
+
+sub visit_char(int digit, char value) returns char {
+  visit_order := (visit_order * 10) + digit;
+  return value;
+}
+
+sub counted_string() returns string {
+  producer_calls := producer_calls + 1;
+  return concat("produced", "");
+}
+
+sub forward_counted_string() returns string {
+  return counted_string();
+}
+
+sub main() {
+  string shared := concat("a", "b");
+  string alias := shared;
+  shared := concat(shared, 'c');
+  as.AssertEquals("concat assignment uses copy-on-write", "abc", shared);
+  as.AssertEquals("concat assignment preserves aliases", "ab", alias);
+
+  string doubled := concat("x", "y");
+  doubled := concat(doubled, doubled);
+  as.AssertEquals("self append is alias safe", "xyxy", doubled);
+
+  string whole := concat("a", "bcd");
+  string tail := substring(whole, 2);
+  whole := concat(whole, tail);
+  as.AssertEquals("substring append keeps source bytes", "abcdbcd", whole);
+  as.AssertEquals("substring view survives source growth", "bcd", tail);
+
+  growth_source := concat("o", "ld");
+  growth_source := concat(growth_source, replace_growth_source());
+  as.AssertEquals("left operand is stable across RHS effects",
+                  "old-right", growth_source);
+  as.AssertEQ("RHS producer is evaluated once", 1, suffix_calls);
+
+  counted_string();
+  as.AssertEQ("discarded producer is evaluated once", 1, producer_calls);
+  string forwarded := forward_counted_string();
+  as.AssertEQ("returned producer is evaluated once", 2, producer_calls);
+  as.AssertEquals("returned producer keeps its value", "produced", forwarded);
+
+  string ordered := "";
+  ordered := concat(ordered,
+                    concat(visit_char(1, 'a'), visit_char(2, 'b')));
+  as.AssertEQ("growth leaves evaluate left to right once", 12, visit_order);
+  as.AssertEquals("growth preserves flattened leaf order", "ab", ordered);
+
+  string current := "";
+  int allocation_count := 0;
+  @embed c
+    rift_allocator_stats_reset();
+  @end c
+  for iteration := 1 to 200 {
+    current := concat(current, '.');
+  }
+  @embed c
+    allocation_count = (int)rift_allocator_stats_get().allocations;
+  @end c
+  as.AssertEQ("growth reaches requested length", 200, length(current));
+  as.AssertTrue("growth allocations stay logarithmic", allocation_count <= 8);
+}

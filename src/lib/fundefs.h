@@ -17,6 +17,8 @@ void __concat_str(string *out, string s1, string s2);
 size_t __concat_checked_add(size_t total, size_t addition);
 size_t __concat_append_bytes(string out, size_t offset,
                              const char *data, size_t length);
+void __concat_append_owned(string *value, const char *data, size_t length,
+                           unsigned int owned_refcount);
 void setCharAt(string s, int n, char c);
 void __read_file_impl(string *out, string filename);
 void new_string(string *out, string s);

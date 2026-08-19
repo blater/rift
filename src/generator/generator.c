@@ -450,6 +450,105 @@ void emit_concat(generator_t *g, ast_funcall call) {
   free(leaves.data);
 }
 
+/* Lower the common growth form `slot := concat(slot, ...)` without changing
+ * its source semantics. The first value is retained before any later operand
+ * runs, every remaining leaf is evaluated once from left to right, and all
+ * lengths are checked before the destination can be mutated. The runtime may
+ * then reuse only full, writable backing whose references are entirely owned
+ * by this assignment; aliases and substring views take the copy-on-write
+ * path. */
+static int emit_concat_assignment(generator_t *g, string_view target,
+                                  ast_t expr) {
+  concat_leaf_array leaves = {0};
+  int id;
+
+  if (!intrinsic_concat(expr)) return 0;
+  collect_concat_leaves(&leaves, expr);
+  if (leaves.length < 2 || leaves.data[0]->tag != identifier ||
+      svcmp(leaves.data[0]->data.identifier.id.lexeme, target) != 0) {
+    free(leaves.data);
+    return 0;
+  }
+
+  id = g->str_tmp_counter++;
+  fprintf(g->pre_f, "string __concat_base_%d = " SV_Fmt ";\n", id,
+          SV_Arg(target));
+  fprintf(g->pre_f, "__string_retain(__concat_base_%d);\n", id);
+
+  for (int i = 1; i < leaves.length; i++) {
+    ast_t leaf = leaves.data[i];
+    string_view type = infer_expr_type(leaf, g->table);
+    token_t token = token_for_expr(leaf);
+    char *text;
+    if (!printable_type_supported(type)) {
+      error(token.filename, token.line, token.col,
+            "concat operand must be string, char, boolean, byte, word, dword, int, or float");
+      free(leaves.data);
+      return 1;
+    }
+    text = capture_expression(g, leaf);
+    fprintf(g->pre_f, "%s __concat_value_%d_%d = %s;\n",
+            printable_c_type(type), id, i, text);
+    if (printable_type_is(type, "string")) {
+      if (rhs_is_borrower(leaf))
+        fprintf(g->pre_f, "__string_retain(__concat_value_%d_%d);\n", id,
+                i);
+      else if (strncmp(text, "__strtmp_", 9) == 0)
+        emit_nullify_tmp(g->pre_f, text);
+      fprintf(g->pre_f,
+              "size_t __concat_length_%d_%d = "
+              "__concat_value_%d_%d.data ? __concat_value_%d_%d.length : 0;\n",
+              id, i, id, i, id, i);
+    } else if (printable_type_is(type, "char")) {
+      fprintf(g->pre_f, "size_t __concat_length_%d_%d = 1;\n", id, i);
+    } else {
+      int buffer_size = printable_type_is(type, "float") ? 20 : 12;
+      fprintf(g->pre_f, "char __concat_buffer_%d_%d[%d];\n", id, i,
+              buffer_size);
+      fprintf(g->pre_f,
+              "size_t __concat_length_%d_%d = %s(__concat_buffer_%d_%d, "
+              "__concat_value_%d_%d);\n",
+              id, i, concat_format_function(type), id, i, id, i);
+    }
+    free(text);
+  }
+
+  fprintf(g->pre_f, "size_t __concat_total_%d = __concat_base_%d.length;\n",
+          id, id);
+  for (int i = 1; i < leaves.length; i++)
+    fprintf(g->pre_f,
+            "__concat_total_%d = __concat_checked_add(__concat_total_%d, "
+            "__concat_length_%d_%d);\n",
+            id, id, id, i);
+  fprintf(g->pre_f, "(void)__concat_total_%d;\n", id);
+  flush_pre_f(g, g->f);
+
+  for (int i = 1; i < leaves.length; i++) {
+    string_view type = infer_expr_type(leaves.data[i], g->table);
+    char data_name[96];
+    if (printable_type_is(type, "string"))
+      snprintf(data_name, sizeof(data_name), "__concat_value_%d_%d.data", id,
+               i);
+    else if (printable_type_is(type, "char"))
+      snprintf(data_name, sizeof(data_name), "&__concat_value_%d_%d", id, i);
+    else
+      snprintf(data_name, sizeof(data_name), "__concat_buffer_%d_%d", id, i);
+    fprintf(g->f,
+            "__concat_append_owned(&__concat_base_%d, %s, "
+            "__concat_length_%d_%d, (" SV_Fmt ".backing != NULL && "
+            SV_Fmt ".backing == __concat_base_%d.backing && " SV_Fmt
+            ".data == __concat_base_%d.data) ? 2u : 1u);\n",
+            id, data_name, id, i, SV_Arg(target), SV_Arg(target), id,
+            SV_Arg(target), id);
+    if (printable_type_is(type, "string"))
+      fprintf(g->f, "__string_release(__concat_value_%d_%d);\n", id, i);
+  }
+  fprintf(g->f, "__string_release(" SV_Fmt ");\n", SV_Arg(target));
+  fprintf(g->f, SV_Fmt " = __concat_base_%d;\n", SV_Arg(target), id);
+  free(leaves.data);
+  return 1;
+}
+
 void emit_to_string(generator_t *g, ast_funcall call) {
   // Capture argument, emit setup to pre_f, emit tmp var to main output
   ast_t arg = call.args.data[0];
@@ -1768,6 +1867,9 @@ void generate_assignement(generator_t *g, ast_t assignment) {
     if (assign.target->tag == identifier &&
         is_scalar_string_var(assign.target->data.identifier.id.lexeme, g->table)) {
       {
+        if (emit_concat_assignment(
+                g, assign.target->data.identifier.id.lexeme, assign.expr))
+          return;
         // Capture RHS (populates pre_f with setup like __strtmp declarations)
         char *rhs_text = capture_expression(g, assign.expr);
         flush_pre_f(g, f);
@@ -2306,8 +2408,19 @@ void generate_return(generator_t *g, ast_t ret_ast) {
      * caller's transfer takes ownership. */
     if (expr_returns_string(ret_ast->data.ret.expr, g->table)) {
       char retval[32];
+      char source[32];
+      int explicit_producer_release =
+          !rhs_is_borrower(ret_ast->data.ret.expr) &&
+          strncmp(expr_text, "__strtmp_", 9) != 0;
       snprintf(retval, sizeof(retval), "__retval_%d", g->str_tmp_counter++);
-      fprintf(f, "string %s = __return_string(%s);\n", retval, expr_text);
+      if (explicit_producer_release) {
+        snprintf(source, sizeof(source), "__retsrc_%d", g->str_tmp_counter++);
+        fprintf(f, "string %s = %s;\n", source, expr_text);
+        fprintf(f, "string %s = __return_string(%s);\n", retval, source);
+        fprintf(f, "__string_release(%s);\n", source);
+      } else {
+        fprintf(f, "string %s = __return_string(%s);\n", retval, expr_text);
+      }
       /* No skip: release every owned local. The wrap captured the value
        * we need so the cleanup safely dec's everything else. */
       emit_return_cleanup(g, sv_from_cstr(""));
@@ -2441,8 +2554,11 @@ void generate_statement(generator_t *g, ast_t stmt) {
       fprintf(f, "__rift_release_" SV_Fmt "(%s);\n", SV_Arg(value_type), discard_tmp);
     } else if (!rhs_is_borrower(stmt) && svcmp(value_type, SV_STRING) == 0 &&
                strncmp(expr_text, "__strtmp_", 9) != 0) {
-      fprintf(f, "%s;\n", expr_text);
-      fprintf(f, "__string_release(%s);\n", expr_text);
+      char discard_tmp[64];
+      snprintf(discard_tmp, sizeof(discard_tmp), "__discardtmp_%d",
+               g->str_tmp_counter++);
+      fprintf(f, "string %s = %s;\n", discard_tmp, expr_text);
+      fprintf(f, "__string_release(%s);\n", discard_tmp);
     } else {
       // Emit the captured expression and semicolon.
       fprintf(f, "%s;\n", expr_text);

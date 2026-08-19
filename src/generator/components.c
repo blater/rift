@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 #include "components.h"
 #include "semantic/resolve.h"
 #include "stringview.h"
@@ -5,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 int component_index(generator_t *g, const char *id) {
   if (!g->components || !id) return -1;
@@ -287,13 +289,24 @@ void generator_compute_component_closure(generator_t *g) {
 }
 
 void generator_write_component_output(generator_t *g) {
-  FILE *file = fopen(g->component_output_path, "wb");
-  if (!file) {
-    fprintf(stderr, "error: cannot write component output '%s'\n",
-            g->component_output_path);
+  size_t template_size = strlen(g->component_output_path) + 16;
+  char *temporary_path = malloc(template_size);
+  if (!temporary_path) {
+    fprintf(stderr, "error: cannot allocate component output path\n");
     exit(1);
   }
-  fprintf(file, "RIFT_COMPONENTS_V1\n");
+  snprintf(temporary_path, template_size, "%s.tmp.XXXXXX",
+           g->component_output_path);
+  int descriptor = mkstemp(temporary_path);
+  FILE *file = descriptor >= 0 ? fdopen(descriptor, "wb") : NULL;
+  if (!file) {
+    if (descriptor >= 0) close(descriptor);
+    fprintf(stderr, "error: cannot write component output '%s'\n",
+            g->component_output_path);
+    free(temporary_path);
+    exit(1);
+  }
+  fprintf(file, "RIFT_COMPONENTS_V2\n");
   fprintf(file, "@pools=%s\n", g->zxn_pools_required ? "required" : "none");
   fprintf(file, "@bump=%s\n", g->zxn_bump_required ? "required" : "none");
   fprintf(file, "@profile=%s\n",
@@ -306,7 +319,16 @@ void generator_write_component_output(generator_t *g) {
   for (int i = 0; i < g->component_order_count; i++)
     fprintf(file, "%s\n",
             g->components->components[g->component_order[i]].id);
-  fclose(file);
+  int write_failed = fflush(file) != 0 || ferror(file);
+  if (fclose(file) != 0) write_failed = 1;
+  if (write_failed || rename(temporary_path, g->component_output_path) != 0) {
+    unlink(temporary_path);
+    fprintf(stderr, "error: cannot publish component output '%s'\n",
+            g->component_output_path);
+    free(temporary_path);
+    exit(1);
+  }
+  free(temporary_path);
 }
 
 void generator_emit_manifest_headers(generator_t *g) {

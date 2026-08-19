@@ -1,12 +1,14 @@
 /*****************************************************
- * RIFT POOL RUNTIME — bounded long-lived allocator
+ * RIFT POOL RUNTIME — elastic bounded-work allocator
  *
  * The long-lived pool uses small LIFO magazines backed by intrusive buddy
  * lists. No normal path searches a list of heap blocks: selecting a class,
- * splitting, and coalescing are bounded by the number of buddy orders.
+ * splitting, and coalescing are bounded by the number of buddy orders. On
+ * ZX Next both allocators share the linker gap below the protected stack.
  *****************************************************/
 
 #include "pools.h"
+#include "arena.h"
 #include "error_sink.h"
 #include <limits.h>
 #include <stdlib.h>
@@ -27,14 +29,8 @@
 #define RIFT_MAGAZINE_COUNT 3
 
 #ifdef __SDCC
-#define RIFT_BUDDY_MAX_ORDERS 9
-#define RIFT_BUDDY_MAX_ROOTS 2
-/* Z88DK does not guarantee that a global union is placed at its member's
- * alignment. Reserve one byte and align the usable base ourselves. */
-#ifndef RIFT_ZXN_NO_BUMP_POOL
-static char zxn_bump_pool_storage[RIFT_ZXN_BUMP_POOL_CAPACITY + 1];
-#endif
-static char zxn_longlived_pool_storage[RIFT_ZXN_LONGLIVED_POOL_CAPACITY + 1];
+#define RIFT_BUDDY_MAX_ORDERS 12
+#define RIFT_BUDDY_MAX_ROOTS 32
 #else
 #define RIFT_BUDDY_MAX_ORDERS (sizeof(size_t) * CHAR_BIT)
 #define RIFT_BUDDY_MAX_ROOTS (sizeof(size_t) * CHAR_BIT)
@@ -47,7 +43,8 @@ typedef struct rift_buddy_root {
 
 static char *bump_base = NULL;
 static size_t bump_top = 0;
-static size_t bump_cap = 0;
+static size_t arena_capacity = 0;
+static rift_arena_region pool_region;
 #ifdef __SDCC
 char *rift_ll_base = NULL;
 size_t rift_ll_live_bytes = 0;
@@ -75,6 +72,7 @@ static unsigned int magazine_counts[RIFT_MAGAZINE_COUNT];
 static size_t ll_cap = 0;
 #endif
 static size_t ll_quantum = 0;
+static unsigned int buddy_order_count = 0;
 static size_t ll_core_free_bytes = 0;
 static rift_pool_offset_t buddy_heads[RIFT_BUDDY_MAX_ORDERS];
 static rift_buddy_root buddy_roots[RIFT_BUDDY_MAX_ROOTS];
@@ -82,6 +80,43 @@ static unsigned int buddy_root_count = 0;
 static const unsigned int magazine_limits[RIFT_MAGAZINE_COUNT] = {4, 2, 1};
 static rift_oom_handler_fn oom_handler = NULL;
 static rift_allocator_stats allocator_stats;
+
+#ifndef RIFT_MEMORY_MAX_VALUE
+#define RIFT_MEMORY_MAX_VALUE 0
+#endif
+#ifndef RIFT_MEMORY_MAX_PRESENT
+#define RIFT_MEMORY_MAX_PRESENT 0
+#endif
+#ifndef RIFT_MEMORY_MIN_VALUE
+#define RIFT_MEMORY_MIN_VALUE 0
+#endif
+#ifndef RIFT_MEMORY_MIN_PRESENT
+#define RIFT_MEMORY_MIN_PRESENT 0
+#endif
+#ifndef RIFT_MEMORY_RESERVE_VALUE
+#define RIFT_MEMORY_RESERVE_VALUE 0
+#endif
+#ifndef RIFT_MEMORY_RESERVE_PRESENT
+#define RIFT_MEMORY_RESERVE_PRESENT 0
+#endif
+
+static const rift_arena_options rift_build_arena_options = {
+    .memory_max = (size_t)RIFT_MEMORY_MAX_VALUE,
+#ifdef __SDCC
+    /* ZXN minimum headroom is a post-link driver acceptance check. */
+    .memory_min = 0,
+#else
+    .memory_min = (size_t)RIFT_MEMORY_MIN_VALUE,
+#endif
+    .memory_reserve = (size_t)RIFT_MEMORY_RESERVE_VALUE,
+    .memory_max_present = RIFT_MEMORY_MAX_PRESENT,
+#ifdef __SDCC
+    .memory_min_present = 0,
+#else
+    .memory_min_present = RIFT_MEMORY_MIN_PRESENT,
+#endif
+    .memory_reserve_present = RIFT_MEMORY_RESERVE_PRESENT,
+};
 
 /* Per-operation counters are valuable in host tests and deliberately-enabled
  * target diagnostics, but are not part of the Z80 allocator fast path. */
@@ -98,14 +133,6 @@ static size_t pool_alignment(void) {
   return _Alignof(max_align_t);
 #endif
 }
-
-#ifdef __SDCC
-static char *align_pool_base(char *base, size_t alignment) {
-  uintptr_t value = (uintptr_t)base;
-  value = (value + alignment - 1) & ~(uintptr_t)(alignment - 1);
-  return (char *)value;
-}
-#endif
 
 static int round_up(size_t value, size_t alignment, size_t *result) {
   size_t remainder = value % alignment;
@@ -195,11 +222,18 @@ static void core_remove(rift_block_header *block, unsigned int order) {
 
 static const rift_buddy_root *root_for_block(const rift_block_header *block) {
   rift_pool_offset_t offset = block_offset(block);
-  unsigned int i;
-  for (i = 0; i < buddy_root_count; i++) {
-    size_t root_size = bytes_for_order(buddy_roots[i].max_order);
-    if (offset >= buddy_roots[i].offset &&
-        (size_t)(offset - buddy_roots[i].offset) < root_size) return &buddy_roots[i];
+  unsigned int low = 0;
+  unsigned int high = buddy_root_count;
+  while (low < high) {
+    unsigned int middle = low + (high - low) / 2;
+    const rift_buddy_root *root = &buddy_roots[middle];
+    size_t root_size = bytes_for_order(root->max_order);
+    if (offset < root->offset)
+      high = middle;
+    else if ((size_t)(offset - root->offset) >= root_size)
+      low = middle + 1;
+    else
+      return root;
   }
   return NULL;
 }
@@ -229,7 +263,7 @@ static void core_free(rift_block_header *block) {
 
 static rift_block_header *core_take(unsigned int wanted_order) {
   unsigned int order;
-  for (order = wanted_order; order < RIFT_BUDDY_MAX_ORDERS; order++) {
+  for (order = wanted_order; order < buddy_order_count; order++) {
     rift_pool_offset_t head = buddy_heads[order];
     rift_block_header *block;
     if (head == RIFT_POOL_OFFSET_NONE) continue;
@@ -248,6 +282,69 @@ static rift_block_header *core_take(unsigned int wanted_order) {
     return block;
   }
   return NULL;
+}
+
+static size_t arena_uncommitted_bytes(void) {
+  size_t occupied = ll_cap + bump_top;
+  return occupied <= arena_capacity ? arena_capacity - occupied : 0;
+}
+
+static size_t arena_longlived_max_capacity(void) {
+  return arena_capacity - bump_top;
+}
+
+static size_t arena_bump_effective_capacity(void) {
+#ifdef RIFT_ZXN_NO_BUMP_POOL
+  return 0;
+#else
+  return arena_capacity - ll_cap;
+#endif
+}
+
+static int arena_grow_longlived(unsigned int wanted_order) {
+  size_t available;
+  size_t root_size;
+  size_t maximum = arena_longlived_max_capacity();
+  unsigned int order = wanted_order;
+  rift_block_header *root;
+  if (wanted_order >= buddy_order_count || ll_cap >= maximum ||
+      buddy_root_count >= RIFT_BUDDY_MAX_ROOTS)
+    return 0;
+  available = maximum - ll_cap;
+  if (available > arena_uncommitted_bytes()) available = arena_uncommitted_bytes();
+  if (bytes_for_order(wanted_order) > available) return 0;
+
+  /* Geometric roots keep metadata bounded without claiming the whole arena
+   * for the first small allocation. Fall back to the largest root that fits
+   * near a cap or the opposing bump frontier. */
+  if (buddy_root_count != 0) {
+    unsigned int next_order =
+        buddy_roots[buddy_root_count - 1].max_order + 1;
+    if (next_order > order) order = next_order;
+  }
+  if (order >= buddy_order_count) order = buddy_order_count - 1;
+  while (order > wanted_order && bytes_for_order(order) > available) order--;
+  root_size = bytes_for_order(order);
+  root = (rift_block_header *)(ll_base + ll_cap);
+  buddy_roots[buddy_root_count].offset = (rift_pool_offset_t)ll_cap;
+  buddy_roots[buddy_root_count].max_order = order;
+  buddy_root_count++;
+  ll_cap += root_size;
+  core_insert(root, order);
+  return 1;
+}
+
+static void arena_release_free_tail_roots(void) {
+  while (buddy_root_count != 0) {
+    rift_buddy_root *root = &buddy_roots[buddy_root_count - 1];
+    rift_block_header *block = block_at(root->offset);
+    if (block->refcount != RIFT_RC_FREE ||
+        block_total_size(block) != bytes_for_order(root->max_order))
+      break;
+    core_remove(block, root->max_order);
+    ll_cap = root->offset;
+    buddy_root_count--;
+  }
 }
 
 static rift_block_header *magazine_take(int class_index) {
@@ -290,46 +387,28 @@ void rift_set_oom_handler(rift_oom_handler_fn handler) {
   oom_handler = handler ? handler : default_oom;
 }
 
-void rift_pools_init(size_t bump_capacity, size_t longlived_capacity) {
+void rift_pools_init(const rift_arena_options *requested_options) {
+  rift_arena_options arena_options = requested_options
+                                         ? *requested_options
+                                         : rift_build_arena_options;
   size_t alignment = pool_alignment();
   size_t minimum_quantum = RIFT_HEADER_SIZE + sizeof(rift_pool_offset_t);
-  size_t units;
-  size_t root_offset = 0;
-#ifdef __SDCC
-  if (longlived_capacity > RIFT_ZXN_LONGLIVED_POOL_CAPACITY) {
-    rift_error_text("rift_pools: requested ZXN pool capacity exceeds static budget\n");
+  if (!rift_arena_init(&arena_options) ||
+      !rift_arena_acquire(0, &pool_region)) {
+    rift_error_text("rift_pools: failed to acquire managed arena\n");
     exit(1);
   }
-#ifndef RIFT_ZXN_NO_BUMP_POOL
-  if (bump_capacity > RIFT_ZXN_BUMP_POOL_CAPACITY) {
-    rift_error_text("rift_pools: requested ZXN bump capacity exceeds static budget\n");
+  ll_base = (char *)pool_region.base;
+  arena_capacity = pool_region.capacity;
+  arena_capacity -= arena_capacity % RIFT_ARENA_ALIGNMENT;
+  if (!offset_fits(arena_capacity)) {
+    rift_error_text("rift_pools: managed arena exceeds allocator offsets\n");
     exit(1);
   }
-  bump_base = align_pool_base(zxn_bump_pool_storage, alignment);
-#else
-  (void)bump_capacity;
+#ifdef RIFT_ZXN_NO_BUMP_POOL
   bump_base = NULL;
-#endif
-  ll_base = align_pool_base(zxn_longlived_pool_storage, alignment);
-  if (
-#ifndef RIFT_ZXN_NO_BUMP_POOL
-      ((uintptr_t)bump_base % alignment) != 0 ||
-#endif
-      ((uintptr_t)ll_base % alignment) != 0) {
-    rift_error_text("rift_pools: target pool alignment failure\n");
-    exit(1);
-  }
 #else
-  bump_base = (char *)malloc(bump_capacity);
-  ll_base = (char *)malloc(longlived_capacity);
-  if (!bump_base || !ll_base) {
-    rift_error_text("rift_pools: failed to allocate host pool backing\n");
-    free(bump_base);
-    free(ll_base);
-    bump_base = NULL;
-    ll_base = NULL;
-    exit(1);
-  }
+  bump_base = ll_base + arena_capacity;
 #endif
 #ifdef __SDCC
   (void)minimum_quantum;
@@ -340,13 +419,17 @@ void rift_pools_init(size_t bump_capacity, size_t longlived_capacity) {
     exit(1);
   }
 #endif
-#ifdef RIFT_ZXN_NO_BUMP_POOL
-  bump_cap = 0;
-#else
-  bump_cap = bump_capacity - (bump_capacity % alignment);
-#endif
-  ll_cap = longlived_capacity - (longlived_capacity % ll_quantum);
-  if (!offset_fits(ll_cap) || ll_cap < ll_quantum) {
+  ll_cap = 0;
+  buddy_order_count = 1;
+  {
+    size_t order_bytes = ll_quantum;
+    while (buddy_order_count < RIFT_BUDDY_MAX_ORDERS &&
+           order_bytes <= arena_capacity / 2) {
+      order_bytes <<= 1;
+      buddy_order_count++;
+    }
+  }
+  if (arena_capacity < ll_quantum) {
     rift_error_text("rift_pools: invalid longlived pool capacity\n");
     exit(1);
   }
@@ -356,58 +439,47 @@ void rift_pools_init(size_t bump_capacity, size_t longlived_capacity) {
   ll_core_free_bytes = 0;
   ll_magazine_free_bytes = 0;
   reset_heads();
-  units = ll_cap / ll_quantum;
-  while (units != 0) {
-    size_t root_units = 1;
-    unsigned int order = 0;
-    rift_block_header *root;
-    while (root_units <= units / 2) {
-      root_units <<= 1;
-      order++;
-    }
-    if (order >= RIFT_BUDDY_MAX_ORDERS || buddy_root_count >= RIFT_BUDDY_MAX_ROOTS) {
-      rift_error_text("rift_pools: buddy order exceeds target representation\n");
-      exit(1);
-    }
-    root = (rift_block_header *)(ll_base + root_offset);
-    buddy_roots[buddy_root_count].offset = (rift_pool_offset_t)root_offset;
-    buddy_roots[buddy_root_count].max_order = order;
-    buddy_root_count++;
-    core_insert(root, order);
-    root_offset += root_units * ll_quantum;
-    units -= root_units;
-  }
   rift_allocator_stats_reset();
-  if (!oom_handler) oom_handler = default_oom;
+  oom_handler = default_oom;
 }
 
-void rift_pools_deinit(void) {
 #ifndef __SDCC
-  free(bump_base);
-  free(ll_base);
-#endif
+void rift_pools_deinit(void) {
+  rift_arena_release(&pool_region);
+  rift_arena_deinit();
   bump_base = NULL;
   bump_top = 0;
-  bump_cap = 0;
+  arena_capacity = 0;
   ll_base = NULL;
   ll_cap = 0;
   ll_quantum = 0;
+  buddy_order_count = 0;
   ll_live_bytes = 0;
   ll_peak_live_bytes = 0;
   ll_core_free_bytes = 0;
   ll_magazine_free_bytes = 0;
   reset_heads();
 }
+#endif
 
 void *rift_bump_alloc(size_t bytes) {
   size_t aligned = 0;
-  if (!round_up(bytes, pool_alignment(), &aligned) || aligned > bump_cap - bump_top) {
-    oom_handler("bump", bytes, bump_cap - bump_top);
+  size_t capacity;
+  if (!round_up(bytes, pool_alignment(), &aligned)) {
+    oom_handler("bump", bytes, 0);
     return NULL;
   }
-  bytes = bump_top;
+  capacity = arena_bump_effective_capacity();
+  if (bump_top > capacity || aligned > capacity - bump_top) {
+    rift_collect();
+    capacity = arena_bump_effective_capacity();
+  }
+  if (bump_top > capacity || aligned > capacity - bump_top) {
+    oom_handler("bump", bytes, bump_top <= capacity ? capacity - bump_top : 0);
+    return NULL;
+  }
   bump_top += aligned;
-  return bump_base + bytes;
+  return bump_base - bump_top;
 }
 
 rift_bump_mark rift_bump_save(void) { return bump_top; }
@@ -422,8 +494,10 @@ void *rift_longlived_alloc(size_t payload_size) {
   int class_index;
   rift_block_header *block;
   if (payload_size == 0) payload_size = 1;
-  if (payload_size > SIZE_MAX - RIFT_HEADER_SIZE ||
-      payload_size > ll_cap - RIFT_HEADER_SIZE) {
+  if (payload_size > SIZE_MAX - RIFT_HEADER_SIZE
+      || arena_longlived_max_capacity() < RIFT_HEADER_SIZE
+      || payload_size > arena_longlived_max_capacity() - RIFT_HEADER_SIZE
+  ) {
     oom_handler("longlived", payload_size, rift_longlived_largest_free_block());
     return NULL;
   }
@@ -464,6 +538,12 @@ void *rift_longlived_alloc(size_t payload_size) {
   class_index = magazine_class(order);
   block = class_index >= 0 ? magazine_take(class_index) : NULL;
   if (!block) block = core_take(order);
+  if (!block && arena_grow_longlived(order)) block = core_take(order);
+  if (!block && ll_magazine_free_bytes != 0) {
+    rift_collect();
+    block = core_take(order);
+    if (!block && arena_grow_longlived(order)) block = core_take(order);
+  }
   if (!block) {
     oom_handler("longlived", payload_size, rift_longlived_largest_free_block());
     return NULL;
@@ -511,6 +591,7 @@ void rift_longlived_free(void *payload) {
   class_index = magazine_class(order);
   if (class_index >= 0 && magazine_store(block, class_index)) return;
   core_free(block);
+  arena_release_free_tail_roots();
 }
 
 void rift_collect(void) {
@@ -525,26 +606,54 @@ void rift_collect(void) {
       core_free(block);
     }
   }
+  arena_release_free_tail_roots();
 }
 
-void rift_longlived_reclaim(void) { rift_collect(); }
-
 size_t rift_bump_used(void) { return bump_top; }
-size_t rift_bump_capacity(void) { return bump_cap; }
+size_t rift_bump_capacity(void) {
+  return arena_bump_effective_capacity();
+}
 size_t rift_longlived_used(void) { return ll_live_bytes; }
 size_t rift_longlived_peak_used(void) { return ll_peak_live_bytes; }
-size_t rift_longlived_capacity(void) { return ll_cap; }
-size_t rift_longlived_free_bytes(void) { return ll_core_free_bytes + ll_magazine_free_bytes; }
+size_t rift_longlived_capacity(void) {
+  return arena_longlived_max_capacity();
+}
+size_t rift_longlived_free_bytes(void) {
+  size_t available = ll_core_free_bytes + ll_magazine_free_bytes;
+  available += arena_uncommitted_bytes();
+  return available;
+}
 
 size_t rift_longlived_largest_free_block(void) {
   int order;
-  for (order = RIFT_BUDDY_MAX_ORDERS - 1; order >= 0; order--) {
-    if (buddy_heads[order] != RIFT_POOL_OFFSET_NONE) return bytes_for_order((unsigned int)order) - RIFT_HEADER_SIZE;
+  size_t largest = 0;
+  for (order = (int)buddy_order_count - 1; order >= 0; order--) {
+    if (buddy_heads[order] != RIFT_POOL_OFFSET_NONE) {
+      largest = bytes_for_order((unsigned int)order) - RIFT_HEADER_SIZE;
+      break;
+    }
+  }
+  {
+    size_t maximum = arena_longlived_max_capacity();
+    size_t available = ll_cap < maximum ? maximum - ll_cap : 0;
+    if (available > arena_uncommitted_bytes()) available = arena_uncommitted_bytes();
+    for (order = (int)buddy_order_count - 1; order >= 0; order--) {
+      size_t bytes = bytes_for_order((unsigned int)order);
+      if (bytes <= available) {
+        size_t payload = bytes - RIFT_HEADER_SIZE;
+        if (payload > largest) largest = payload;
+        break;
+      }
+    }
   }
   for (order = RIFT_MAGAZINE_COUNT - 1; order >= 0; order--) {
-    if (magazine_heads[order] != RIFT_POOL_OFFSET_NONE) return bytes_for_order((unsigned int)order) - RIFT_HEADER_SIZE;
+    if (magazine_heads[order] != RIFT_POOL_OFFSET_NONE) {
+      size_t payload = bytes_for_order((unsigned int)order) - RIFT_HEADER_SIZE;
+      if (payload > largest) largest = payload;
+      break;
+    }
   }
-  return 0;
+  return largest;
 }
 
 void rift_allocator_stats_reset(void) {

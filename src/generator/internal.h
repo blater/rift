@@ -45,7 +45,6 @@ struct generator_t {
   scope_t *scope;
   int auto_cast;
   int zxn_test;
-  int zxn_memory_profile;
   int lit_counter;
   ast_t current_fundef;
   int bump_mark_counter;
@@ -61,7 +60,6 @@ struct generator_t {
   int in_main_body;
   int main_needs_epilogue;
   int select_all_components;
-  int force_bump_pool;
   unsigned char opaque_value_used[COMPONENT_MANIFEST_MAX_INTERFACES];
   unsigned char opaque_array_used[COMPONENT_MANIFEST_MAX_INTERFACES];
   int zxn_tiny_eligible;

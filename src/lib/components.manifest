@@ -1,7 +1,7 @@
 # Rift runtime component manifest v1.
 # Lists are comma-separated paths relative to src/lib. Empty fields are valid.
 # component|id|dependencies|headers|host_sources|zxn_sources|host_asm|zxn_asm|init|shutdown|always?|zxn-capabilities
-component|core|tiny_print,error_sink,host_ui|pools.h,fundefs.h,fundefs_internal.h,typedefs.h|pools.c,fundefs.c,termination.c|pools.c,fundefs.c,termination.c|||||always|startup31,pools
+component|core|tiny_print,error_sink,host_ui|pools.h,fundefs.h,fundefs_internal.h,typedefs.h|arena_host.c,pools.c,fundefs.c,termination.c|zxn/arena_zxn.c,pools.c,fundefs.c,termination.c||zxn/arena_bounds.asm|||always|startup31,pools
 component|handles|core||handle_runtime.c|handle_runtime.c||||||startup31,pools
 component|arrays|core,handles||fundefs_internal.c|fundefs_internal.c||||||startup31,pools
 component|process_args|arrays||process_args.c|process_args.c||||||startup31,pools

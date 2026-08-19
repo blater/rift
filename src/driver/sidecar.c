@@ -19,11 +19,6 @@ static int set_profile(const char *value, driver_profile *profile) {
 int driver_read_requirements(const char *path, component_manifest *manifest,
                              driver_requirements *requirements) {
   memset(requirements, 0, sizeof(*requirements));
-  /* V1 sidecars predate the explicit pool and bump directives. Treat missing
-   * requirements conservatively so older compiler output can never cause the
-   * driver to omit allocator storage that the program may need. */
-  requirements->pools_required = 1;
-  requirements->bump_required = 1;
   FILE *file = fopen(path, "r");
   if (!file) {
     fprintf(stderr,
@@ -42,7 +37,7 @@ int driver_read_requirements(const char *path, component_manifest *manifest,
     while (length && (line[length - 1] == '\n' || line[length - 1] == '\r'))
       line[--length] = '\0';
     if (line_number == 1) {
-      if (strcmp(line, "RIFT_COMPONENTS_V1") != 0) {
+      if (strcmp(line, "RIFT_COMPONENTS_V2") != 0) {
         fprintf(stderr, "build failed: unsupported component sidecar '%s'\n",
                 line);
         fclose(file);
@@ -114,8 +109,16 @@ int driver_read_requirements(const char *path, component_manifest *manifest,
     requirements->components[requirements->component_count++] = component;
   }
   fclose(file);
-  if (line_number == 0 || !profile_seen) {
-    fprintf(stderr, "build failed: component sidecar has no profile\n");
+  if (line_number == 0 || !profile_seen || !pools_seen || !bump_seen) {
+    fprintf(stderr,
+            "build failed: component sidecar requires profile, pools, and "
+            "bump metadata\n");
+    return 0;
+  }
+  if (requirements->bump_required && !requirements->pools_required) {
+    fprintf(stderr,
+            "build failed: bump memory cannot be required when pools are "
+            "omitted\n");
     return 0;
   }
   return 1;

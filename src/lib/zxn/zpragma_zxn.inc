@@ -1,11 +1,12 @@
 // Keep code above the ULA and reserve a 2 KiB hardware stack at the top of
 // RAM. NEX does not need BASIC's system-variable area at 0x5b00-0x5fff, so
-// starting there gains 1,280 resident bytes for the bounded Rift pools. The
-// driver reads the z88dk link map and rejects any image whose BSS would enter
-// the reserved stack range.
+// starting there gains 1,280 resident bytes for Rift's automatic managed
+// arena. The driver reads the z88dk link map and rejects any image whose BSS
+// would enter the protected linker gap or reserved stack range.
 // The previous 24500/24481 layout placed the stack inside a larger NEX image.
 #pragma output CRT_ORG_CODE = 23296
-#pragma output REGISTER_SP = 65368
+#pragma export REGISTER_SP = 65368
+#pragma export CRT_STACK_SIZE = 2048
 
 // halt program on exit, no need to play well with basic
 #pragma output CRT_ON_EXIT = 0x10001

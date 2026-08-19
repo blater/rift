@@ -21,7 +21,6 @@ void usage(char *name) {
   printf("\t--target=zxn\t\tCompile for ZX Spectrum Next\n");
   printf("\t--auto-cast\t\tWrap int args with (byte)/(word)/(dword) when callee param is narrower\n");
   printf("\t--zxn-test\t\tEmit ZXN emulator test result markers\n");
-  printf("\t--memory-profile=zxn\tUse ZXN's 1 KiB/6 KiB pools on a host build\n");
   printf("\t--component-manifest=PATH\tRuntime component/interface manifest\n");
   // printf("\t%s [flags] <input file> [output file] [flags]\n", name);
   // printf("Possible flags:\n");
@@ -42,9 +41,7 @@ int main(int argc, char *argv[]) {
   int target_zxn = 0;
   int auto_cast = 0;
   int zxn_test = 0;
-  int zxn_memory_profile = 0;
   int select_all_components = 0;
-  int force_bump_pool = 0;
   char *manifest_path = NULL;
 
   for (int i = 1; i < argc; i++) {
@@ -71,17 +68,11 @@ int main(int argc, char *argv[]) {
       else if (strcmp(arg, "--zxn-test") == 0) {
         zxn_test = 1;
       }
-      else if (strcmp(arg, "--memory-profile=zxn") == 0) {
-        zxn_memory_profile = 1;
-      }
       else if (strncmp(arg, "--component-manifest=", 21) == 0) {
         manifest_path = arg + 21;
       }
       else if (strcmp(arg, "--components=all") == 0) {
         select_all_components = 1;
-      }
-      else if (strcmp(arg, "--force-bump-pool") == 0) {
-        force_bump_pool = 1;
       }
       //  else if (*(arg + 1) == 't' && !print_tree)
       //   print_tree = 1;
@@ -173,9 +164,7 @@ int main(int argc, char *argv[]) {
       .target = target_zxn ? TARGET_ZXN : TARGET_HOST,
       .auto_cast = auto_cast,
       .zxn_test = zxn_test,
-      .zxn_memory_profile = zxn_memory_profile,
       .select_all_components = select_all_components,
-      .force_bump_pool = force_bump_pool,
   };
   generator_t *g = new_generator(cout, output, components, generator_config);
   transpile(g, p.prog);

@@ -1,8 +1,12 @@
 /*****************************************************
  * RIFT POOL RUNTIME
- * Two-pool allocator implementing ADR-0003.
- *  - bump:      stack-disciplined save/restore per scope.
- *  - longlived: refcount-managed magazines backed by fixed-order buddy lists.
+ * Temporary bounded allocator adapter over one managed arena region.
+ *  - bump:      stack-disciplined save/restore from the high frontier.
+ *  - longlived: refcount-managed buddy roots from the low frontier.
+ *
+ * Neither path owns a fixed capacity partition. Build-derived total arena
+ * intent is passed through rift_arena_options; ZX Next otherwise uses its
+ * complete checked linker gap.
  *****************************************************/
 
 #ifndef RIFT_POOLS_H
@@ -11,13 +15,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#ifndef RIFT_ZXN_BUMP_POOL_CAPACITY
-#define RIFT_ZXN_BUMP_POOL_CAPACITY 1024
-#endif
-
-#ifndef RIFT_ZXN_LONGLIVED_POOL_CAPACITY
-#define RIFT_ZXN_LONGLIVED_POOL_CAPACITY 6144
-#endif
+#include "arena.h"
 
 /* Universal block header for refcount-managed allocations.
  *
@@ -41,17 +39,23 @@ typedef struct rift_block_header {
 #define RIFT_RC_FREE    0xFFFEu
 #define RIFT_RC_STATIC  0xFFFFu
 
-/* Initialise the pools. Must be called before any other pool API.
- * On allocation failure to obtain backing memory, prints diagnostic and exits. */
+/* Initialise the arena-backed allocator. Must be called before any other pool
+ * API. On failure to obtain the target region, prints a diagnostic and exits. */
 #if defined(__SDCC) && \
     (defined(RIFT_ZXN_NO_POOLS) || defined(RIFT_ZXN_TINY_CORE))
-#define rift_pools_init(bump_capacity, longlived_capacity) ((void)0)
+#define rift_pools_init(options) ((void)(options))
 #define rift_pools_deinit() ((void)0)
 #else
-void rift_pools_init(size_t bump_capacity, size_t longlived_capacity);
+void rift_pools_init(const rift_arena_options *options);
 
-/* Tear down the pools. Frees backing memory. */
+/* ZX Next exits by halting the process, so teardown cannot return storage to
+ * an enclosing allocator and is deliberately compiled away. */
+#ifdef __SDCC
+#define rift_pools_deinit() ((void)0)
+#else
+/* Tear down the host pools and release backing memory. */
 void rift_pools_deinit(void);
+#endif
 #endif
 
 /* ---- Bump pool ---- */
@@ -86,11 +90,10 @@ void *rift_longlived_alloc(size_t payload_size);
 void rift_longlived_free(void *payload);
 
 /* Drain deferred small-object magazines into the buddy core. This is the
- * runtime entry point for Rift's explicit `collect;` safe point. */
+ * runtime entry point for Rift's explicit `collect;` safe point. Allocation
+ * pressure invokes the same operation once automatically before reporting
+ * OOM. */
 void rift_collect(void);
-
-/* Compatibility spelling for the old runtime API. */
-void rift_longlived_reclaim(void);
 
 /* ---- Diagnostics ---- */
 

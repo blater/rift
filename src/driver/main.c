@@ -1,6 +1,7 @@
 #define _XOPEN_SOURCE 700
 #include "build_plan.h"
 #include "component_manifest.h"
+#include "lib/arena.h"
 #include "lib/alloc.h"
 #include "options.h"
 #include "paths.h"
@@ -82,12 +83,8 @@ static int invoke_compiler(const driver_paths *paths,
   argument_push(&arguments, manifest_option);
   if (options->auto_cast) argument_push(&arguments, "--auto-cast");
   if (options->zxn_test) argument_push(&arguments, "--zxn-test");
-  if (options->memory_profile_zxn)
-    argument_push(&arguments, "--memory-profile=zxn");
   if (options->rtl_mode == DRIVER_RTL_ALL)
     argument_push(&arguments, "--components=all");
-  if (options->zxn_bump_pool_override)
-    argument_push(&arguments, "--force-bump-pool");
   int result = driver_run_process(arguments.items, NULL);
   free(arguments.items);
   free(manifest_option);
@@ -96,6 +93,7 @@ static int invoke_compiler(const driver_paths *paths,
 }
 
 static int build_host(const driver_paths *paths,
+                      const driver_options *options,
                       const driver_build_plan *plan) {
   char *generated_c = driver_path_with_suffix(paths->work_base, ".c");
   char *include_lib = driver_path_join(paths->root, "src/lib");
@@ -114,6 +112,20 @@ static int build_host(const driver_paths *paths,
   argument_push(&arguments, include_lib);
   argument_push(&arguments, "-I");
   argument_push(&arguments, include_ext);
+  char memory_defines[6][96];
+  snprintf(memory_defines[0], sizeof(memory_defines[0]),
+           "-DRIFT_MEMORY_MAX_VALUE=%zu", options->memory_max);
+  snprintf(memory_defines[1], sizeof(memory_defines[1]),
+           "-DRIFT_MEMORY_MAX_PRESENT=%d", options->memory_max_set);
+  snprintf(memory_defines[2], sizeof(memory_defines[2]),
+           "-DRIFT_MEMORY_MIN_VALUE=%zu", options->memory_min);
+  snprintf(memory_defines[3], sizeof(memory_defines[3]),
+           "-DRIFT_MEMORY_MIN_PRESENT=%d", options->memory_min_set);
+  snprintf(memory_defines[4], sizeof(memory_defines[4]),
+           "-DRIFT_MEMORY_RESERVE_VALUE=0");
+  snprintf(memory_defines[5], sizeof(memory_defines[5]),
+           "-DRIFT_MEMORY_RESERVE_PRESENT=0");
+  for (int i = 0; i < 6; i++) argument_push(&arguments, memory_defines[i]);
   argument_push(&arguments, "-o");
   argument_push(&arguments, paths->work_base);
   argument_push(&arguments, generated_c);
@@ -130,7 +142,8 @@ static int build_host(const driver_paths *paths,
   return result;
 }
 
-static int read_bss_end(const char *map_path, unsigned long *bss_end) {
+static int read_map_symbol(const char *map_path, const char *wanted,
+                           unsigned long *result) {
   FILE *file = fopen(map_path, "r");
   if (!file) return 0;
   char line[4096];
@@ -140,13 +153,13 @@ static int read_bss_end(const char *map_path, unsigned long *bss_end) {
     char middle[256];
     char value[256];
     if (sscanf(line, "%255s %255s %255s", symbol, middle, value) == 3 &&
-        strcmp(symbol, "__BSS_END_head") == 0) {
+        strcmp(symbol, wanted) == 0) {
       const char *digits = value[0] == '$' ? value + 1 : value;
       char *end = NULL;
       errno = 0;
       unsigned long parsed = strtoul(digits, &end, 16);
       if (!errno && end && *end == '\0') {
-        *bss_end = parsed;
+        *result = parsed;
         found = 1;
       }
       break;
@@ -200,31 +213,40 @@ static int build_zxn(const driver_paths *paths,
     goto failure;
   }
   char startup[32];
-  char bump_define[64];
-  char longlived_define[80];
+  char memory_defines[6][96];
   char pragma_option[4096];
   char include_option[4096];
   snprintf(startup, sizeof(startup), "-startup=%d", plan->startup);
-  snprintf(bump_define, sizeof(bump_define),
-           "-DRIFT_ZXN_BUMP_POOL_CAPACITY=%u", options->zxn_bump_pool);
-  snprintf(longlived_define, sizeof(longlived_define),
-           "-DRIFT_ZXN_LONGLIVED_POOL_CAPACITY=%u",
-           options->zxn_longlived_pool);
+  snprintf(memory_defines[0], sizeof(memory_defines[0]),
+           "-DRIFT_MEMORY_MAX_VALUE=%zu", options->memory_max);
+  snprintf(memory_defines[1], sizeof(memory_defines[1]),
+           "-DRIFT_MEMORY_MAX_PRESENT=%d", options->memory_max_set);
+  snprintf(memory_defines[2], sizeof(memory_defines[2]),
+           "-DRIFT_MEMORY_MIN_VALUE=%zu", options->memory_min);
+  snprintf(memory_defines[3], sizeof(memory_defines[3]),
+           "-DRIFT_MEMORY_MIN_PRESENT=%d", options->memory_min_set);
+  snprintf(memory_defines[4], sizeof(memory_defines[4]),
+           "-DRIFT_MEMORY_RESERVE_VALUE=%zu", options->memory_reserve);
+  snprintf(memory_defines[5], sizeof(memory_defines[5]),
+           "-DRIFT_MEMORY_RESERVE_PRESENT=%d", options->memory_reserve_set);
   snprintf(pragma_option, sizeof(pragma_option), "-pragma-include:%s",
            pragma_path);
   snprintf(include_option, sizeof(include_option), "-I%s", include_path);
+  char memory_max_text[32];
+  if (options->memory_max_set)
+    snprintf(memory_max_text, sizeof(memory_max_text), "%zu",
+             options->memory_max);
+  else
+    snprintf(memory_max_text, sizeof(memory_max_text), "auto");
   fprintf(stdout,
-          "ZXN profile: startup=%d, memory=%s, bump-pool=%u%s, "
-          "longlived-pool=%u, "
+          "ZXN profile: startup=%d, memory=auto, memory-max=%s, "
+          "memory-min=%zu, memory-reserve=%zu, bump=%s, "
           "tiny-core=%d, light-core=%d\n",
           plan->startup,
-          options->zxn_pool_overrides
-              ? "custom"
-              : options->memory_mode == DRIVER_MEMORY_COMPACT ? "compact"
-                                                              : "standard",
-          options->zxn_bump_pool,
-          plan->bump_required ? "" : " (omitted)",
-          options->zxn_longlived_pool, plan->tiny_core, plan->light_core);
+          memory_max_text,
+          options->memory_min, options->memory_reserve,
+          plan->bump_required ? "included" : "omitted",
+          plan->tiny_core, plan->light_core);
   argument_vector arguments = {0};
   argument_push(&arguments, "zcc");
   argument_push(&arguments, "+zxn");
@@ -242,8 +264,7 @@ static int build_zxn(const driver_paths *paths,
     argument_push(&arguments, "-DRIFT_ZXN_NO_POOLS");
   else if (!plan->bump_required)
     argument_push(&arguments, "-DRIFT_ZXN_NO_BUMP_POOL");
-  argument_push(&arguments, bump_define);
-  argument_push(&arguments, longlived_define);
+  for (int i = 0; i < 6; i++) argument_push(&arguments, memory_defines[i]);
   if (plan->tiny_core) argument_push(&arguments, "-DRIFT_ZXN_TINY_CORE");
   if (plan->tiny_print_direct)
     argument_push(&arguments, "-DRIFT_ZXN_TINY_PRINT_DIRECT");
@@ -268,16 +289,30 @@ static int build_zxn(const driver_paths *paths,
   free(arguments.items);
   if (result != 0) goto failure;
   unsigned long bss_end;
-  if (!read_bss_end(map_path, &bss_end)) {
-    fprintf(stderr, "build failed: link map has no __BSS_END_head\n");
+  unsigned long stack_top;
+  unsigned long stack_size;
+  if (!read_map_symbol(map_path, "__BSS_END_tail", &bss_end) ||
+      !read_map_symbol(map_path, "REGISTER_SP", &stack_top) ||
+      !read_map_symbol(map_path, "CRT_STACK_SIZE", &stack_size)) {
+    fprintf(stderr,
+            "build failed: link map lacks arena/stack boundary symbols\n");
     goto failure;
   }
-  const unsigned long stack_top = 65368;
-  const unsigned long stack_floor = stack_top - 2048;
-  if (bss_end >= stack_floor) {
+  if (stack_size > stack_top) {
+    fprintf(stderr, "build failed: linked stack bound underflows address space\n");
+    goto failure;
+  }
+  unsigned long stack_floor = stack_top - stack_size;
+  if (options->memory_reserve > stack_floor) {
+    fprintf(stderr, "build failed: --memory-reserve exceeds target RAM\n");
+    goto failure;
+  }
+  unsigned long arena_floor = stack_floor - options->memory_reserve;
+  arena_floor -= arena_floor % RIFT_ARENA_ALIGNMENT;
+  if (bss_end >= arena_floor) {
     fprintf(stderr,
-            "build failed: ZXN BSS ends at 0x%04lX, entering the reserved "
-            "0x%04lX-0x%04lX stack range\n",
+            "build failed: ZXN BSS ends at 0x%04lX, entering reserved high "
+            "memory below the 0x%04lX-0x%04lX stack range\n",
             bss_end, stack_floor, stack_top);
     goto failure;
   }
@@ -285,6 +320,35 @@ static int build_zxn(const driver_paths *paths,
           "ZXN layout: BSS ends at 0x%04lX; reserved stack is "
           "0x%04lX-0x%04lX\n",
           bss_end, stack_floor, stack_top);
+  unsigned long arena_start =
+      (bss_end + RIFT_ARENA_ALIGNMENT - 1ul) &
+      ~(unsigned long)(RIFT_ARENA_ALIGNMENT - 1ul);
+  if (arena_start >= arena_floor) {
+    fprintf(stderr,
+            "build failed: aligned ZXN arena start 0x%04lX enters reserved "
+            "high memory\n",
+            arena_start);
+    goto failure;
+  }
+  unsigned long arena_capacity = arena_floor - arena_start;
+  if (options->memory_max_set && arena_capacity > options->memory_max) {
+    arena_capacity = options->memory_max;
+    arena_capacity -= arena_capacity % RIFT_ARENA_ALIGNMENT;
+  }
+  if (options->memory_min_set && arena_capacity < options->memory_min) {
+    fprintf(stderr,
+            "build failed: ZXN managed headroom is %lu bytes, below "
+            "--memory-min=%zu\n",
+            arena_capacity, options->memory_min);
+    goto failure;
+  }
+  if (plan->pools_required) {
+    fprintf(stdout,
+            "ZXN managed arena: 0x%04lX-0x%04lX (%lu bytes); "
+            "high-memory reserve=%zu bytes\n",
+            arena_start, arena_start + arena_capacity, arena_capacity,
+            options->memory_reserve);
+  }
   if (has_assets) {
     char *verify_argv[] = {verifier_path, "--map", map_path, "--nex",
                            nex_path, "--ram-pages=96", NULL};
@@ -369,6 +433,15 @@ int main(int argc, char **argv) {
     kill_compiler_stack();
     goto cleanup;
   }
+  if (!requirements.pools_required &&
+      (options.memory_max_set || options.memory_min_set ||
+       options.memory_reserve_set)) {
+    fprintf(stderr,
+            "build failed: memory bounds require a program with managed "
+            "allocation\n");
+    kill_compiler_stack();
+    goto cleanup;
+  }
   if (!driver_make_build_plan(paths.root, &options, &requirements, &plan)) {
     kill_compiler_stack();
     goto cleanup;
@@ -378,7 +451,7 @@ int main(int argc, char **argv) {
   kill_compiler_stack();
 
   if (options.target == DRIVER_TARGET_HOST) {
-    if (build_host(&paths, &plan) != 0) goto cleanup;
+    if (build_host(&paths, &options, &plan) != 0) goto cleanup;
     if (!driver_publish_file(paths.work_base, paths.output, 1)) goto cleanup;
     off_t size;
     if (!regular_file_size(paths.output, &size)) goto cleanup;

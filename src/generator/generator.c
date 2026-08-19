@@ -684,7 +684,6 @@ generator_t *new_generator(char *filename, const char *output_base,
   res->scope = NULL;
   res->auto_cast = options.auto_cast;
   res->zxn_test = options.zxn_test;
-  res->zxn_memory_profile = options.zxn_memory_profile;
   res->lit_counter = 0;
   res->current_fundef = NULL;
   res->bump_mark_counter = 0;
@@ -701,7 +700,6 @@ generator_t *new_generator(char *filename, const char *output_base,
            output_base);
   res->asset_decls = new_ast_array();
   res->select_all_components = options.select_all_components;
-  res->force_bump_pool = options.force_bump_pool;
 
   register_builtin_type(&res->table, "int");
   register_builtin_type(&res->table, "byte");
@@ -2652,18 +2650,13 @@ void generate_fundef(generator_t *g, ast_t fun) {
     fprintf(f, "int main(int argc, char **argv) {\n");
     if (g->zxn_test)
       fprintf(f, "zxn_test_begin();\n");
-    /* ADR-0003 §4: pool runtime init. Pool sizes are placeholders pending
-     * Phase A.1 measurement; ZXN target gets smaller defaults than host. */
-    if (g->target == TARGET_ZXN || g->zxn_memory_profile) {
-      if (g->zxn_test)
-        fprintf(f, "zxn_test_stage(\"pools\");\n");
-      fprintf(f, "rift_pools_init(RIFT_ZXN_BUMP_POOL_CAPACITY, "
-                 "RIFT_ZXN_LONGLIVED_POOL_CAPACITY);\n");
+    if (g->zxn_test)
+      fprintf(f, "zxn_test_stage(\"pools\");\n");
+    fprintf(f, "rift_pools_init(NULL);\n");
+    if (g->target == TARGET_ZXN) {
       int arrays = component_index(g, "arrays");
       if (arrays >= 0 && g->closed_components[arrays])
         fprintf(f, "__internal_set_dynamic_array_initial_capacity(8);\n");
-    } else {
-      fprintf(f, "rift_pools_init(4u * 1024u * 1024u, 4u * 1024u * 1024u);\n");
     }
     if (g->zxn_test)
       fprintf(f, "zxn_test_stage(\"arguments\");\n");
@@ -3003,16 +2996,9 @@ void transpile(generator_t *g, ast_t program) {
   g->zxn_tiny_uses_stdout = tiny.uses_stdout;
   g->zxn_tiny_simple_stdout = tiny.simple_stdout;
   g->zxn_light_core_eligible = g->target == TARGET_ZXN;
-  g->zxn_bump_required = g->select_all_components || g->force_bump_pool;
+  g->zxn_bump_required = g->select_all_components;
   generator_collect_component_uses(g, program);
   if (g->zxn_test) record_component(g, "tiny_test");
-  if (g->force_bump_pool) {
-    /* An explicit expert capacity request is a request for real allocator
-     * storage even when the program would otherwise qualify as pool-free. */
-    tiny.eligible = 0;
-    g->zxn_tiny_eligible = 0;
-    record_component(g, "core");
-  }
   if (tiny.eligible) {
     int core = component_index(g, "core");
     if (core >= 0) g->direct_components[core] = 0;

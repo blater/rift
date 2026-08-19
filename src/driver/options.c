@@ -16,30 +16,24 @@ void driver_print_usage(const char *program) {
           "  --auto-cast\n"
           "  --zxn-test\n"
           "  --allocator-stats\n"
-          "  --memory-profile=zxn\n"
-          "  --memory=compact|standard\n"
-          "      compact saves 5,888 bytes; standard gives more allocation "
-          "headroom (default)\n"
+          "  --memory-max=BYTES  cap the automatic managed arena\n"
+          "  --memory-min=BYTES  require at least this much managed memory\n"
+          "  --memory-reserve=BYTES  leave high memory outside the arena\n"
           "  --rtl=auto|all\n"
           "\n"
-          "Advanced ZXN memory options:\n"
-          "  --zxn-bump-pool=BYTES\n"
-          "  --zxn-longlived-pool=BYTES\n"
           "  --debug\n"
           "  --help\n",
           program);
 }
 
 static int parse_decimal(const char *option, const char *text,
-                         unsigned *result) {
+                         size_t *result) {
   if (!text[0]) {
     fprintf(stderr, "%s requires a decimal byte count\n", option);
     return 0;
   }
   if (text[0] == '0' && text[1]) {
-    fprintf(stderr,
-            "ZXN pool capacities must be canonical decimal values without "
-            "leading zeros\n");
+    fprintf(stderr, "memory sizes must be canonical decimal without leading zeros\n");
     return 0;
   }
   for (const char *cursor = text; *cursor; cursor++) {
@@ -48,52 +42,42 @@ static int parse_decimal(const char *option, const char *text,
       return 0;
     }
   }
-  if (strlen(text) > 5) {
-    fprintf(stderr,
-            "ZXN pool capacities must fit the target's 16-bit pool offsets "
-            "(0..65534)\n");
-    return 0;
-  }
   errno = 0;
   char *end = NULL;
-  unsigned long value = strtoul(text, &end, 10);
-  if (errno || !end || *end || value > 65534ul) {
-    fprintf(stderr,
-            "ZXN pool capacities must fit the target's 16-bit pool offsets "
-            "(0..65534)\n");
+  unsigned long long value = strtoull(text, &end, 10);
+  if (errno || !end || *end || value > (unsigned long long)SIZE_MAX) {
+    fprintf(stderr, "%s exceeds this host's addressable size\n", option);
     return 0;
   }
-  *result = (unsigned)value;
+  *result = (size_t)value;
   return 1;
 }
 
-static int validate_options(const driver_options *options,
-                            int memory_option_set) {
+static int validate_options(const driver_options *options) {
   if (options->zxn_test && options->target != DRIVER_TARGET_ZXN) {
     fprintf(stderr, "--zxn-test requires --target=zxn\n");
     return 0;
   }
-  if (memory_option_set && options->target != DRIVER_TARGET_ZXN) {
-    fprintf(stderr, "ZXN memory options require --target=zxn\n");
+  if (options->target == DRIVER_TARGET_HOST && options->memory_reserve_set) {
+    fprintf(stderr, "--memory-reserve is only meaningful for --target=zxn\n");
     return 0;
   }
-  unsigned longlived = options->zxn_longlived_pool;
-  if (longlived < 16 || longlived > 6144 || longlived % 16 != 0) {
-    fprintf(stderr,
-            "--zxn-longlived-pool must be a multiple of 16 in the range "
-            "16..6144\n");
+  if (options->memory_max_set && options->memory_max == 0) {
+    fprintf(stderr, "--memory-max must be greater than zero\n");
     return 0;
   }
-  unsigned units = longlived / 16;
-  unsigned roots = 0;
-  while (units) {
-    roots += units & 1u;
-    units >>= 1;
-  }
-  if (roots > 2) {
+  if (options->target == DRIVER_TARGET_ZXN &&
+      ((options->memory_max_set && options->memory_max > 65534u) ||
+       (options->memory_min_set && options->memory_min > 65534u) ||
+       (options->memory_reserve_set && options->memory_reserve > 65534u))) {
     fprintf(stderr,
-            "--zxn-longlived-pool must decompose into at most two "
-            "power-of-two buddy roots\n");
+            "ZXN memory sizes must fit the target's 16-bit address space "
+            "(0..65534)\n");
+    return 0;
+  }
+  if (options->memory_max_set &&
+      options->memory_min > options->memory_max) {
+    fprintf(stderr, "--memory-min cannot exceed --memory-max\n");
     return 0;
   }
   return 1;
@@ -103,16 +87,8 @@ int driver_parse_options(int argc, char **argv, driver_options *options) {
   *options = (driver_options){
       .target = DRIVER_TARGET_ZXN,
       .rtl_mode = DRIVER_RTL_AUTO,
-      .memory_mode = DRIVER_MEMORY_STANDARD,
-      .zxn_bump_pool = 1024,
-      .zxn_longlived_pool = 6144,
   };
   int positional_only = 0;
-  int memory_option_set = 0;
-  int bump_override_set = 0;
-  int longlived_override_set = 0;
-  unsigned bump_override = 0;
-  unsigned longlived_override = 0;
   for (int i = 1; i < argc; i++) {
     const char *arg = argv[i];
     if (!positional_only && strcmp(arg, "--") == 0) {
@@ -168,27 +144,23 @@ int driver_parse_options(int argc, char **argv, driver_options *options) {
       options->allocator_stats = 1;
       continue;
     }
-    if (!positional_only && strcmp(arg, "--memory-profile=zxn") == 0) {
-      options->memory_profile_zxn = 1;
+    if (!positional_only && strncmp(arg, "--memory-max=", 13) == 0) {
+      if (!parse_decimal("--memory-max", arg + 13, &options->memory_max))
+        return 0;
+      options->memory_max_set = 1;
       continue;
     }
-    if (!positional_only && strcmp(arg, "--memory") == 0) {
-      fprintf(stderr, "--memory requires compact or standard\n");
-      return 0;
-    }
-    if (!positional_only && strncmp(arg, "--memory=", 9) == 0) {
-      const char *value = arg + 9;
-      if (strcmp(value, "compact") == 0)
-        options->memory_mode = DRIVER_MEMORY_COMPACT;
-      else if (strcmp(value, "standard") == 0)
-        options->memory_mode = DRIVER_MEMORY_STANDARD;
-      else {
-        fprintf(stderr,
-                "--memory requires compact or standard (received '%s')\n",
-                value);
+    if (!positional_only && strncmp(arg, "--memory-min=", 13) == 0) {
+      if (!parse_decimal("--memory-min", arg + 13, &options->memory_min))
         return 0;
-      }
-      memory_option_set = 1;
+      options->memory_min_set = 1;
+      continue;
+    }
+    if (!positional_only && strncmp(arg, "--memory-reserve=", 17) == 0) {
+      if (!parse_decimal("--memory-reserve", arg + 17,
+                         &options->memory_reserve))
+        return 0;
+      options->memory_reserve_set = 1;
       continue;
     }
     if (!positional_only && strcmp(arg, "--rtl=auto") == 0) {
@@ -201,22 +173,6 @@ int driver_parse_options(int argc, char **argv, driver_options *options) {
     }
     if (!positional_only && strcmp(arg, "--debug") == 0) {
       options->debug = 1;
-      continue;
-    }
-    if (!positional_only && strncmp(arg, "--zxn-bump-pool=", 16) == 0) {
-      if (!parse_decimal("--zxn-bump-pool", arg + 16, &bump_override))
-        return 0;
-      bump_override_set = 1;
-      memory_option_set = 1;
-      continue;
-    }
-    if (!positional_only &&
-        strncmp(arg, "--zxn-longlived-pool=", 21) == 0) {
-      if (!parse_decimal("--zxn-longlived-pool", arg + 21,
-                         &longlived_override))
-        return 0;
-      longlived_override_set = 1;
-      memory_option_set = 1;
       continue;
     }
     if (!positional_only && arg[0] == '-') {
@@ -236,14 +192,5 @@ int driver_parse_options(int argc, char **argv, driver_options *options) {
     driver_print_usage(argv[0]);
     return 0;
   }
-  if (options->memory_mode == DRIVER_MEMORY_COMPACT) {
-    options->zxn_bump_pool = 256;
-    options->zxn_longlived_pool = 1024;
-  }
-  if (bump_override_set) options->zxn_bump_pool = bump_override;
-  if (longlived_override_set)
-    options->zxn_longlived_pool = longlived_override;
-  options->zxn_pool_overrides = bump_override_set || longlived_override_set;
-  options->zxn_bump_pool_override = bump_override_set;
-  return validate_options(options, memory_option_set);
+  return validate_options(options);
 }

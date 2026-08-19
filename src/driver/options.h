@@ -13,25 +13,20 @@ typedef enum {
   DRIVER_RTL_ALL
 } driver_rtl_mode;
 
-typedef enum {
-  DRIVER_MEMORY_STANDARD,
-  DRIVER_MEMORY_COMPACT
-} driver_memory_mode;
-
 typedef struct {
   driver_target target;
   driver_rtl_mode rtl_mode;
-  driver_memory_mode memory_mode;
   int auto_cast;
   int zxn_test;
   int allocator_stats;
-  int memory_profile_zxn;
   int debug;
   int run;
-  int zxn_pool_overrides;
-  int zxn_bump_pool_override;
-  unsigned zxn_bump_pool;
-  unsigned zxn_longlived_pool;
+  int memory_max_set;
+  int memory_min_set;
+  int memory_reserve_set;
+  size_t memory_max;
+  size_t memory_min;
+  size_t memory_reserve;
   const char *source_arg;
   const char *output_arg;
 } driver_options;

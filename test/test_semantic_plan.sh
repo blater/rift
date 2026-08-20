@@ -505,4 +505,142 @@ gcc -Werror -Wall -Wextra -Wno-sign-compare -pedantic \
 zcc +zxn -vn -c -clib=sdcc_iy -I"$ROOT/src/lib" \
   "$WORK/while-zxn.c" -o "$WORK/while-zxn.o"
 
+"$ROOT/riftc" "$ROOT/test/fixtures/semantic_plan_match.rift" \
+  "$WORK/match" --target=gcc --semantic-plan \
+  --component-manifest="$ROOT/src/lib/components.manifest"
+match_body=$(awk '/^string rift_plan_body_0\(/ { seen++ }
+                  seen == 2 { print }
+                  seen == 2 && /^}$/ { exit }' "$WORK/match.c")
+[ "$(printf '%s\n' "$match_body" | grep -c '^int rift_plan_slot_3 = ')" -eq 1 ] ||
+  fail "match scrutinee was not captured into one private scalar slot"
+[ "$(printf '%s\n' "$match_body" | grep -c '= rift_plan_slot_3;')" -eq 4 ] ||
+  fail "ordered match tests did not read only the captured scrutinee"
+printf '%s\n' "$match_body" | awk '
+  /rift_plan_block_0:/ { first_test = NR }
+  first_test && /if \(rift_plan_tmp_.*\) goto rift_plan_block_1; else goto rift_plan_block_2;/ { first_true = NR }
+  /rift_plan_block_2:/ { repeated_test = NR }
+  repeated_test && /if \(rift_plan_tmp_.*\) goto rift_plan_block_3; else goto rift_plan_block_4;/ { repeated_true = NR }
+  /rift_plan_block_4:/ { false_test = NR }
+  false_test && /if \(rift_plan_tmp_.*\) goto rift_plan_block_6; else goto rift_plan_block_5;/ { false_arm = NR }
+  END {
+    exit first_test < first_true && first_true < repeated_test &&
+         repeated_test < repeated_true && repeated_true < false_test &&
+         false_test < false_arm ? 0 : 1
+  }
+' || fail "match did not preserve ordered first-match bool arms"
+printf '%s\n' "$match_body" | awk '
+  /__string_release\(rift_plan_slot_[4567]\);/ {
+    if (getline > 0 && /goto rift_plan_block_8;/) cleaned++
+  }
+  END { exit cleaned == 4 ? 0 : 1 }
+' || fail "match arm locals were not reverse-cleaned before the join"
+
+early_match_body=$(awk '/^string rift_plan_body_1\(/ { seen++ }
+                        seen == 2 { print }
+                        seen == 2 && /^}$/ { exit }' "$WORK/match.c")
+printf '%s\n' "$early_match_body" | awk '
+  /__string_release\(rift_plan_slot_5\);/ { inner = NR }
+  /__string_release\(rift_plan_slot_4\);/ { outer = NR }
+  /__string_release\(rift_plan_slot_1\);/ { parameter = NR }
+  /^return rift_plan_tmp_/ {
+    if (inner && inner < outer && outer < parameter && parameter < NR) found++
+    inner = 0
+    outer = 0
+    parameter = 0
+  }
+  END { exit found == 1 ? 0 : 1 }
+' || fail "match early return did not reverse-unwind arm and outer owners"
+
+fallthrough_body=$(awk '/^string rift_plan_body_2\(/ { seen++ }
+                        seen == 2 { print }
+                        seen == 2 && /^}$/ { exit }' "$WORK/match.c")
+printf '%s\n' "$fallthrough_body" | awk '
+  /else goto rift_plan_block_2;/ { unmatched = NR }
+  /rift_plan_block_2:/ { unmatched_block = NR }
+  /goto rift_plan_block_3;/ { if (unmatched_block && unmatched_block < NR) joined++ }
+  END { exit unmatched && joined == 1 ? 0 : 1 }
+' || fail "match without default lost its unmatched fallthrough edge"
+
+default_match_body=$(awk '/^string rift_plan_body_4\(/ { seen++ }
+                          seen == 2 { print }
+                          seen == 2 && /^}$/ { exit }' "$WORK/match.c")
+[ "$(printf '%s\n' "$default_match_body" | grep -c '^int rift_plan_slot_2 = ')" -eq 1 ] ||
+  fail "default-only match did not capture its scrutinee exactly once"
+[ "$(printf '%s\n' "$default_match_body" | grep -c '= rift_plan_slot_2;')" -eq 1 ] ||
+  fail "default-only match did not consume its captured scrutinee"
+printf '%s\n' "$default_match_body" | grep -q \
+  'if (rift_plan_tmp_.*) goto rift_plan_block_1; else goto rift_plan_block_1;' ||
+  fail "default-only match is not an explicit exhaustive sealed branch"
+if printf '%s\n%s\n%s\n%s\n' "$match_body" "$early_match_body" \
+    "$fallthrough_body" "$default_match_body" |
+    grep -Eq '__strtmp_|__bm_|selected body entered legacy'; then
+  fail "selected match body entered legacy AST lowering"
+fi
+
+legacy_match_main=$(sed -n '/^int main(/,$p' "$WORK/match.c")
+printf '%s\n' "$legacy_match_main" | awk '
+  /^int rift_plan_legacy_arg_.* = true;/ {
+    bool_arg = $2
+    sub(/;.*/, "", bool_arg)
+    bool_count++
+  }
+  /^string rift_plan_legacy_arg_.* = source;/ {
+    string_arg = $2
+    sub(/;.*/, "", string_arg)
+    string_count++
+  }
+  /__string_retain\(rift_plan_legacy_arg_/ {
+    if (index($0, bool_arg)) bool_retained++
+    if (string_arg != "" && index($0, string_arg)) string_retained++
+  }
+  /rift_plan_fn_0\(rift_plan_legacy_arg_/ {
+    if (index($0, bool_arg) && index($0, string_arg)) mixed_call++
+  }
+  END {
+    exit bool_count == 1 && string_count == 1 && bool_retained == 0 &&
+         string_retained == 1 && mixed_call == 1 ? 0 : 1
+  }
+' || fail "legacy mixed bool/string call ignored its sealed parameter ABI"
+
+gcc -Werror -Wall -Wextra -Wno-sign-compare -pedantic \
+  -I"$ROOT/src/lib" -I"$ROOT/src/ext/lib" \
+  "$WORK/match.c" \
+  "$ROOT/src/lib/arena_host.c" "$ROOT/src/lib/pools.c" \
+  "$ROOT/src/lib/fundefs.c" "$ROOT/src/lib/termination.c" \
+  "$ROOT/src/lib/print_bytes.c" "$ROOT/src/lib/error_sink.c" \
+  "$ROOT/src/lib/host_caps.c" "$ROOT/src/lib/host/termbox2_impl.c" \
+  -o "$WORK/match.exe"
+[ "$("$WORK/match.exe")" = "aba" ] ||
+  fail "match selected the wrong repeated arm or returned the wrong value"
+sed 's/rift_pools_init(NULL);/rift_arena_options rift_test_arena = { .memory_max = 1024, .memory_max_present = 1 }; rift_pools_init(\&rift_test_arena);/' \
+  "$WORK/match.c" >"$WORK/match-constrained.c"
+gcc -Werror -Wall -Wextra -Wno-sign-compare -pedantic \
+  -I"$ROOT/src/lib" -I"$ROOT/src/ext/lib" \
+  "$WORK/match-constrained.c" \
+  "$ROOT/src/lib/arena_host.c" "$ROOT/src/lib/pools.c" \
+  "$ROOT/src/lib/fundefs.c" "$ROOT/src/lib/termination.c" \
+  "$ROOT/src/lib/print_bytes.c" "$ROOT/src/lib/error_sink.c" \
+  "$ROOT/src/lib/host_caps.c" "$ROOT/src/lib/host/termbox2_impl.c" \
+  -o "$WORK/match-constrained.exe"
+[ "$("$WORK/match-constrained.exe")" = "aba" ] ||
+  fail "match ownership did not reuse a 1 KiB arena across 200 iterations"
+"$ROOT/riftc" "$ROOT/test/fixtures/semantic_plan_match.rift" \
+  "$WORK/match-zxn" --target=zxn --semantic-plan \
+  --component-manifest="$ROOT/src/lib/components.manifest"
+zcc +zxn -vn -c -clib=sdcc_iy -I"$ROOT/src/lib" \
+  "$WORK/match-zxn.c" -o "$WORK/match-zxn.o"
+
+if "$ROOT/riftc" \
+    "$ROOT/test/fixtures/semantic_plan_match_missing_arm.rift" \
+    "$WORK/match-missing" --target=gcc --semantic-plan \
+    --component-manifest="$ROOT/src/lib/components.manifest" \
+    >"$WORK/match-missing.log" 2>&1; then
+  fail "returning match with an unmatched path unexpectedly compiled"
+fi
+grep -q 'representative function path must end in return' \
+  "$WORK/match-missing.log" ||
+  fail "missing match arm did not report its unterminated path"
+[ ! -s "$WORK/match-missing.c" ] ||
+  fail "missing match arm emitted partial C before failing closed"
+
 echo "PASS: semantic-plan generated-C seam"

@@ -1,0 +1,73 @@
+sub joined(bool flag, string seed) returns string {
+  string result := seed;
+  match flag {
+    true: {
+      string first := concat(seed, seed);
+      result := first;
+    }
+    true: {
+      string repeated := substring(seed, 1, 1);
+      result := repeated;
+    }
+    false: {
+      string other := substring(seed, 1, 1);
+      result := other;
+    }
+    default: {
+      string fallback := seed;
+      result := fallback;
+    }
+  }
+  return result;
+}
+
+sub early(bool flag, string seed) returns string {
+  match flag {
+    false: {
+      string false_local := concat(seed, seed);
+      return false_local;
+    }
+    true: {
+      string outer := concat(seed, seed);
+      string inner := substring(outer, 1, 3);
+      return inner;
+    }
+    default: return seed;
+  }
+}
+
+sub fallthrough(bool flag, string seed) returns string {
+  match flag {
+    true: {
+      string matched := concat(seed, seed);
+      return matched;
+    }
+  }
+  return seed;
+}
+
+sub exercise(string seed) returns string {
+  string defaulted := default_only(false, seed);
+  string first := joined(true, defaulted);
+  string false_arm := joined(false, first);
+  string missed := fallthrough(false, first);
+  return early(true, missed);
+}
+
+sub default_only(bool flag, string seed) returns string {
+  match flag {
+    default: {
+      string local := seed;
+      return local;
+    }
+  }
+}
+
+sub main() {
+  string source := "ab";
+  string result := joined(true, source);
+  for i := 1 to 200 {
+    result := exercise("ab");
+  }
+  print(result);
+}

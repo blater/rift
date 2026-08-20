@@ -3,6 +3,7 @@
 
 #include "ast.h"
 
+#include <stddef.h>
 #include <stdio.h>
 
 typedef struct semantic_plan_program semantic_plan_program;
@@ -21,12 +22,27 @@ typedef struct semantic_plan_diagnostic {
   const char *message;
 } semantic_plan_diagnostic;
 
+typedef enum semantic_plan_parameter_kind {
+  SEMANTIC_PLAN_PARAMETER_BOOL_SCALAR,
+  SEMANTIC_PLAN_PARAMETER_STRING_CONSUME,
+} semantic_plan_parameter_kind;
+
+typedef struct semantic_plan_parameter_abi {
+  semantic_plan_parameter_kind kind;
+  const char *c_type;
+} semantic_plan_parameter_abi;
+
 semantic_plan_program *
 semantic_plan_prepare(ast_t program, semantic_plan_diagnostic *diagnostic);
 void semantic_plan_destroy(semantic_plan_program *program);
 int semantic_plan_selects(const semantic_plan_program *program, ast_t function);
 const char *semantic_plan_function_symbol(const semantic_plan_program *program,
                                           ast_t function);
+int semantic_plan_parameter_count(const semantic_plan_program *program,
+                                  ast_t function, size_t *count);
+int semantic_plan_parameter_at(const semantic_plan_program *program,
+                               ast_t function, size_t index,
+                               semantic_plan_parameter_abi *parameter);
 int semantic_plan_emit_signature(const semantic_plan_program *program,
                                  ast_t function, FILE *output,
                                  semantic_plan_diagnostic *diagnostic);

@@ -151,6 +151,94 @@ static ast_t build_while_function(node_t *nodes, token_t *arguments,
   return function;
 }
 
+static ast_t build_match_function(node_t *nodes, token_t *arguments,
+                                  ast_t *types, ast_t *body_statements,
+                                  ast_t *arm_statements, ast_t *cases) {
+  node_t *bool_type = &nodes[0];
+  node_t *string_type = &nodes[1];
+  node_t *scrutinee = &nodes[2];
+  node_t *true_pattern = &nodes[3];
+  node_t *local_value = &nodes[4];
+  node_t *local = &nodes[5];
+  node_t *true_body = &nodes[6];
+  node_t *true_case = &nodes[7];
+  node_t *default_pattern = &nodes[8];
+  node_t *default_value = &nodes[9];
+  node_t *default_return = &nodes[10];
+  node_t *default_case = &nodes[11];
+  node_t *match_statement = &nodes[12];
+  node_t *final_value = &nodes[13];
+  node_t *final_return = &nodes[14];
+  node_t *body = &nodes[15];
+  node_t *function = &nodes[16];
+
+  memset(nodes, 0, 17 * sizeof(*nodes));
+  memset(arguments, 0, 2 * sizeof(*arguments));
+  bool_type->tag = type;
+  bool_type->data.type.name = named_token("bool");
+  string_type->tag = type;
+  string_type->data.type.name = named_token("string");
+  scrutinee->tag = identifier;
+  scrutinee->data.identifier.id = named_token("flag");
+  true_pattern->tag = identifier;
+  true_pattern->data.identifier.id = named_token("true");
+  local_value->tag = identifier;
+  local_value->data.identifier.id = named_token("value");
+  local->tag = vardef;
+  local->data.vardef.name = named_token("local");
+  local->data.vardef.type = string_type;
+  local->data.vardef.expr = local_value;
+  arm_statements[0] = local;
+  true_body->tag = compound;
+  true_body->data.compound.stmts.data = arm_statements;
+  true_body->data.compound.stmts.length = 1;
+  true_body->data.compound.stmts.capacity = 1;
+  true_case->tag = matchcase;
+  true_case->data.matchcase.expr = true_pattern;
+  true_case->data.matchcase.body = true_body;
+  default_pattern->tag = literal;
+  default_pattern->data.literal.lit.type = TOK_WILDCARD;
+  default_value->tag = identifier;
+  default_value->data.identifier.id = named_token("value");
+  default_return->tag = ret;
+  default_return->data.ret.expr = default_value;
+  default_case->tag = matchcase;
+  default_case->data.matchcase.expr = default_pattern;
+  default_case->data.matchcase.body = default_return;
+  cases[0] = true_case;
+  cases[1] = default_case;
+  match_statement->tag = match;
+  match_statement->data.match.expr = scrutinee;
+  match_statement->data.match.cases.data = cases;
+  match_statement->data.match.cases.length = 2;
+  match_statement->data.match.cases.capacity = 2;
+  final_value->tag = identifier;
+  final_value->data.identifier.id = named_token("value");
+  final_return->tag = ret;
+  final_return->data.ret.expr = final_value;
+  body_statements[0] = match_statement;
+  body_statements[1] = final_return;
+  body->tag = compound;
+  body->data.compound.stmts.data = body_statements;
+  body->data.compound.stmts.length = 2;
+  body->data.compound.stmts.capacity = 2;
+  arguments[0] = named_token("flag");
+  arguments[1] = named_token("value");
+  types[0] = bool_type;
+  types[1] = string_type;
+  function->tag = fundef;
+  function->data.fundef.name = named_token("match_cfg");
+  function->data.fundef.args.data = arguments;
+  function->data.fundef.args.length = 2;
+  function->data.fundef.args.capacity = 2;
+  function->data.fundef.types.data = types;
+  function->data.fundef.types.length = 2;
+  function->data.fundef.types.capacity = 2;
+  function->data.fundef.body = body;
+  function->data.fundef.ret_type = string_type;
+  return function;
+}
+
 static void test_inactive_gate(void) {
   node_t nodes[7];
   token_t arguments[1];
@@ -250,6 +338,77 @@ static void test_while_cfg_lowering(void) {
                  SIR_LOWER_ERROR &&
              diagnostic.code == SIR_DIAGNOSTIC_TYPE_MISMATCH,
          "while lowering rejects a non-bool condition before planning");
+  sir_function_destroy(&function);
+}
+
+static void test_match_cfg_lowering(void) {
+  node_t nodes[17];
+  token_t arguments[2];
+  ast_t types[2];
+  ast_t body_statements[2];
+  ast_t arm_statements[1];
+  ast_t cases[2];
+  sir_function function;
+  sir_lower_options options = sir_lower_default_options();
+  sir_diagnostic diagnostic;
+  ast_t ast = build_match_function(nodes, arguments, types, body_statements,
+                                   arm_statements, cases);
+  sir_id private_slot = SIR_INVALID_ID;
+  size_t block_index;
+  int captures = 0;
+  int reloads = 0;
+  int ends = 0;
+  int return_unwinds = 0;
+  int exhaustive_branches = 0;
+  int hidden_fallbacks = 0;
+
+  sir_function_init(&function);
+  options.enabled = 1;
+  expect(sir_lower_function(ast, &options, &function, &diagnostic) ==
+             SIR_LOWER_OK,
+         "bool match lowers through the semantic gate");
+  for (block_index = 0; block_index < function.slot_count; block_index++) {
+    if (function.slots[block_index].name.length ==
+            strlen("@match-scrutinee") &&
+        memcmp(function.slots[block_index].name.data, "@match-scrutinee",
+               strlen("@match-scrutinee")) == 0) {
+      private_slot = (sir_id)block_index;
+      break;
+    }
+  }
+  for (block_index = 0; block_index < function.block_count; block_index++) {
+    size_t operation_index;
+    for (operation_index = 0;
+         operation_index < function.blocks[block_index].operation_count;
+         operation_index++) {
+      const sir_operation *op =
+          &function.blocks[block_index].operations[operation_index];
+      size_t cleanup_index;
+      if (op->kind == SIR_OP_INIT_SLOT && op->slot == private_slot)
+        captures++;
+      if (op->kind == SIR_OP_LOAD_SLOT && op->slot == private_slot)
+        reloads++;
+      if (op->kind == SIR_OP_END_SLOT && op->slot == private_slot)
+        ends++;
+      if (op->kind == SIR_OP_BRANCH && op->targets[0] == op->targets[1])
+        exhaustive_branches++;
+      if (op->kind == SIR_OP_OPAQUE_EXPRESSION)
+        hidden_fallbacks++;
+      if (op->kind != SIR_OP_RETURN)
+        continue;
+      for (cleanup_index = 0; cleanup_index < op->cleanup_slot_count;
+           cleanup_index++) {
+        if (op->cleanup_slots[cleanup_index] == private_slot)
+          return_unwinds++;
+      }
+    }
+  }
+  expect(private_slot != SIR_INVALID_ID && captures == 1 && reloads == 2,
+         "match captures its scrutinee once and reloads only the private slot");
+  expect(ends == 1 && return_unwinds == 1,
+         "match ends its private slot on continuing and returning paths");
+  expect(exhaustive_branches == 1 && hidden_fallbacks == 0,
+         "default match arm is an explicit exhaustive sealed CFG branch");
   sir_function_destroy(&function);
 }
 
@@ -629,6 +788,47 @@ static void test_hidden_call_rejected(void) {
   sir_function_destroy(&function);
 }
 
+static void test_match_missing_arm_rejected(void) {
+  sir_function function;
+  sir_diagnostic diagnostic;
+  sir_value condition_value;
+  sir_operation constant;
+  sir_operation branch;
+  sir_operation return_op;
+  sir_id entry;
+  sir_id arm;
+  sir_id condition;
+
+  sir_function_init(&function);
+  function.return_type = sir_builtin_type(SIR_TYPE_VOID);
+  function.return_representation = SIR_REP_NONE;
+  function.return_ownership = SIR_OWNERSHIP_NONE;
+  condition_value.type = sir_builtin_type(SIR_TYPE_BOOL);
+  condition_value.representation = SIR_REP_SCALAR;
+  condition_value.ownership = SIR_OWNERSHIP_SCALAR;
+  condition = sir_function_add_value(&function, condition_value);
+  entry = sir_function_add_block(&function);
+  arm = sir_function_add_block(&function);
+  function.entry_block = entry;
+  constant = operation(SIR_OP_CONSTANT);
+  constant.result = condition;
+  constant.bool_value = 1;
+  (void)sir_block_add_operation(&function, entry, &constant);
+  branch = operation(SIR_OP_BRANCH);
+  branch.operands = &condition;
+  branch.operand_count = 1;
+  branch.targets[0] = arm;
+  branch.targets[1] = SIR_INVALID_ID;
+  branch.target_count = 2;
+  (void)sir_block_add_operation(&function, entry, &branch);
+  return_op = operation(SIR_OP_RETURN);
+  (void)sir_block_add_operation(&function, arm, &return_op);
+  expect(!sir_verify_function(&function, NULL, &diagnostic) &&
+             diagnostic.code == SIR_DIAGNOSTIC_INVALID_BLOCK,
+         "semantic verifier rejects a match CFG with a missing arm edge");
+  sir_function_destroy(&function);
+}
+
 static void test_intrinsic_registry_is_authoritative(void) {
   const sir_intrinsic_descriptor *concat =
       sir_intrinsic_lookup((string_view){"concat", 6}, 2);
@@ -693,6 +893,7 @@ int main(void) {
   test_inactive_gate();
   test_representative_function();
   test_while_cfg_lowering();
+  test_match_cfg_lowering();
   test_lowerer_hard_errors();
   test_authoritative_call_abi();
   test_consuming_user_call_requires_prepared_arguments();
@@ -700,6 +901,7 @@ int main(void) {
   test_unknown_effect_rejected();
   test_hidden_expression_rejected();
   test_hidden_call_rejected();
+  test_match_missing_arm_rejected();
   test_intrinsic_registry_is_authoritative();
   if (failures != 0) {
     fprintf(stderr, "%d semantic IR test(s) failed\n", failures);

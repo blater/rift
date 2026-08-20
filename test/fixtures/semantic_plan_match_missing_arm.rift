@@ -1,0 +1,8 @@
+sub incomplete(bool flag, string value) returns string {
+  match flag {
+    true: return value;
+  }
+}
+
+sub main() {
+}

@@ -232,6 +232,62 @@ const char *semantic_plan_function_symbol(const semantic_plan_program *program,
   return declaration.external_symbol;
 }
 
+int semantic_plan_parameter_count(const semantic_plan_program *program,
+                                  ast_t function, size_t *count) {
+  const semantic_plan_function *selected = find_function(program, function);
+  size_t slot_count;
+  size_t index;
+  int saw_local = 0;
+  if (selected == NULL || count == NULL ||
+      !ownership_plan_is_verified(selected->plan))
+    return 0;
+  *count = 0;
+  slot_count = ownership_plan_slot_count(selected->plan);
+  for (index = 0; index < slot_count; index++) {
+    ownership_slot_view slot;
+    if (!ownership_plan_slot_at(selected->plan, (ownership_id)index, &slot))
+      return 0;
+    if (!slot.is_parameter) {
+      saw_local = 1;
+      continue;
+    }
+    if (saw_local)
+      return 0;
+    (*count)++;
+  }
+  return 1;
+}
+
+int semantic_plan_parameter_at(const semantic_plan_program *program,
+                               ast_t function, size_t index,
+                               semantic_plan_parameter_abi *parameter) {
+  const semantic_plan_function *selected = find_function(program, function);
+  const plan_c_abi *abi = plan_c_rift_abi();
+  ownership_slot_view slot;
+  size_t parameter_count;
+  if (parameter == NULL ||
+      !semantic_plan_parameter_count(program, function, &parameter_count) ||
+      index >= parameter_count || selected == NULL ||
+      !ownership_plan_slot_at(selected->plan, (ownership_id)index, &slot) ||
+      !slot.is_parameter)
+    return 0;
+  if (slot.type.kind == SIR_TYPE_BOOL &&
+      slot.representation == SIR_REP_SCALAR &&
+      slot.ownership == SIR_OWNERSHIP_SCALAR) {
+    parameter->kind = SEMANTIC_PLAN_PARAMETER_BOOL_SCALAR;
+    parameter->c_type = abi->bool_type;
+    return 1;
+  }
+  if (slot.type.kind == SIR_TYPE_STRING &&
+      slot.representation == SIR_REP_STRING_DESCRIPTOR &&
+      slot.ownership == SIR_OWNERSHIP_OWNED) {
+    parameter->kind = SEMANTIC_PLAN_PARAMETER_STRING_CONSUME;
+    parameter->c_type = abi->string_type;
+    return 1;
+  }
+  return 0;
+}
+
 int semantic_plan_emit_signature(const semantic_plan_program *program,
                                  ast_t function, FILE *output,
                                  semantic_plan_diagnostic *diagnostic) {

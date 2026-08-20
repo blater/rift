@@ -10,6 +10,7 @@
 typedef struct lower_binding {
   string_view name;
   sir_id slot;
+  int visible;
 } lower_binding;
 
 typedef struct lower_state {
@@ -116,6 +117,8 @@ static int binding_index(const lower_state *state, string_view name,
                          size_t *index) {
   size_t candidate;
   for (candidate = state->binding_count; candidate != 0; candidate--) {
+    if (!state->bindings[candidate - 1].visible)
+      continue;
     string_view binding_name = state->bindings[candidate - 1].name;
     if (binding_name.length == name.length &&
         memcmp(binding_name.data, name.data, name.length) == 0) {
@@ -140,6 +143,21 @@ static int add_binding(lower_state *state, string_view name, sir_id slot) {
   }
   state->bindings[state->binding_count].name = name;
   state->bindings[state->binding_count].slot = slot;
+  state->bindings[state->binding_count].visible = 1;
+  state->binding_count++;
+  return 1;
+}
+
+static int add_private_binding(lower_state *state, string_view name,
+                               sir_id slot) {
+  if (!reserve_bindings(state, state->binding_count + 1)) {
+    lower_error(state, SIR_DIAGNOSTIC_ALLOCATION_FAILED,
+                "could not allocate private semantic binding");
+    return 0;
+  }
+  state->bindings[state->binding_count].name = name;
+  state->bindings[state->binding_count].slot = slot;
+  state->bindings[state->binding_count].visible = 0;
   state->binding_count++;
   return 1;
 }
@@ -788,6 +806,239 @@ static int lower_while(lower_state *state, ast_t statement, int *terminated) {
   return 1;
 }
 
+static int match_pattern_bool(ast_t pattern, int *value) {
+  if (pattern == NULL || pattern->tag != identifier)
+    return 0;
+  if (view_is(pattern->data.identifier.id.lexeme, "true")) {
+    *value = 1;
+    return 1;
+  }
+  if (view_is(pattern->data.identifier.id.lexeme, "false")) {
+    *value = 0;
+    return 1;
+  }
+  return 0;
+}
+
+static int match_pattern_default(ast_t pattern) {
+  return pattern != NULL && pattern->tag == literal &&
+         pattern->data.literal.lit.type == TOK_WILDCARD;
+}
+
+static int append_match_slot_load(lower_state *state, sir_id slot,
+                                  sir_id *result) {
+  sir_value value;
+  sir_operation operation;
+  value.type = state->function.slots[slot].type;
+  value.representation = state->function.slots[slot].representation;
+  value.ownership = SIR_OWNERSHIP_SCALAR;
+  *result = sir_function_add_value(&state->function, value);
+  if (*result == SIR_INVALID_ID) {
+    lower_error(state, SIR_DIAGNOSTIC_ALLOCATION_FAILED,
+                "could not allocate match test value");
+    return 0;
+  }
+  operation = empty_operation(SIR_OP_LOAD_SLOT);
+  operation.result = *result;
+  operation.slot = slot;
+  if (!sir_block_add_operation(&state->function, state->block, &operation)) {
+    lower_error(state, SIR_DIAGNOSTIC_ALLOCATION_FAILED,
+                "could not append match test load");
+    return 0;
+  }
+  return 1;
+}
+
+static int lower_match(lower_state *state, ast_t statement, int *terminated) {
+  static char private_name[] = "@match-scrutinee";
+  ast_match *selector = &statement->data.match;
+  size_t binding_base = state->binding_count;
+  size_t case_count;
+  size_t index;
+  sir_id scrutinee;
+  sir_id scrutinee_slot;
+  sir_id *continuing_blocks = NULL;
+  size_t continuing_count = 0;
+  int has_default = 0;
+  sir_slot slot;
+  sir_operation operation;
+
+  if (selector->cases.length < 0) {
+    lower_error(state, SIR_DIAGNOSTIC_UNSUPPORTED_AST,
+                "match has an invalid arm list");
+    return 0;
+  }
+  case_count = (size_t)selector->cases.length;
+  for (index = 0; index < case_count; index++) {
+    ast_t match_case = selector->cases.data[index];
+    int pattern_value;
+    if (match_case == NULL || match_case->tag != matchcase) {
+      lower_error(state, SIR_DIAGNOSTIC_UNSUPPORTED_AST,
+                  "match arm is malformed");
+      return 0;
+    }
+    if (match_pattern_default(match_case->data.matchcase.expr)) {
+      if (index + 1 != case_count) {
+        lower_error(state, SIR_DIAGNOSTIC_UNSUPPORTED_AST,
+                    "match default arm must be last");
+        return 0;
+      }
+      has_default = 1;
+    } else if (!match_pattern_bool(match_case->data.matchcase.expr,
+                                   &pattern_value)) {
+      lower_error(state, SIR_DIAGNOSTIC_UNSUPPORTED_AST,
+                  "checkpoint match patterns must be true, false, or default");
+      return 0;
+    }
+  }
+
+  scrutinee = lower_expression(state, selector->expr);
+  if (scrutinee == SIR_INVALID_ID ||
+      state->function.values[scrutinee].type.kind != SIR_TYPE_BOOL ||
+      state->function.values[scrutinee].representation != SIR_REP_SCALAR ||
+      state->function.values[scrutinee].ownership != SIR_OWNERSHIP_SCALAR) {
+    lower_error(state, SIR_DIAGNOSTIC_TYPE_MISMATCH,
+                "match scrutinee must be a bool scalar value");
+    return 0;
+  }
+  memset(&slot, 0, sizeof(slot));
+  slot.name = (string_view){private_name, sizeof(private_name) - 1};
+  slot.type = sir_builtin_type(SIR_TYPE_BOOL);
+  slot.representation = SIR_REP_SCALAR;
+  slot.ownership = SIR_OWNERSHIP_SCALAR;
+  scrutinee_slot = sir_function_add_slot(&state->function, slot);
+  if (scrutinee_slot == SIR_INVALID_ID ||
+      !add_private_binding(state, slot.name, scrutinee_slot)) {
+    if (scrutinee_slot == SIR_INVALID_ID) {
+      lower_error(state, SIR_DIAGNOSTIC_ALLOCATION_FAILED,
+                  "could not allocate match scrutinee slot");
+    }
+    return 0;
+  }
+  operation = empty_operation(SIR_OP_INIT_SLOT);
+  operation.slot = scrutinee_slot;
+  operation.operands = &scrutinee;
+  operation.operand_count = 1;
+  if (!sir_block_add_operation(&state->function, state->block, &operation)) {
+    lower_error(state, SIR_DIAGNOSTIC_ALLOCATION_FAILED,
+                "could not capture match scrutinee");
+    return 0;
+  }
+
+  continuing_blocks = malloc((case_count + 1) * sizeof(*continuing_blocks));
+  if (continuing_blocks == NULL) {
+    lower_error(state, SIR_DIAGNOSTIC_ALLOCATION_FAILED,
+                "could not allocate match continuation list");
+    return 0;
+  }
+  for (index = 0; index < case_count; index++) {
+    ast_t match_case = selector->cases.data[index];
+    sir_id test_block = state->block;
+    sir_id arm_block = sir_function_add_block(&state->function);
+    sir_id next_block = SIR_INVALID_ID;
+    int arm_terminated;
+    int pattern_value;
+    if (arm_block == SIR_INVALID_ID) {
+      lower_error(state, SIR_DIAGNOSTIC_ALLOCATION_FAILED,
+                  "could not allocate match arm block");
+      goto failure;
+    }
+    if (match_pattern_default(match_case->data.matchcase.expr)) {
+      sir_id condition;
+      sir_operation branch;
+      state->block = test_block;
+      if (!append_match_slot_load(state, scrutinee_slot, &condition))
+        goto failure;
+      branch = empty_operation(SIR_OP_BRANCH);
+      branch.operands = &condition;
+      branch.operand_count = 1;
+      branch.targets[0] = arm_block;
+      branch.targets[1] = arm_block;
+      branch.target_count = 2;
+      if (!sir_block_add_operation(&state->function, test_block, &branch)) {
+        lower_error(state, SIR_DIAGNOSTIC_ALLOCATION_FAILED,
+                    "could not append exhaustive match branch");
+        goto failure;
+      }
+    } else {
+      sir_id condition;
+      sir_operation branch;
+      next_block = sir_function_add_block(&state->function);
+      if (next_block == SIR_INVALID_ID) {
+        lower_error(state, SIR_DIAGNOSTIC_ALLOCATION_FAILED,
+                    "could not allocate next match test block");
+        goto failure;
+      }
+      state->block = test_block;
+      if (!append_match_slot_load(state, scrutinee_slot, &condition))
+        goto failure;
+      (void)match_pattern_bool(match_case->data.matchcase.expr,
+                               &pattern_value);
+      branch = empty_operation(SIR_OP_BRANCH);
+      branch.operands = &condition;
+      branch.operand_count = 1;
+      branch.targets[pattern_value ? 0 : 1] = arm_block;
+      branch.targets[pattern_value ? 1 : 0] = next_block;
+      branch.target_count = 2;
+      if (!sir_block_add_operation(&state->function, test_block, &branch)) {
+        lower_error(state, SIR_DIAGNOSTIC_ALLOCATION_FAILED,
+                    "could not append match branch");
+        goto failure;
+      }
+    }
+
+    state->block = arm_block;
+    if (!lower_scoped_body(state, match_case->data.matchcase.body,
+                           &arm_terminated))
+      goto failure;
+    if (!arm_terminated)
+      continuing_blocks[continuing_count++] = state->block;
+    state->block = next_block;
+  }
+  if (!has_default)
+    continuing_blocks[continuing_count++] = state->block;
+
+  if (continuing_count == 0) {
+    state->binding_count = binding_base;
+    state->block = SIR_INVALID_ID;
+    *terminated = 1;
+    free(continuing_blocks);
+    return 1;
+  }
+  {
+    sir_id join_block = sir_function_add_block(&state->function);
+    if (join_block == SIR_INVALID_ID) {
+      lower_error(state, SIR_DIAGNOSTIC_ALLOCATION_FAILED,
+                  "could not allocate match join block");
+      goto failure;
+    }
+    for (index = 0; index < continuing_count; index++) {
+      state->block = continuing_blocks[index];
+      operation = empty_operation(SIR_OP_END_SLOT);
+      operation.slot = scrutinee_slot;
+      if (!sir_block_add_operation(&state->function, state->block, &operation) ||
+          !append_jump(state, state->block, join_block)) {
+        if (state->diagnostic != NULL &&
+            state->diagnostic->code == SIR_DIAGNOSTIC_NONE) {
+          lower_error(state, SIR_DIAGNOSTIC_ALLOCATION_FAILED,
+                      "could not end match scrutinee lifetime");
+        }
+        goto failure;
+      }
+    }
+    state->block = join_block;
+  }
+  state->binding_count = binding_base;
+  *terminated = 0;
+  free(continuing_blocks);
+  return 1;
+
+failure:
+  state->binding_count = binding_base;
+  free(continuing_blocks);
+  return 0;
+}
+
 static int lower_statement(lower_state *state, ast_t statement,
                            int *terminated) {
   *terminated = 0;
@@ -805,6 +1056,8 @@ static int lower_statement(lower_state *state, ast_t statement,
     return lower_if(state, statement, terminated);
   if (statement != NULL && statement->tag == while_loop)
     return lower_while(state, statement, terminated);
+  if (statement != NULL && statement->tag == match)
+    return lower_match(state, statement, terminated);
   if (statement != NULL && statement->tag == funcall) {
     sir_id discarded = lower_call(state, statement);
     sir_operation boundary;

@@ -1288,25 +1288,72 @@ void generate_funcall(generator_t *g, ast_t fun) {
       fprintf(f, ")");
     } else {
       // Emit plain function call (mangled if the name is overloaded)
+      int semantic_selected =
+          semantic_plan_selects(g->semantic_plans, func_ref);
       const char *semantic_symbol =
           semantic_plan_function_symbol(g->semantic_plans, func_ref);
       char (*semantic_arguments)[64] = NULL;
-      if (semantic_symbol && funcall.args.length > 0) {
-        semantic_arguments =
-            calloc((size_t)funcall.args.length, sizeof(*semantic_arguments));
-        if (semantic_arguments == NULL)
+      semantic_plan_parameter_abi *semantic_parameters = NULL;
+      size_t semantic_parameter_count = 0;
+      if (semantic_selected && semantic_symbol == NULL) {
+        error(funcall.name.filename, funcall.name.line, funcall.name.col,
+              "selected call is missing its sealed function ABI");
+        fprintf(f, "rift_plan_invalid_call");
+        return;
+      }
+      if (semantic_symbol &&
+          (!semantic_plan_parameter_count(g->semantic_plans, func_ref,
+                                          &semantic_parameter_count) ||
+           funcall.args.length < 0 ||
+           semantic_parameter_count != (size_t)funcall.args.length)) {
+        error(funcall.name.filename, funcall.name.line, funcall.name.col,
+              "selected call is missing its sealed parameter ABI");
+        fprintf(f, "rift_plan_invalid_call");
+        return;
+      }
+      if (semantic_symbol && semantic_parameter_count > 0) {
+        semantic_arguments = calloc(semantic_parameter_count,
+                                    sizeof(*semantic_arguments));
+        semantic_parameters =
+            calloc(semantic_parameter_count, sizeof(*semantic_parameters));
+        if (semantic_arguments == NULL || semantic_parameters == NULL) {
+          free(semantic_arguments);
+          free(semantic_parameters);
           error(funcall.name.filename, funcall.name.line, funcall.name.col,
                 "could not allocate semantic-plan call arguments");
-        for (int i = 0; i < funcall.args.length; i++) {
+          fprintf(f, "rift_plan_invalid_call");
+          return;
+        }
+        for (size_t i = 0; i < semantic_parameter_count; i++) {
+          if (!semantic_plan_parameter_at(g->semantic_plans, func_ref, i,
+                                          &semantic_parameters[i]) ||
+              semantic_parameters[i].c_type == NULL ||
+              (semantic_parameters[i].kind !=
+                   SEMANTIC_PLAN_PARAMETER_BOOL_SCALAR &&
+               semantic_parameters[i].kind !=
+                   SEMANTIC_PLAN_PARAMETER_STRING_CONSUME)) {
+            free(semantic_arguments);
+            free(semantic_parameters);
+            error(funcall.name.filename, funcall.name.line, funcall.name.col,
+                  "selected call parameter has an unsupported sealed ABI");
+            fprintf(f, "rift_plan_invalid_call");
+            return;
+          }
+        }
+        for (size_t i = 0; i < semantic_parameter_count; i++) {
+          semantic_plan_parameter_abi parameter = semantic_parameters[i];
           char *argument = capture_expression(g, funcall.args.data[i]);
           snprintf(semantic_arguments[i], sizeof(*semantic_arguments),
                    "rift_plan_legacy_arg_%d", g->str_tmp_counter++);
-          fprintf(g->pre_f, "string %s = %s;\n", semantic_arguments[i],
-                  argument);
-          if (rhs_is_borrower(funcall.args.data[i])) {
-            fprintf(g->pre_f, "__string_retain(%s);\n", semantic_arguments[i]);
-          } else if (strncmp(argument, "__strtmp_", 9) == 0) {
-            emit_nullify_tmp(g->pre_f, argument);
+          fprintf(g->pre_f, "%s %s = %s;\n", parameter.c_type,
+                  semantic_arguments[i], argument);
+          if (parameter.kind == SEMANTIC_PLAN_PARAMETER_STRING_CONSUME) {
+            if (rhs_is_borrower(funcall.args.data[i])) {
+              fprintf(g->pre_f, "__string_retain(%s);\n",
+                      semantic_arguments[i]);
+            } else if (strncmp(argument, "__strtmp_", 9) == 0) {
+              emit_nullify_tmp(g->pre_f, argument);
+            }
           }
           free(argument);
         }
@@ -1337,7 +1384,7 @@ void generate_funcall(generator_t *g, ast_t fun) {
         if (i > 0)
           fprintf(f, ", ");
         string_view cast = sv_from_cstr("");
-        if (g->auto_cast && i < param_types.length &&
+        if (!semantic_symbol && g->auto_cast && i < param_types.length &&
             param_types.data[i] && param_types.data[i]->tag == type) {
           string_view ptn = param_types.data[i]->data.type.name.lexeme;
           if (svcmp(ptn, sv_from_cstr("byte"))  == 0 ||
@@ -1356,6 +1403,7 @@ void generate_funcall(generator_t *g, ast_t fun) {
       }
       fprintf(f, ")");
       free(semantic_arguments);
+      free(semantic_parameters);
     }
   }
 }

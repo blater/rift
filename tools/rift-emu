@@ -18,6 +18,77 @@ class LauncherError(Exception):
   pass
 
 
+def positive_integer(value):
+  try:
+    result = int(value)
+  except ValueError as exc:
+    raise argparse.ArgumentTypeError("must be a positive integer") from exc
+  if result <= 0:
+    raise argparse.ArgumentTypeError("must be a positive integer")
+  return result
+
+
+def bounded_run_command(opcode_limit):
+  if opcode_limit <= 0:
+    raise ValueError("opcode limit must be positive")
+  return "run %d no-stop-on-data" % opcode_limit
+
+
+def verify_bounded_run_response(output, expected_pc, stage):
+  limit = re.search(r"Returning after\s+(\d+)\s+opcodes", output,
+                    re.IGNORECASE)
+  if limit:
+    raise LauncherError(
+        "%s did not reach breakpoint 0x%04X within %s opcodes" %
+        (stage, expected_pc, limit.group(1)))
+  if "Breakpoint fired" not in output:
+    raise LauncherError("%s run returned without a breakpoint" % stage)
+
+
+def verify_bounded_run_stop(output, registers, expected_pc, stage):
+  verify_bounded_run_response(output, expected_pc, stage)
+  pc = re.search(r"\bPC=([0-9a-fA-F]+)", registers)
+  if not pc or int(pc.group(1), 16) != expected_pc:
+    raise LauncherError(
+        "%s breakpoint did not stop at 0x%04X" % (stage, expected_pc))
+
+
+def stop_owned_process(adapter, process):
+  if adapter is None or process is None:
+    return
+  try:
+    if process.poll() is not None:
+      return
+  except Exception:
+    pass
+  try:
+    adapter.stop()
+  except Exception:
+    pass
+  try:
+    process.wait(timeout=2)
+    return
+  except Exception:
+    pass
+  try:
+    os.killpg(process.pid, signal.SIGTERM)
+  except Exception:
+    pass
+  try:
+    process.wait(timeout=2)
+    return
+  except Exception:
+    pass
+  try:
+    os.killpg(process.pid, signal.SIGKILL)
+  except Exception:
+    pass
+  try:
+    process.wait(timeout=2)
+  except Exception:
+    pass
+
+
 def reserve_port():
   listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
   listener.bind(("127.0.0.1", 0))
@@ -213,6 +284,8 @@ def parse_args():
                       help="optional PC to set after measure setup; resumes after a benchmark gate")
   parser.add_argument("--breakpoint-pass-count", type=int, default=1,
                       help="stop after this many hits of the measurement breakpoint")
+  parser.add_argument("--opcode-limit", type=positive_integer, default=10000000,
+                      help="maximum emulated opcodes for each bounded measurement run")
   parser.add_argument("--capture-memory", action="append", default=[], metavar="ADDRESS:LENGTH",
                       help="read target memory after a measurement breakpoint (repeatable)")
   parser.add_argument("--send-keys-ascii", metavar="CODES",
@@ -276,6 +349,8 @@ def main():
   result["artifact"] = str(artifact)
   if args.keep_all:
     shutil.copy2(artifact, artifacts / artifact.name)
+  adapter = None
+  process = None
   try:
     adapter = adapter_class(args, artifacts)
     adapter.verify_required_options()
@@ -376,21 +451,24 @@ def main():
         # from `run`. The setup commands immediately preceding this call can
         # otherwise leave the CPU paused at the gate without an error. These
         # timing runs are controlled solely by the installed breakpoint.
-        gate_run_output = zrcp_command(adapter.port, "run no-stop-on-data", timeout=args.timeout_seconds)
+        gate_run_output = zrcp_command(
+            adapter.port, bounded_run_command(args.opcode_limit),
+            timeout=args.timeout_seconds)
         breakpoint_output += gate_run_output
-        gate_matched = "Breakpoint fired" in gate_run_output
+        write_text(artifacts / "breakpoint.txt", breakpoint_output)
+        verify_bounded_run_response(gate_run_output, args.gate_address,
+                                    "benchmark gate")
         deadline = time.monotonic() + args.timeout_seconds
         gate_registers = ""
         while time.monotonic() < deadline:
           gate_registers = zrcp_command(adapter.port, "get-registers")
           pc = re.search(r"\bPC=([0-9a-fA-F]+)", gate_registers)
           if pc and int(pc.group(1), 16) == args.gate_address:
-            gate_matched = True
             break
           time.sleep(0.01)
         write_text(artifacts / "gate-breakpoint-registers.txt", gate_registers)
-        if not gate_matched:
-          raise LauncherError("benchmark did not stop at gate breakpoint 0x%04X" % args.gate_address)
+        verify_bounded_run_stop(gate_run_output, gate_registers,
+                                args.gate_address, "benchmark gate")
         # The gate breakpoint is the pause acknowledgement. Install the
         # endpoint only after it has fired, while the CPU is demonstrably
         # stopped, then begin the measured interval.
@@ -433,23 +511,24 @@ def main():
             write_text(artifacts / "breakpoint.txt", breakpoint_output)
             raise LauncherError("benchmark release PC was not set to 0x%04X" % args.release_pc)
         write_text(artifacts / "breakpoint.txt", breakpoint_output)
-        matched = False
-        run_output = zrcp_command(adapter.port, "run no-stop-on-data", timeout=args.timeout_seconds)
+        run_output = zrcp_command(
+            adapter.port, bounded_run_command(args.opcode_limit),
+            timeout=args.timeout_seconds)
         breakpoint_output += run_output
         write_text(artifacts / "breakpoint.txt", breakpoint_output)
-        matched = "Breakpoint fired" in run_output
+        verify_bounded_run_response(run_output, active_breakpoint,
+                                    "benchmark endpoint")
         deadline = time.monotonic() + args.timeout_seconds
         registers = ""
         while time.monotonic() < deadline:
           registers = zrcp_command(adapter.port, "get-registers")
           pc = re.search(r"\bPC=([0-9a-fA-F]+)", registers)
           if pc and int(pc.group(1), 16) == active_breakpoint:
-            matched = True
             break
           time.sleep(0.01)
         write_text(artifacts / "measure-registers.txt", registers)
-        if not matched:
-          raise LauncherError("benchmark did not reach breakpoint 0x%04X" % active_breakpoint)
+        verify_bounded_run_stop(run_output, registers, active_breakpoint,
+                                "benchmark endpoint")
         sample = zrcp_command(adapter.port, "get-tstates-partial")
         write_text(artifacts / "tstates-partial.txt", sample)
         digits = re.search(r"\d+", sample)
@@ -469,21 +548,12 @@ def main():
             safe_capture = "%04X-%d" % (address, length)
             write_text(artifacts / ("memory-" + safe_capture + ".txt"), memory)
         result["status"] = "measured"
-        adapter.stop()
-        process.wait(timeout=2)
-        result["exit_code"] = process.returncode
         raise StopIteration
       try:
         process.wait(timeout=args.timeout_seconds)
       except subprocess.TimeoutExpired:
         result["status"] = "timeout"
         adapter.capture(artifact)
-        adapter.stop()
-        try:
-          process.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-          os.killpg(process.pid, signal.SIGTERM)
-          process.wait(timeout=2)
       else:
         result["exit_code"] = process.returncode
         if args.mode == "inspect" or process.returncode != 0:
@@ -513,6 +583,11 @@ def main():
     pass
   except (LauncherError, OSError, subprocess.SubprocessError) as exc:
     result.update(status="unsupported", error=str(exc))
+  finally:
+    stop_owned_process(adapter, process)
+    if result.get("status") == "measured" and process is not None and \
+        process.returncode is not None:
+      result["exit_code"] = process.returncode
   result["elapsed_seconds"] = round(time.monotonic() - started, 3)
   write_text(artifacts / "result.json", json.dumps(result, indent=2, sort_keys=True) + "\n")
   print(json.dumps(result, sort_keys=True))

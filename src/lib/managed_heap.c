@@ -4,6 +4,16 @@
 #include "error_sink.h"
 #include "pools.h"
 #include "segregated_heap.h"
+#ifdef RIFT_HEAP_ROUTINE_COMPACTION
+#define MANAGED_MOVE_PUBLISH(owner_value, slot_value, level_value) \
+  do {                                                             \
+    ticket->owner = (rift_pool_offset_t)(uintptr_t)(owner_value);   \
+    ticket->slot = (slot_value);                                    \
+    ticket->level = (level_value);                                  \
+  } while (0)
+
+#include "segregated_heap_internal.h"
+#endif
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -731,6 +741,138 @@ void managed_heap_access_begin(managed_ref ref, managed_access_token *token)
 }
 #endif
 
+#ifdef RIFT_HEAP_ROUTINE_COMPACTION
+static int managed_backlinks_valid(managed_page *page) {
+  unsigned char slot;
+  for (slot = 0; slot < MANAGED_RADIX_COUNT; slot++) {
+    managed_page *child = (managed_page *)page->slots[slot];
+    if (child &&
+        (child->header.parent != page || child->header.parent_slot != slot))
+      return 0;
+  }
+  return 1;
+}
+
+static void managed_backlinks_repair(managed_page *page) {
+  unsigned char slot;
+  for (slot = 0; slot < MANAGED_RADIX_COUNT; slot++) {
+    managed_page *child = (managed_page *)page->slots[slot];
+    if (child) child->header.parent = page;
+  }
+}
+
+rift_heap_move_class rift_managed_move_prepare(
+    void *raw_payload, rift_pool_offset_t live_tag,
+    rift_heap_move_ticket *ticket) {
+#ifdef RIFT_HEAP_COMPACTION_STATS
+  ticket->index_reads = 0;
+  ticket->index_writes = 0;
+#endif
+
+  if (live_tag != 0 && live_tag <= (rift_pool_offset_t)MANAGED_REF_DYNAMIC_MAX) {
+    managed_ref ref = (managed_ref)live_tag;
+    managed_page *leaf = find_leaf(ref);
+    unsigned char slot = (unsigned char)((ref - 1u) & 0x0fu);
+    void *payload = (unsigned char *)raw_payload +
+                    sizeof(managed_object_prefix);
+    managed_object_prefix *prefix = (managed_object_prefix *)raw_payload;
+    if (!leaf || !(leaf->bitmap & (uint16_t)(1u << slot)) ||
+        leaf->slots[slot] != payload || prefix->state != MANAGED_STATE_LIVE)
+      return RIFT_HEAP_MOVE_INVALID;
+    if (prefix->pin_count != 0) return RIFT_HEAP_MOVE_PIN_BARRIER;
+    MANAGED_MOVE_PUBLISH(leaf, slot, 0);
+#ifdef RIFT_HEAP_COMPACTION_STATS
+    ticket->index_reads =
+        (unsigned char)(managed_state.root
+                            ? page_level(managed_state.root) + 1u
+                            : 0u);
+    ticket->index_writes = 3u;
+#endif
+    return RIFT_HEAP_MOVE_MOVABLE;
+  }
+
+  if ((live_tag & MANAGED_TAG_BIT) != 0 &&
+      live_tag != MANAGED_TAG_RESERVED) {
+    unsigned char encoded_level =
+        (unsigned char)(live_tag & (rift_pool_offset_t)~MANAGED_TAG_BIT);
+    managed_page *page = (managed_page *)raw_payload;
+#ifdef RIFT_HEAP_COMPACTION_STATS
+    unsigned char slot;
+    unsigned char child_count = 0;
+#endif
+    unsigned char level = (unsigned char)page_level(page);
+    if (encoded_level == 0 || encoded_level > MANAGED_MAX_LEVEL + 1u ||
+        level + 1u != encoded_level)
+      return RIFT_HEAP_MOVE_RAW_BARRIER;
+    if (page->header.parent) {
+      if (page->header.parent_slot >= MANAGED_RADIX_COUNT ||
+          page->header.parent->slots[page->header.parent_slot] != page)
+        return RIFT_HEAP_MOVE_INVALID;
+    } else if (managed_state.root != page) {
+      return RIFT_HEAP_MOVE_INVALID;
+    }
+    if (level > 0) {
+#ifdef RIFT_HEAP_COMPACTION_STATS
+      for (slot = 0; slot < MANAGED_RADIX_COUNT; slot++) {
+        managed_page *child = (managed_page *)page->slots[slot];
+        if (child) child_count++;
+      }
+      ticket->index_reads = MANAGED_RADIX_COUNT;
+#endif
+      if (!managed_backlinks_valid(page)) return RIFT_HEAP_MOVE_INVALID;
+    }
+    MANAGED_MOVE_PUBLISH(page->header.parent, page->header.parent_slot, level);
+#ifdef RIFT_HEAP_COMPACTION_STATS
+    ticket->index_writes = (unsigned char)(1u + child_count);
+#endif
+    return RIFT_HEAP_MOVE_MOVABLE;
+  }
+
+  return RIFT_HEAP_MOVE_RAW_BARRIER;
+}
+
+void rift_managed_move_commit(void *old_raw_payload, void *new_raw_payload,
+                              rift_pool_offset_t live_tag,
+                              const rift_heap_move_ticket *ticket) {
+  managed_page *owner = (managed_page *)(uintptr_t)ticket->owner;
+  unsigned char slot = ticket->slot;
+  unsigned char level = ticket->level;
+  if (live_tag != 0 && live_tag <= (rift_pool_offset_t)MANAGED_REF_DYNAMIC_MAX) {
+    void *payload = (unsigned char *)new_raw_payload +
+                    sizeof(managed_object_prefix);
+    owner->slots[slot] = payload;
+    cache_invalidate((managed_ref)live_tag);
+    (void)old_raw_payload;
+  } else {
+    managed_page *page = (managed_page *)new_raw_payload;
+    if (owner)
+      owner->slots[slot] = page;
+    else
+      managed_state.root = page;
+    if (level == 0) return;
+    managed_backlinks_repair(page);
+  }
+}
+
+#ifdef RIFT_HEAP_COMPACTION_STATS
+rift_heap_compact_status managed_heap_compact_routine(
+    rift_heap_compact_report *report) {
+  return rift_heap_compact_routine(report);
+}
+#endif
+
+void managed_heap_maintenance_safepoint(void) {
+#ifdef RIFT_HEAP_COMPACTION_STATS
+  rift_heap_compact_report report;
+  rift_heap_compact_status status = managed_heap_compact_routine(&report);
+#else
+  rift_heap_compact_status status = rift_heap_private_compact_slice();
+#endif
+  if (status == RIFT_HEAP_COMPACT_INVALID)
+    managed_fault(MANAGED_FAULT_INTERNAL, 0);
+}
+#endif
+
 void managed_heap_pin_typed(managed_ref ref, managed_type_id type,
                             managed_pin_token *token) RIFT_MANAGED_CALLEE {
   void *payload;
@@ -750,6 +892,9 @@ void managed_heap_pin_typed(managed_ref ref, managed_type_id type,
   retain_payload(ref, payload);
   prefix->pin_count++;
   managed_state.pin_count++;
+#ifdef RIFT_HEAP_ROUTINE_COMPACTION
+  if (prefix->pin_count == 1u) rift_heap_movement_barrier_changed();
+#endif
 
 publish:
   token->payload = payload;
@@ -785,6 +930,9 @@ void managed_heap_unpin_typed(managed_pin_token *token) RIFT_MANAGED_FASTCALL {
   pin_token_clear(token);
   prefix->pin_count--;
   managed_state.pin_count--;
+#ifdef RIFT_HEAP_ROUTINE_COMPACTION
+  if (prefix->pin_count == 0) rift_heap_movement_barrier_changed();
+#endif
   managed_heap_release_typed(ref, type);
 }
 
@@ -836,4 +984,10 @@ void managed_heap_test_set_counts(managed_ref ref, uint16_t refcount,
   prefix->pin_count = (unsigned char)pin_count;
   managed_state.pin_count += prefix->pin_count;
 }
+
+#endif
+
+#if defined(RIFT_HEAP_ROUTINE_COMPACTION) && \
+    (defined(RIFT_MANAGED_TEST) || defined(RIFT_ALLOCATOR_TEST))
+void *managed_heap_test_root_address(void) { return managed_state.root; }
 #endif

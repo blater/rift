@@ -1,10 +1,13 @@
 #include "segregated_heap.h"
 
 #include "pools.h"
+#ifdef RIFT_HEAP_ROUTINE_COMPACTION
+#include "segregated_heap_internal.h"
+#endif
 
 #include <limits.h>
 #include <stdint.h>
-#ifdef RIFT_ALLOCATOR_TEST
+#if defined(RIFT_ALLOCATOR_TEST) || defined(RIFT_HEAP_ROUTINE_COMPACTION)
 #include <string.h>
 #endif
 
@@ -66,6 +69,51 @@ static rift_heap_stats heap_stats;
 #define RIFT_HEAP_STAT_ADD(field, amount) ((void)(amount))
 #endif
 static unsigned char heap_lifecycle = RIFT_HEAP_COLD;
+
+#ifdef RIFT_HEAP_ROUTINE_COMPACTION
+#define RIFT_HEAP_CURSOR_NONE ((size_t)-1)
+typedef struct rift_heap_compact_cursor {
+  size_t scan;
+  size_t hole;
+  uint16_t epoch;
+} rift_heap_compact_cursor;
+
+static rift_heap_compact_cursor heap_compact_cursor;
+static uint16_t heap_movement_epoch;
+unsigned char rift_managed_maintenance_due;
+
+#ifdef RIFT_HEAP_COMPACTION_STATS
+#define COMPACT_REPORT_INC(report, field) ((report)->field++)
+#define COMPACT_REPORT_ADD(report, field, amount) ((report)->field += (amount))
+#else
+#define COMPACT_REPORT_INC(report, field) ((void)0)
+#define COMPACT_REPORT_ADD(report, field, amount) ((void)0)
+#endif
+
+#ifdef __SDCC
+typedef char rift_heap_cursor_size_assert[
+    (sizeof(rift_heap_compact_cursor) == 6u) ? 1 : -1];
+#endif
+
+static void advance_movement_epoch(void) {
+  if (heap_movement_epoch == UINT16_MAX) {
+    heap_compact_cursor.scan = RIFT_HEAP_CURSOR_NONE;
+    heap_movement_epoch = 0;
+  } else {
+    heap_movement_epoch++;
+  }
+}
+
+static void note_layout_mutation(int raises_debt) {
+  advance_movement_epoch();
+  if (raises_debt) {
+    if (rift_managed_maintenance_due != 0xffu)
+      rift_managed_maintenance_due++;
+  }
+}
+#else
+#define note_layout_mutation(raises_debt) ((void)(raises_debt))
+#endif
 
 #ifdef __SDCC
 #define heap_alignment() ((size_t)4u)
@@ -592,6 +640,13 @@ int rift_heap_init(void *base, size_t capacity, int permanent_limit) {
 #endif
   for (i = 0; i < RIFT_HEAP_FL_COUNT; i++) heap_sl_bitmap[i] = 0;
   for (i = 0; i < RIFT_HEAP_BIN_COUNT; i++) heap_roots[i] = 0;
+#ifdef RIFT_HEAP_ROUTINE_COMPACTION
+  heap_compact_cursor.scan = RIFT_HEAP_CURSOR_NONE;
+  heap_compact_cursor.hole = RIFT_HEAP_CURSOR_NONE;
+  heap_compact_cursor.epoch = 0;
+  heap_movement_epoch = 0;
+  rift_managed_maintenance_due = 0;
+#endif
 #if RIFT_HEAP_STATS_ENABLED
   heap_stats = (rift_heap_stats){0};
 #endif
@@ -614,6 +669,11 @@ void rift_heap_deinit(void) {
   heap_fl_bitmap = 0;
   for (i = 0; i < RIFT_HEAP_FL_COUNT; i++) heap_sl_bitmap[i] = 0;
   for (i = 0; i < RIFT_HEAP_BIN_COUNT; i++) heap_roots[i] = 0;
+#ifdef RIFT_HEAP_ROUTINE_COMPACTION
+  memset(&heap_compact_cursor, 0, sizeof(heap_compact_cursor));
+  heap_movement_epoch = 0;
+  rift_managed_maintenance_due = 0;
+#endif
 #if RIFT_HEAP_STATS_ENABLED
   heap_stats = (rift_heap_stats){0};
 #endif
@@ -623,12 +683,15 @@ void rift_heap_deinit(void) {
 
 #if !defined(__SDCC) || !defined(RIFT_ZXN_NO_BUMP_POOL)
 int rift_heap_set_limit(size_t limit) {
+  size_t old_limit;
   if (heap_lifecycle != RIFT_HEAP_READY) return 0;
   if (limit > heap_capacity) limit = heap_capacity;
   limit = align_down(limit, heap_alignment());
   if (heap_limit_permanent && limit != heap_limit) return 0;
   if (limit < heap_committed_bytes) return 0;
+  old_limit = heap_limit;
   heap_limit = limit;
+  if (old_limit != limit) note_layout_mutation(0);
   return 1;
 }
 #endif
@@ -739,6 +802,7 @@ allocation_complete:
   if (heap_live > heap_peak_live) heap_peak_live = heap_live;
   RIFT_HEAP_STAT_ADD(class_rounding_bytes,
                      physical_size - aligned_physical);
+  note_layout_mutation(0);
   return block_payload(block);
 }
 
@@ -854,6 +918,7 @@ rift_heap_free_result rift_heap_try_free(void *payload) {
     heap_live -= physical;
     heap_committed_bytes = offset;
     heap_tail = previous;
+    note_layout_mutation(0);
     return RIFT_HEAP_FREE_OK;
   }
 general_free:
@@ -885,6 +950,7 @@ general_free:
   if ((unsigned char *)following < heap_base + heap_committed_bytes) {
     following->previous_physical_size = (rift_pool_offset_t)physical;
     list_insert(block);
+    note_layout_mutation(1);
   } else {
     heap_committed_bytes = (size_t)((unsigned char *)block - heap_base);
     if (heap_committed_bytes == 0)
@@ -892,9 +958,201 @@ general_free:
     else
       heap_tail = (rift_physical_block *)((unsigned char *)block -
                                          previous_physical);
+    note_layout_mutation(0);
   }
   return RIFT_HEAP_FREE_OK;
 }
+
+#ifdef RIFT_HEAP_ROUTINE_COMPACTION
+#ifdef RIFT_HEAP_COMPACTION_STATS
+rift_heap_compact_status rift_heap_private_compact_slice(
+    rift_heap_compact_report *report) {
+#else
+rift_heap_compact_status rift_heap_private_compact_slice(void) {
+#endif
+  size_t scan;
+  size_t hole_offset;
+  unsigned char headers = 0;
+
+#ifdef RIFT_HEAP_COMPACTION_STATS
+  if (!report) return RIFT_HEAP_COMPACT_INVALID;
+  memset(report, 0, sizeof(*report));
+#endif
+  if (heap_lifecycle != RIFT_HEAP_READY)
+    return RIFT_HEAP_COMPACT_INVALID;
+  if (rift_managed_maintenance_due == 0) return RIFT_HEAP_COMPACT_IDLE;
+  if (heap_compact_cursor.scan == RIFT_HEAP_CURSOR_NONE ||
+      heap_compact_cursor.epoch != heap_movement_epoch) {
+    heap_compact_cursor.scan = 0;
+    heap_compact_cursor.hole = RIFT_HEAP_CURSOR_NONE;
+    heap_compact_cursor.epoch = heap_movement_epoch;
+  }
+  scan = heap_compact_cursor.scan;
+  hole_offset = heap_compact_cursor.hole;
+
+  while (headers < RIFT_HEAP_ROUTINE_HEADER_BUDGET) {
+    rift_physical_block *source;
+    size_t source_physical;
+
+    if (scan >= heap_committed_bytes) goto pass_complete;
+    if (scan % heap_alignment() != 0) return RIFT_HEAP_COMPACT_INVALID;
+    source = (rift_physical_block *)(heap_base + scan);
+    source_physical = block_physical_size(source);
+    if (source_physical < heap_minimum_block() ||
+        source_physical % heap_alignment() != 0 ||
+        source_physical > heap_committed_bytes - scan)
+      return RIFT_HEAP_COMPACT_INVALID;
+    headers++;
+    COMPACT_REPORT_INC(report, headers_scanned);
+    if (block_is_free(source)) {
+      if (hole_offset == RIFT_HEAP_CURSOR_NONE) hole_offset = scan;
+      scan += source_physical;
+      continue;
+    }
+    if (hole_offset == RIFT_HEAP_CURSOR_NONE) {
+      scan += source_physical;
+      continue;
+    }
+
+    {
+      rift_heap_move_ticket ticket;
+      rift_heap_move_class move_class = rift_managed_move_prepare(
+          block_payload(source), source->public_header.next_free, &ticket);
+      if (move_class == RIFT_HEAP_MOVE_INVALID)
+        return RIFT_HEAP_COMPACT_INVALID;
+      if (move_class != RIFT_HEAP_MOVE_MOVABLE ||
+          source_physical > RIFT_HEAP_ROUTINE_COPY_BUDGET) {
+        if (move_class == RIFT_HEAP_MOVE_PIN_BARRIER)
+          COMPACT_REPORT_INC(report, pin_barriers);
+        else if (move_class == RIFT_HEAP_MOVE_RAW_BARRIER)
+          COMPACT_REPORT_INC(report, raw_barriers);
+        else
+          COMPACT_REPORT_INC(report, budget_barriers);
+        hole_offset = RIFT_HEAP_CURSOR_NONE;
+        scan += source_physical;
+        continue;
+      }
+
+      {
+        rift_physical_block *hole =
+            (rift_physical_block *)(heap_base + hole_offset);
+        rift_physical_block *following;
+        rift_physical_block *free_block;
+        size_t hole_physical = block_physical_size(hole);
+        size_t following_physical = 0;
+        size_t previous_physical;
+        size_t free_physical;
+        rift_pool_offset_t live_tag;
+        void *old_raw_payload;
+
+        if (!block_is_free(hole) || hole_offset + hole_physical != scan)
+          return RIFT_HEAP_COMPACT_INVALID;
+        previous_physical = (size_t)hole->previous_physical_size;
+        live_tag = source->public_header.next_free;
+        old_raw_payload = block_payload(source);
+        following = next_block(source);
+        if (following) {
+          size_t following_offset =
+              (size_t)((unsigned char *)following - heap_base);
+          size_t validated_physical = block_physical_size(following);
+          if (validated_physical < heap_minimum_block() ||
+              validated_physical % heap_alignment() != 0 ||
+              validated_physical >
+                  heap_committed_bytes - following_offset)
+            return RIFT_HEAP_COMPACT_INVALID;
+          if (block_is_free(following)) {
+            following_physical = validated_physical;
+            list_remove(following);
+            COMPACT_REPORT_INC(report, bin_edits);
+          }
+        }
+        list_remove(hole);
+        COMPACT_REPORT_INC(report, bin_edits);
+        memmove(hole, source, source_physical);
+        hole->previous_physical_size =
+            (rift_pool_offset_t)previous_physical;
+        COMPACT_REPORT_INC(report, boundary_writes);
+        rift_managed_move_commit(old_raw_payload, block_payload(hole),
+                                 live_tag, &ticket);
+
+        free_physical = hole_physical + following_physical;
+        free_block = (rift_physical_block *)((unsigned char *)hole +
+                                             source_physical);
+        initialise_block(free_block, source_physical, free_physical,
+                         RIFT_RC_FREE);
+        clear_free_links(free_block);
+        COMPACT_REPORT_ADD(report, boundary_writes, 2u);
+        scan += source_physical + following_physical;
+        if (scan < heap_committed_bytes) {
+          rift_physical_block *trailing =
+              (rift_physical_block *)(heap_base + scan);
+          trailing->previous_physical_size =
+              (rift_pool_offset_t)free_physical;
+          COMPACT_REPORT_INC(report, boundary_writes);
+          list_insert(free_block);
+          COMPACT_REPORT_INC(report, bin_edits);
+          hole_offset =
+              (size_t)((unsigned char *)free_block - heap_base);
+        } else {
+          heap_committed_bytes =
+              (size_t)((unsigned char *)free_block - heap_base);
+          heap_tail = hole;
+          COMPACT_REPORT_ADD(report, frontier_writes, 2u);
+          COMPACT_REPORT_ADD(report, tail_contracted, free_physical);
+          scan = heap_committed_bytes;
+          hole_offset = RIFT_HEAP_CURSOR_NONE;
+        }
+      }
+      COMPACT_REPORT_INC(report, moves);
+      COMPACT_REPORT_ADD(report, copied_bytes, source_physical);
+#ifdef RIFT_HEAP_COMPACTION_STATS
+      COMPACT_REPORT_ADD(report, index_reads, ticket.index_reads);
+      COMPACT_REPORT_ADD(report, index_writes, ticket.index_writes);
+#endif
+      advance_movement_epoch();
+      heap_compact_cursor.scan = scan;
+      heap_compact_cursor.hole = hole_offset;
+      heap_compact_cursor.epoch = heap_movement_epoch;
+      if (scan >= heap_committed_bytes) goto pass_complete;
+      return RIFT_HEAP_COMPACT_PROGRESS;
+    }
+  }
+
+  heap_compact_cursor.scan = scan;
+  heap_compact_cursor.hole = hole_offset;
+  heap_compact_cursor.epoch = heap_movement_epoch;
+  return RIFT_HEAP_COMPACT_PROGRESS;
+
+pass_complete:
+  heap_compact_cursor.scan = RIFT_HEAP_CURSOR_NONE;
+  heap_compact_cursor.hole = RIFT_HEAP_CURSOR_NONE;
+  heap_compact_cursor.epoch = heap_movement_epoch;
+  rift_managed_maintenance_due = 0;
+  return RIFT_HEAP_COMPACT_PASS_COMPLETE;
+}
+
+void rift_heap_movement_barrier_changed(void) {
+  note_layout_mutation(1);
+}
+
+#ifdef RIFT_ALLOCATOR_TEST
+uint16_t rift_heap_test_movement_epoch(void) {
+  return heap_movement_epoch;
+}
+
+void rift_heap_test_set_movement_epoch(uint16_t epoch) {
+  heap_movement_epoch = epoch;
+}
+
+size_t rift_heap_test_cursor_scan(void) {
+  return heap_compact_cursor.scan;
+}
+
+unsigned int rift_heap_test_compaction_debt(void) {
+  return rift_managed_maintenance_due;
+}
+#endif
+#endif
 
 #if !defined(__SDCC) || !defined(RIFT_ZXN_NO_BUMP_POOL)
 size_t rift_heap_committed(void) { return heap_committed_bytes; }
@@ -1096,6 +1354,11 @@ void rift_heap_test_poison_state(void) {
   heap_free_physical = (size_t)0xA5A5u;
   heap_tail = (rift_physical_block *)(uintptr_t)0xA5A4u;
   heap_fl_bitmap = (rift_heap_fl_bitmap)0xA5A5u;
+#ifdef RIFT_HEAP_ROUTINE_COMPACTION
+  memset(&heap_compact_cursor, 0xA5, sizeof(heap_compact_cursor));
+  heap_movement_epoch = 0xA5A5u;
+  rift_managed_maintenance_due = 0xA5u;
+#endif
   heap_lifecycle = RIFT_HEAP_COLD;
 }
 #endif

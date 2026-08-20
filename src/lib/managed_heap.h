@@ -2,6 +2,9 @@
 #define RIFT_MANAGED_HEAP_H
 
 #include "managed_ref.h"
+#ifdef RIFT_HEAP_ROUTINE_COMPACTION
+#include "segregated_heap_internal.h"
+#endif
 
 typedef enum managed_fault_reason {
   MANAGED_FAULT_CAPACITY = 1,
@@ -29,6 +32,12 @@ void managed_heap_deinit(void);
 size_t managed_heap_live_count(void);
 size_t managed_heap_pin_count(void);
 
+#if defined(RIFT_HEAP_ROUTINE_COMPACTION) && \
+    defined(RIFT_HEAP_COMPACTION_STATS)
+rift_heap_compact_status managed_heap_compact_routine(
+    rift_heap_compact_report *report);
+#endif
+
 #ifdef RIFT_MANAGED_TEST
 typedef struct managed_heap_test_stats {
   size_t cache_hits;
@@ -45,6 +54,11 @@ uint16_t managed_heap_test_refcount(managed_ref ref);
 unsigned int managed_heap_test_pin_count(managed_ref ref);
 void managed_heap_test_set_counts(managed_ref ref, uint16_t refcount,
                                   unsigned int pin_count);
+#endif
+
+#if defined(RIFT_HEAP_ROUTINE_COMPACTION) && \
+    (defined(RIFT_MANAGED_TEST) || defined(RIFT_ALLOCATOR_TEST))
+void *managed_heap_test_root_address(void);
 #endif
 
 #endif

@@ -13,6 +13,11 @@ trap 'rm -rf "$WORK"; [ -z "$debug_dir" ] || rm -rf "$debug_dir"' EXIT HUP INT T
 test "$(grep -c '^PASS:' "$WORK/run.log")" -eq 4
 debug_dir=$(sed -n 's/^rift: debug workspace: //p' "$WORK/build.log" | head -1)
 [ -n "$debug_dir" ] && [ -d "$debug_dir" ]
+grep -q 'header->refcount == RIFT_RC_FREE' "$debug_dir/test.exe.c"
+if grep -q 'RIFT_RC_MAGAZINE' "$debug_dir/test.exe.c"; then
+  echo 'FAIL: generated aggregate release retained obsolete magazine state' >&2
+  exit 1
+fi
 
 sed -n '/^void OwnedItem_set_elem/,/^}/p' "$debug_dir/test.exe.c" \
   >"$WORK/setter.c"

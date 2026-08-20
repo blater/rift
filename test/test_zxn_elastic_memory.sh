@@ -99,13 +99,14 @@ run_nex "$WORK/startup1.nex" startup1
 (
   cd "$WORK"
   zcc +zxn -m -vn -subtype=nex -startup=31 -clib=sdcc_iy \
-    --opt-code-size -create-app -DRIFT_ZXN_TEST \
-    -DRIFT_MEMORY_MAX_VALUE=24576 -DRIFT_MEMORY_MAX_PRESENT=1 \
+    --opt-code-size -create-app -DRIFT_ZXN_TEST -DRIFT_ALLOCATOR_TEST \
+    -DRIFT_MEMORY_MAX_VALUE=23392 -DRIFT_MEMORY_MAX_PRESENT=1 \
     -DRIFT_MEMORY_RESERVE_VALUE=2048 -DRIFT_MEMORY_RESERVE_PRESENT=1 \
     -pragma-include:"$ROOT/src/lib/zxn/zpragma_zxn.inc" \
     -I"$ROOT/src/lib" -o arena-probe.exe \
     "$ROOT/test/fixtures/zxn_elastic_arena_probe.c" \
     "$ROOT/src/lib/zxn/arena_zxn.c" "$ROOT/src/lib/pools.c" \
+    "$ROOT/src/lib/segregated_heap.c" \
     "$ROOT/src/lib/error_sink.c" \
     "$ROOT/src/lib/print_bytes.c" "$ROOT/src/lib/zxn_test.c" \
     "$ROOT/src/lib/zxn/arena_bounds.asm"
@@ -114,6 +115,31 @@ if grep -qE 'zxn_(bump|longlived)_pool_storage' "$WORK/arena-probe.map"; then
   fail "direct arena probe retained static pool backing"
 fi
 run_nex "$WORK/arena-probe.nex" arena-probe
+
+# A compiler-proven no-bump closure has a permanent high limit. Prove that
+# this distinct capability admits the exact whole-tail escape and contracts it
+# before repeating, without exposing a limit-expansion API path.
+(
+  cd "$WORK"
+  zcc +zxn -m -vn -subtype=nex -startup=31 -clib=sdcc_iy \
+    --opt-code-size -create-app -DRIFT_ZXN_TEST -DRIFT_ALLOCATOR_TEST \
+    -DRIFT_ZXN_NO_BUMP_POOL \
+    -DRIFT_MEMORY_MAX_VALUE=23392 -DRIFT_MEMORY_MAX_PRESENT=1 \
+    -DRIFT_MEMORY_RESERVE_VALUE=2048 -DRIFT_MEMORY_RESERVE_PRESENT=1 \
+    -pragma-include:"$ROOT/src/lib/zxn/zpragma_zxn.inc" \
+    -I"$ROOT/src/lib" -o arena-permanent-probe.exe \
+    "$ROOT/test/fixtures/zxn_elastic_arena_probe.c" \
+    "$ROOT/src/lib/zxn/arena_zxn.c" "$ROOT/src/lib/pools.c" \
+    "$ROOT/src/lib/segregated_heap.c" \
+    "$ROOT/src/lib/error_sink.c" \
+    "$ROOT/src/lib/print_bytes.c" "$ROOT/src/lib/zxn_test.c" \
+    "$ROOT/src/lib/zxn/arena_bounds.asm"
+)
+if grep -qE 'zxn_(bump|longlived)_pool_storage' \
+    "$WORK/arena-permanent-probe.map"; then
+  fail "permanent arena probe retained static pool backing"
+fi
+run_nex "$WORK/arena-permanent-probe.nex" arena-permanent-probe
 
 # PAGE_24 is a banked physical asset section, not resident BSS. Exercise the
 # uploader while a managed string is live to guard the arena/MMU contract.

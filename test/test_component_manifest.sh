@@ -38,6 +38,7 @@ gcc -Wall -Werror -Wno-unused-variable -Wno-implicit-function-declaration \
   -I"$FIXTURES" -I"$ROOT/src/lib" -I"$ROOT/src/ext/lib" -o "$WORK/lifecycle" "$WORK/host.c" \
   "$FIXTURES/component_lifecycle.c" "$ROOT/src/lib/arena_host.c" \
   "$ROOT/src/lib/pools.c" \
+  "$ROOT/src/lib/segregated_heap.c" \
   "$ROOT/src/lib/print_bytes.c" "$ROOT/src/lib/fundefs.c" \
   "$ROOT/src/lib/error_sink.c" \
   "$ROOT/src/lib/fundefs_internal.c" "$ROOT/src/lib/handle_runtime.c" \
@@ -52,6 +53,7 @@ gcc -Wall -Werror -Wno-unused-variable -Wno-implicit-function-declaration \
 if gcc -Wno-implicit-function-declaration -I"$ROOT/src/lib" -I"$ROOT/src/ext/lib" \
     -o "$WORK/missing-hook" "$WORK/missing-hook.c" \
     "$ROOT/src/lib/arena_host.c" "$ROOT/src/lib/pools.c" \
+    "$ROOT/src/lib/segregated_heap.c" \
     "$ROOT/src/lib/print_bytes.c" \
     "$ROOT/src/lib/error_sink.c" \
     "$ROOT/src/lib/fundefs.c" "$ROOT/src/lib/fundefs_internal.c" \

@@ -62,6 +62,7 @@ gcc -Werror -Wall -Wextra -Wno-sign-compare -pedantic \
   -I"$ROOT/src/lib" -I"$ROOT/src/ext/lib" \
   "$WORK/host.c" \
   "$ROOT/src/lib/arena_host.c" "$ROOT/src/lib/pools.c" \
+  "$ROOT/src/lib/segregated_heap.c" \
   "$ROOT/src/lib/fundefs.c" "$ROOT/src/lib/termination.c" \
   "$ROOT/src/lib/print_bytes.c" "$ROOT/src/lib/error_sink.c" \
   "$ROOT/src/lib/host_caps.c" "$ROOT/src/lib/host/termbox2_impl.c" \
@@ -129,6 +130,7 @@ for routed_name in print_shadow overload; do
     -I"$ROOT/src/lib" -I"$ROOT/src/ext/lib" \
     "$WORK/$routed_name.c" \
     "$ROOT/src/lib/arena_host.c" "$ROOT/src/lib/pools.c" \
+    "$ROOT/src/lib/segregated_heap.c" \
     "$ROOT/src/lib/fundefs.c" "$ROOT/src/lib/termination.c" \
     "$ROOT/src/lib/print_bytes.c" "$ROOT/src/lib/error_sink.c" \
     "$ROOT/src/lib/host_caps.c" "$ROOT/src/lib/host/termbox2_impl.c" \
@@ -203,6 +205,7 @@ gcc -Werror -Wall -Wextra -Wno-sign-compare -pedantic \
   -I"$ROOT/src/lib" -I"$ROOT/src/ext/lib" \
   "$WORK/calls.c" \
   "$ROOT/src/lib/arena_host.c" "$ROOT/src/lib/pools.c" \
+  "$ROOT/src/lib/segregated_heap.c" \
   "$ROOT/src/lib/fundefs.c" "$ROOT/src/lib/termination.c" \
   "$ROOT/src/lib/print_bytes.c" "$ROOT/src/lib/error_sink.c" \
   "$ROOT/src/lib/host_caps.c" "$ROOT/src/lib/host/termbox2_impl.c" \
@@ -215,6 +218,7 @@ gcc -Werror -Wall -Wextra -Wno-sign-compare -pedantic \
   -I"$ROOT/src/lib" -I"$ROOT/src/ext/lib" \
   "$WORK/calls-constrained.c" \
   "$ROOT/src/lib/arena_host.c" "$ROOT/src/lib/pools.c" \
+  "$ROOT/src/lib/segregated_heap.c" \
   "$ROOT/src/lib/fundefs.c" "$ROOT/src/lib/termination.c" \
   "$ROOT/src/lib/print_bytes.c" "$ROOT/src/lib/error_sink.c" \
   "$ROOT/src/lib/host_caps.c" "$ROOT/src/lib/host/termbox2_impl.c" \
@@ -280,6 +284,7 @@ gcc -Werror -Wall -Wextra -Wno-sign-compare -pedantic \
   -I"$ROOT/src/lib" -I"$ROOT/src/ext/lib" \
   "$WORK/branches.c" \
   "$ROOT/src/lib/arena_host.c" "$ROOT/src/lib/pools.c" \
+  "$ROOT/src/lib/segregated_heap.c" \
   "$ROOT/src/lib/fundefs.c" "$ROOT/src/lib/termination.c" \
   "$ROOT/src/lib/print_bytes.c" "$ROOT/src/lib/error_sink.c" \
   "$ROOT/src/lib/host_caps.c" "$ROOT/src/lib/host/termbox2_impl.c" \
@@ -292,6 +297,7 @@ gcc -Werror -Wall -Wextra -Wno-sign-compare -pedantic \
   -I"$ROOT/src/lib" -I"$ROOT/src/ext/lib" \
   "$WORK/branches-constrained.c" \
   "$ROOT/src/lib/arena_host.c" "$ROOT/src/lib/pools.c" \
+  "$ROOT/src/lib/segregated_heap.c" \
   "$ROOT/src/lib/fundefs.c" "$ROOT/src/lib/termination.c" \
   "$ROOT/src/lib/print_bytes.c" "$ROOT/src/lib/error_sink.c" \
   "$ROOT/src/lib/host_caps.c" "$ROOT/src/lib/host/termbox2_impl.c" \
@@ -344,6 +350,7 @@ gcc -Werror -Wall -Wextra -Wno-sign-compare -pedantic \
   -I"$ROOT/src/lib" -I"$ROOT/src/ext/lib" \
   "$WORK/intrinsics.c" \
   "$ROOT/src/lib/arena_host.c" "$ROOT/src/lib/pools.c" \
+  "$ROOT/src/lib/segregated_heap.c" \
   "$ROOT/src/lib/fundefs.c" "$ROOT/src/lib/termination.c" \
   "$ROOT/src/lib/print_bytes.c" "$ROOT/src/lib/error_sink.c" \
   "$ROOT/src/lib/host_caps.c" "$ROOT/src/lib/host/termbox2_impl.c" \
@@ -356,6 +363,7 @@ gcc -Werror -Wall -Wextra -Wno-sign-compare -pedantic \
   -I"$ROOT/src/lib" -I"$ROOT/src/ext/lib" \
   "$WORK/intrinsics-constrained.c" \
   "$ROOT/src/lib/arena_host.c" "$ROOT/src/lib/pools.c" \
+  "$ROOT/src/lib/segregated_heap.c" \
   "$ROOT/src/lib/fundefs.c" "$ROOT/src/lib/termination.c" \
   "$ROOT/src/lib/print_bytes.c" "$ROOT/src/lib/error_sink.c" \
   "$ROOT/src/lib/host_caps.c" "$ROOT/src/lib/host/termbox2_impl.c" \
@@ -378,6 +386,7 @@ gcc -Werror -Wall -Wextra -Wno-sign-compare -pedantic \
   -I"$ROOT/src/lib" -I"$ROOT/src/ext/lib" \
   "$WORK/intrinsic-shadow.c" \
   "$ROOT/src/lib/arena_host.c" "$ROOT/src/lib/pools.c" \
+  "$ROOT/src/lib/segregated_heap.c" \
   "$ROOT/src/lib/fundefs.c" "$ROOT/src/lib/termination.c" \
   "$ROOT/src/lib/print_bytes.c" "$ROOT/src/lib/error_sink.c" \
   "$ROOT/src/lib/host_caps.c" "$ROOT/src/lib/host/termbox2_impl.c" \
@@ -481,6 +490,7 @@ gcc -Werror -Wall -Wextra -Wno-sign-compare -pedantic \
   -I"$ROOT/src/lib" -I"$ROOT/src/ext/lib" \
   "$WORK/while.c" \
   "$ROOT/src/lib/arena_host.c" "$ROOT/src/lib/pools.c" \
+  "$ROOT/src/lib/segregated_heap.c" \
   "$ROOT/src/lib/fundefs.c" "$ROOT/src/lib/termination.c" \
   "$ROOT/src/lib/print_bytes.c" "$ROOT/src/lib/error_sink.c" \
   "$ROOT/src/lib/host_caps.c" "$ROOT/src/lib/host/termbox2_impl.c" \
@@ -493,6 +503,7 @@ gcc -Werror -Wall -Wextra -Wno-sign-compare -pedantic \
   -I"$ROOT/src/lib" -I"$ROOT/src/ext/lib" \
   "$WORK/while-constrained.c" \
   "$ROOT/src/lib/arena_host.c" "$ROOT/src/lib/pools.c" \
+  "$ROOT/src/lib/segregated_heap.c" \
   "$ROOT/src/lib/fundefs.c" "$ROOT/src/lib/termination.c" \
   "$ROOT/src/lib/print_bytes.c" "$ROOT/src/lib/error_sink.c" \
   "$ROOT/src/lib/host_caps.c" "$ROOT/src/lib/host/termbox2_impl.c" \
@@ -606,6 +617,7 @@ gcc -Werror -Wall -Wextra -Wno-sign-compare -pedantic \
   -I"$ROOT/src/lib" -I"$ROOT/src/ext/lib" \
   "$WORK/match.c" \
   "$ROOT/src/lib/arena_host.c" "$ROOT/src/lib/pools.c" \
+  "$ROOT/src/lib/segregated_heap.c" \
   "$ROOT/src/lib/fundefs.c" "$ROOT/src/lib/termination.c" \
   "$ROOT/src/lib/print_bytes.c" "$ROOT/src/lib/error_sink.c" \
   "$ROOT/src/lib/host_caps.c" "$ROOT/src/lib/host/termbox2_impl.c" \
@@ -618,6 +630,7 @@ gcc -Werror -Wall -Wextra -Wno-sign-compare -pedantic \
   -I"$ROOT/src/lib" -I"$ROOT/src/ext/lib" \
   "$WORK/match-constrained.c" \
   "$ROOT/src/lib/arena_host.c" "$ROOT/src/lib/pools.c" \
+  "$ROOT/src/lib/segregated_heap.c" \
   "$ROOT/src/lib/fundefs.c" "$ROOT/src/lib/termination.c" \
   "$ROOT/src/lib/print_bytes.c" "$ROOT/src/lib/error_sink.c" \
   "$ROOT/src/lib/host_caps.c" "$ROOT/src/lib/host/termbox2_impl.c" \

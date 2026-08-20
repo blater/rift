@@ -35,12 +35,12 @@ As of 2026-08-15, the current endpoint run can hang after those two protocol
 acknowledgements with both the legacy and canonical emulator binaries. Treat
 that as a separate launcher/benchmark issue, not as a failed ZRCP patch check.
 The eight captured 16-bit words are, in
-order: allocations, frees, allocation-list scans, free-list scans, coalesces,
-magazine hits, buddy splits, and explicit collections. The loop-control fixture
+order: allocations, frees, allocation-bin visits, free-bin visits, coalesces,
+splits, class-rounding bytes, and explicit collections. The loop-control fixture
 mirrors the statistics reset, read, and stores so subtraction isolates
 allocator work.
 
 The normal target build keeps per-operation allocator counters out of the
 fast path. Build the same fixture with `--allocator-stats` when collecting the
-separate structural proof (zero heap-list scans, magazine hits, splits, and
+separate structural proof (constant-time bin visits, splits, rounding, and
 collections). Do not use that instrumented build for the cycle budget.

@@ -17,11 +17,11 @@
       rift_allocator_stats stats = rift_allocator_stats_get();
       allocator_benchmark_stats[0] = stats.allocations;
       allocator_benchmark_stats[1] = stats.frees;
-      allocator_benchmark_stats[2] = stats.allocation_scan_steps;
-      allocator_benchmark_stats[3] = stats.free_scan_steps;
+      allocator_benchmark_stats[2] = stats.allocation_search_steps;
+      allocator_benchmark_stats[3] = stats.free_search_steps;
       allocator_benchmark_stats[4] = stats.coalesces;
-      allocator_benchmark_stats[5] = stats.magazine_hits;
-      allocator_benchmark_stats[6] = stats.buddy_splits;
+      allocator_benchmark_stats[5] = stats.splits;
+      allocator_benchmark_stats[6] = stats.class_rounding_bytes;
       allocator_benchmark_stats[7] = stats.collect_calls;
     }
     return 0;

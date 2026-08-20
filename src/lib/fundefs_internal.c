@@ -67,7 +67,7 @@ void __internal_free_array(__internal_dynamic_array_t arr, int is_string_array) 
   if (arr == NULL) return;
   rift_block_header *header = ((rift_block_header *)arr) - 1;
   if (header->refcount == RIFT_RC_STATIC) return;
-  if (header->refcount == RIFT_RC_FREE || header->refcount == RIFT_RC_MAGAZINE) {
+  if (header->refcount == RIFT_RC_FREE) {
     rift_error_text("rift: array release on already-freed block\n");
     exit(1);
   }

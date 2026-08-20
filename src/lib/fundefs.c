@@ -39,7 +39,7 @@ void __rift_make_longlived_string(string *out, size_t length) {
   out->data     = payload;
   out->length   = length;
   out->backing  = ((rift_block_header *)payload) - 1;
-  /* The buddy class may contain more payload than the requested length.
+  /* Alignment may provide more payload than the requested length.
    * Record that already-paid space so unique concat assignments can grow
    * without another allocation. */
   out->capacity = (size_t)out->backing->size - 1;
@@ -137,7 +137,6 @@ void __concat_append_owned(string *value, const char *data, size_t length,
       value->backing->refcount == owned_refcount &&
       value->backing->refcount != RIFT_RC_STATIC &&
       value->backing->refcount != RIFT_RC_FREE &&
-      value->backing->refcount != RIFT_RC_MAGAZINE &&
       value->data == (char *)(value->backing + 1) &&
       value->backing->size != 0) {
     backing_capacity = (size_t)value->backing->size - 1;
@@ -154,7 +153,14 @@ void __concat_append_owned(string *value, const char *data, size_t length,
 
   {
     string replacement;
-    __rift_make_longlived_string(&replacement, total);
+    size_t replacement_capacity = total;
+    if (backing_capacity != 0 && backing_capacity < total &&
+        backing_capacity <= (SIZE_MAX - 1) / 2) {
+      replacement_capacity = backing_capacity * 2;
+      if (replacement_capacity < total) replacement_capacity = total;
+    }
+    __rift_make_longlived_string(&replacement, replacement_capacity);
+    replacement.length = total;
     if (value->data != NULL && value->length != 0)
       memcpy(replacement.data, value->data, value->length);
     if (length != 0)
@@ -200,7 +206,7 @@ void setCharAt(string s, int n, char c) {
 void __string_retain(string s) {
   if (s.backing == NULL) return;
   if (s.backing->refcount == RIFT_RC_STATIC) return;
-  if (s.backing->refcount == RIFT_RC_FREE || s.backing->refcount == RIFT_RC_MAGAZINE) {
+  if (s.backing->refcount == RIFT_RC_FREE) {
     rift_error_text("rift: __string_retain on freed block\n");
     exit(1);
   }
@@ -214,7 +220,7 @@ void __string_retain(string s) {
 void __string_release(string s) {
   if (s.backing == NULL) return;
   if (s.backing->refcount == RIFT_RC_STATIC) return;
-  if (s.backing->refcount == RIFT_RC_FREE || s.backing->refcount == RIFT_RC_MAGAZINE) {
+  if (s.backing->refcount == RIFT_RC_FREE) {
     rift_error_text("rift: __string_release on already-freed block\n");
     exit(1);
   }

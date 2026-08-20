@@ -4,9 +4,8 @@ Assert a;
 sub main() {
   string first := concat("safe", " point");
   a.AssertEquals("value survives collection", "safe point", first);
-  // Fill the small-string magazine with discarded producer results. The
-  // following explicit safe point must coalesce those dead blocks without
-  // disturbing the still-live `first` value.
+  // Discarded producer results coalesce immediately. The explicit safe point
+  // is a counted no-op and must not disturb the still-live `first` value.
   for i := 0 to 4 {
     toString(i);
   }

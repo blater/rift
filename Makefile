@@ -15,7 +15,7 @@ DRIVER_OBJECTS = $(BUILD)driver_main.o $(BUILD)driver_options.o \
                  $(BUILD)driver_sidecar.o $(BUILD)driver_build_plan.o
 DEPS = $(OBJECTS:.o=.d) $(DRIVER_OBJECTS:.o=.d)
 
-.PHONY: all clean test-driver-locations test-driver-options test-driver-sidecar test-arena test-pools test-name-table test-semantic-ir test-ownership-plan test-semantic-plan test-type-method-autocast test-component-manifest test-asset-language test-negative test-refcount test-sprite-runtime test-zesarux-index-cache test-zesarux-zrcp test-zesarux-maintenance test-zxn-assets test-zxn-sprite test-zxn test-zxn-tiny-print test-zxn-light-core test-autolink test-memory-options test-memory-profile test-zxn-size check-rift-rename
+.PHONY: all clean test-driver-locations test-driver-options test-driver-sidecar test-arena test-pools test-managed-allocator test-name-table test-semantic-ir test-ownership-plan test-semantic-plan test-type-method-autocast test-component-manifest test-asset-language test-negative test-refcount test-sprite-runtime test-zesarux-index-cache test-zesarux-zrcp test-zesarux-maintenance test-zxn-assets test-zxn-sprite test-zxn test-zxn-tiny-print test-zxn-light-core test-autolink test-memory-options test-memory-profile test-zxn-size check-rift-rename
 
 all: $(BUILD) riftc rift $(BUILD)verify-zxn-assets
 
@@ -73,7 +73,12 @@ $(BUILD)alloc.o: $(LIB)alloc.c | $(BUILD)
 $(BUILD)arena_host.o: $(LIB)arena_host.c $(LIB)arena.h | $(BUILD)
 	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
 
-$(BUILD)pools.o: $(LIB)pools.c $(LIB)pools.h $(LIB)arena.h | $(BUILD)
+$(BUILD)segregated_heap.o: $(LIB)segregated_heap.c $(LIB)segregated_heap.h \
+                           $(LIB)pools.h | $(BUILD)
+	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
+
+$(BUILD)pools.o: $(LIB)pools.c $(LIB)pools.h $(LIB)arena.h \
+                 $(LIB)segregated_heap.h | $(BUILD)
 	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
 
 riftc: $(OBJECTS)
@@ -87,14 +92,25 @@ $(BUILD)verify-zxn-assets: tools/verify-zxn-assets.c | $(BUILD)
 
 # Phase A.2 — pool runtime test harness.
 # Standalone C test, no Rift language integration yet.
-$(BUILD)pools_test: test/pools_test.c $(BUILD)pools.o $(BUILD)arena_host.o \
+$(BUILD)pools_test: test/pools_test.c $(BUILD)pools.o \
+                     $(BUILD)segregated_heap.o $(BUILD)arena_host.o \
                      $(BUILD)error_sink_for_test.o | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ test/pools_test.c $(BUILD)pools.o \
+		$(BUILD)segregated_heap.o \
 		$(BUILD)arena_host.o \
 		$(BUILD)error_sink_for_test.o
 
 test-pools: $(BUILD)pools_test
 	$(BUILD)pools_test
+
+$(BUILD)managed_allocator_test: test/managed_allocator_test.c \
+                                  $(LIB)segregated_heap.c \
+                                  $(LIB)segregated_heap.h $(LIB)pools.h | $(BUILD)
+	$(CC) $(CFLAGS) -DRIFT_ALLOCATOR_TEST -o $@ \
+		test/managed_allocator_test.c $(LIB)segregated_heap.c
+
+test-managed-allocator: $(BUILD)managed_allocator_test
+	$(BUILD)managed_allocator_test
 
 $(BUILD)arena_test: test/arena_test.c $(BUILD)arena_host.o | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $^
@@ -208,6 +224,7 @@ RUNTIME_TEST_SUPPORT_OBJECTS = $(BUILD)error_sink_for_test.o \
                                $(BUILD)termination_for_test.o \
                                $(BUILD)termbox2_for_test.o
 $(BUILD)string_refcount_test: test/string_refcount_test.c $(BUILD)pools.o \
+                              $(BUILD)segregated_heap.o \
                               $(BUILD)arena_host.o \
                               $(BUILD)fundefs_for_test.o \
                               $(BUILD)fundefs_internal_for_test.o \
@@ -216,6 +233,7 @@ $(BUILD)string_refcount_test: test/string_refcount_test.c $(BUILD)pools.o \
 	$(CC) $(RUNTIME_CFLAGS) -o $@ $^
 
 $(BUILD)fixed_array_set_test: test/fixed_array_set_test.c $(BUILD)pools.o \
+                              $(BUILD)segregated_heap.o \
                               $(BUILD)arena_host.o \
                               $(BUILD)fundefs_for_test.o \
                               $(BUILD)fundefs_internal_for_test.o \

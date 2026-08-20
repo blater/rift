@@ -51,8 +51,7 @@ static void init_test_arena(size_t total_capacity) {
     }                                                                         \
   } while (0)
 
-#define IS_FREE_STATE(refcount) \
-  ((refcount) == RIFT_RC_FREE || (refcount) == RIFT_RC_MAGAZINE)
+#define IS_FREE_STATE(refcount) ((refcount) == RIFT_RC_FREE)
 
 /* ---- Helpers to synthesise a longlived-backed string descriptor ---- */
 
@@ -269,7 +268,7 @@ static void repeated_append_allocations_are_logarithmic(void) {
     __concat_append_owned(&s, ".", 1, 1);
   EXPECT(s.length == 1000, "repeated append produced the wrong length");
   EXPECT(rift_allocator_stats_get().allocations <= 9,
-         "repeated append must grow by allocator capacity classes");
+         "repeated append must double explicit string capacity");
   for (size_t i = 0; i < s.length; i++)
     EXPECT(s.data[i] == '.', "repeated append corrupted content");
   __string_release(s);
@@ -287,7 +286,7 @@ static void jump_on_oom(const char *pool_name, size_t requested,
 }
 
 static void append_oom_leaves_source_unchanged(void) {
-  init_test_arena(128);
+  init_test_arena(112);
   string s = make_produced_string("ab", 2);
   char *original_data = s.data;
   rift_block_header *original_backing = s.backing;

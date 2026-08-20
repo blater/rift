@@ -7,6 +7,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #define BUMP_CAP   (1u * 1024u * 1024u)
 #define LL_CAP     (1u * 1024u * 1024u)
@@ -129,8 +131,8 @@ static void longlived_free_marks_free(void) {
   void *p = rift_longlived_alloc(16);
   rift_longlived_free(p);
   rift_block_header *h = ((rift_block_header *)p) - 1;
-  EXPECT(h->refcount == RIFT_RC_MAGAZINE || h->refcount == RIFT_RC_FREE,
-         "freed block must enter a magazine or buddy free list");
+  EXPECT(h->refcount == RIFT_RC_FREE,
+         "freed block must enter the segregated free index");
   rift_pools_deinit();
 }
 
@@ -144,12 +146,43 @@ static void longlived_free_then_realloc_reuses(void) {
 }
 
 static void longlived_static_sentinel_not_freed(void) {
+  struct {
+    rift_block_header header;
+    unsigned char payload[16];
+  } static_block = {
+      .header = {.size = 16, .refcount = RIFT_RC_STATIC, .next_free = 0},
+      .payload = {0},
+  };
   init_test_arena(BUMP_CAP + LL_CAP);
-  void *p = rift_longlived_alloc(16);
-  rift_block_header *h = ((rift_block_header *)p) - 1;
-  h->refcount = RIFT_RC_STATIC;
-  rift_longlived_free(p); /* should be a no-op */
-  EXPECT(h->refcount == RIFT_RC_STATIC, "static block was modified by free");
+  rift_longlived_free(static_block.payload); /* should be a no-op */
+  EXPECT(static_block.header.refcount == RIFT_RC_STATIC,
+         "static block was modified by free");
+  rift_pools_deinit();
+}
+
+static void forged_interior_static_free_is_fatal(void) {
+  void *block;
+  unsigned char *forged_payload;
+  rift_block_header *forged_header;
+  pid_t child;
+  int status;
+  init_test_arena(4096);
+  block = rift_longlived_alloc(128);
+  forged_payload = (unsigned char *)block + sizeof(rift_block_header);
+  forged_header = ((rift_block_header *)forged_payload) - 1;
+  memset(forged_header, 0, sizeof(*forged_header));
+  forged_header->refcount = RIFT_RC_STATIC;
+  fflush(NULL);
+  child = fork();
+  EXPECT(child >= 0, "failed to start invalid-free subprocess");
+  if (child == 0) {
+    rift_longlived_free(forged_payload);
+    _exit(0);
+  }
+  EXPECT(waitpid(child, &status, 0) == child,
+         "failed to wait for invalid-free subprocess");
+  EXPECT(WIFEXITED(status) && WEXITSTATUS(status) == 1,
+         "forged in-arena static free was not fatal");
   rift_pools_deinit();
 }
 
@@ -176,7 +209,7 @@ static void longlived_payload_alignment(void) {
 
 /* ---- Reclaim ---- */
 
-static void reclaim_drains_magazines_and_coalesces_buddies(void) {
+static void collect_observes_already_coalesced_blocks(void) {
   init_test_arena(BUMP_CAP + LL_CAP);
   void *p1 = rift_longlived_alloc(16);
   void *p2 = rift_longlived_alloc(16);
@@ -184,7 +217,7 @@ static void reclaim_drains_magazines_and_coalesces_buddies(void) {
   rift_longlived_free(p2);
   rift_collect();
   EXPECT(rift_longlived_largest_free_block() >= 32,
-         "collection did not make a larger buddy class available");
+         "immediate coalescing did not make a larger block available");
   rift_pools_deinit();
 }
 
@@ -201,9 +234,9 @@ static void reclaim_does_not_merge_live_with_free(void) {
   rift_block_header *h2 = ((rift_block_header *)p2) - 1;
   rift_block_header *h3 = ((rift_block_header *)p3) - 1;
   EXPECT(h2->refcount == 1, "live block was disturbed by reclaim");
-  EXPECT(h1->refcount == RIFT_RC_FREE || h1->refcount == RIFT_RC_MAGAZINE,
+  EXPECT(h1->refcount == RIFT_RC_FREE,
          "first free block was disturbed");
-  EXPECT(h3->refcount == RIFT_RC_FREE || h3->refcount == RIFT_RC_MAGAZINE,
+  EXPECT(h3->refcount == RIFT_RC_FREE,
          "last free block was disturbed");
   rift_pools_deinit();
 }
@@ -218,7 +251,7 @@ static void reclaim_chains_three_adjacent(void) {
   rift_longlived_free(p3);
   rift_collect();
   EXPECT(rift_longlived_largest_free_block() >= 32,
-         "three frees did not restore a useful buddy class");
+         "three frees did not restore a useful coalesced block");
   rift_pools_deinit();
 }
 
@@ -238,7 +271,7 @@ static void coalesced_region_serves_smaller_allocation(void) {
   rift_pools_deinit();
 }
 
-static void common_short_lived_workload_has_constant_scan_depth(void) {
+static void common_short_lived_workload_has_constant_bin_work(void) {
   init_test_arena(7168);
   rift_allocator_stats_reset();
   for (int i = 0; i < 50; i++) {
@@ -249,14 +282,14 @@ static void common_short_lived_workload_has_constant_scan_depth(void) {
   }
   rift_allocator_stats stats = rift_allocator_stats_get();
   EXPECT(stats.allocations == 100, "short-lived workload allocation count is wrong");
-  EXPECT(stats.allocation_scan_steps == 0 && stats.free_scan_steps == 0,
-         "normal workload must not scan heap blocks");
-  EXPECT(stats.magazine_hits >= 90,
-         "short-lived workload did not remain on the magazine fast path");
+  EXPECT(stats.allocation_search_steps <= stats.allocations,
+         "normal allocation performed more than one bin visit");
+  EXPECT(stats.free_search_steps <= 4 * stats.frees,
+         "normal free exceeded the bounded bin/coalesce work");
   rift_pools_deinit();
 }
 
-static void hot_small_block_cache_avoids_a_list_scan(void) {
+static void exact_small_block_reuse_uses_bounded_search(void) {
   init_test_arena(2048);
   void *before = rift_longlived_alloc(16);
   void *hot = rift_longlived_alloc(8);
@@ -266,51 +299,51 @@ static void hot_small_block_cache_avoids_a_list_scan(void) {
   void *reuse = rift_longlived_alloc(8);
   rift_allocator_stats stats = rift_allocator_stats_get();
   EXPECT(reuse == hot, "hot cache did not reuse the recently freed small block");
-  EXPECT(stats.allocation_scan_steps == 0,
-         "hot-cache allocation should not traverse the free list");
+  EXPECT(stats.allocation_search_steps <= 1,
+         "exact-size reuse exceeded one bin visit");
   rift_longlived_free(before);
   rift_longlived_free(reuse);
   rift_longlived_free(after);
   rift_pools_deinit();
 }
 
-static void collect_reclaims_magazines_for_a_larger_class(void) {
-  init_test_arena(128);
+static void immediate_coalescing_needs_no_collect_pass(void) {
+  init_test_arena(256);
   void *blocks[4];
   for (int i = 0; i < 4; i++) blocks[i] = rift_longlived_alloc(1);
   for (int i = 0; i < 4; i++) rift_longlived_free(blocks[i]);
-  EXPECT(rift_longlived_largest_free_block() < 16,
-         "magazine-only capacity must not look like a larger class");
+  EXPECT(rift_longlived_largest_free_block() >= 16,
+         "free did not immediately expose a coalesced larger block");
   rift_allocator_stats_reset();
   rift_collect();
   rift_allocator_stats stats = rift_allocator_stats_get();
   EXPECT(stats.collect_calls == 1, "explicit collection was not counted");
   EXPECT(rift_longlived_largest_free_block() >= 16,
-         "collection did not coalesce cached blocks into a larger class");
+         "bounded collect hook changed coalesced capacity");
   EXPECT(rift_longlived_alloc(16) != NULL,
          "larger allocation did not use collected capacity");
   rift_pools_deinit();
 }
 
-static void allocation_pressure_collects_before_oom(void) {
-  init_test_arena(128);
+static void allocation_pressure_uses_already_coalesced_capacity(void) {
+  init_test_arena(256);
   void *blocks[4];
   for (int i = 0; i < 4; i++) blocks[i] = rift_longlived_alloc(1);
   for (int i = 0; i < 4; i++) rift_longlived_free(blocks[i]);
-  EXPECT(rift_longlived_largest_free_block() < 16,
-         "fixture must hold capacity in smaller magazines");
+  EXPECT(rift_longlived_largest_free_block() >= 16,
+         "fixture did not coalesce adjacent frees immediately");
   rift_allocator_stats_reset();
   void *larger = rift_longlived_alloc(16);
   rift_allocator_stats stats = rift_allocator_stats_get();
   EXPECT(larger != NULL,
-         "allocation reported a false OOM instead of draining magazines");
-  EXPECT(stats.collect_calls == 1,
-         "allocation pressure must perform exactly one automatic collection");
+         "allocation reported a false OOM despite immediate coalescing");
+  EXPECT(stats.collect_calls == 0,
+         "allocation invoked a redundant deferred-free collection pass");
   rift_longlived_free(larger);
   rift_pools_deinit();
 }
 
-static void fragmented_large_request_uses_bounded_buddy_classes(void) {
+static void fragmented_large_request_uses_constant_bin_search(void) {
   init_test_arena(1024);
   void *blocks[16];
   for (int i = 0; i < 16; i++) blocks[i] = rift_longlived_alloc(16);
@@ -319,8 +352,8 @@ static void fragmented_large_request_uses_bounded_buddy_classes(void) {
   void *large = rift_longlived_alloc(24);
   rift_allocator_stats stats = rift_allocator_stats_get();
   EXPECT(large != NULL, "fragmented fallback allocation failed unexpectedly");
-  EXPECT(stats.allocation_scan_steps == 0 && stats.free_scan_steps == 0,
-         "fragmented allocation must not inspect heap blocks");
+  EXPECT(stats.allocation_search_steps <= 1,
+         "fragmented allocation exceeded one bin visit");
   rift_longlived_free(large);
   for (int i = 1; i < 16; i += 2) rift_longlived_free(blocks[i]);
   rift_pools_deinit();
@@ -339,6 +372,38 @@ static void capture_oom(const char *pool, size_t requested, size_t avail) {
   oom_requested = requested;
 }
 
+static void bump_restore_cannot_expose_a_raw_managed_block(void) {
+  void *first;
+  void *tail;
+  void *retry;
+  rift_bump_mark mark;
+  init_test_arena(1024);
+  mark = rift_bump_save();
+  EXPECT(rift_bump_alloc(560) != NULL,
+         "fixture failed to shrink the managed limit");
+  oom_called = 0;
+  rift_set_oom_handler(capture_oom);
+  EXPECT(rift_longlived_alloc(432) == NULL,
+         "expandable managed limit admitted a raw terminal block");
+  EXPECT(oom_called == 1,
+         "rejected expandable-tail allocation skipped the OOM handler");
+  rift_set_oom_handler(NULL);
+  rift_bump_restore(mark);
+  first = rift_longlived_alloc(432);
+  tail = rift_longlived_alloc(480);
+  EXPECT(first && tail,
+         "restored shared arena did not accept class plus safe terminal tail");
+  rift_longlived_free(first);
+  retry = rift_longlived_alloc(432);
+  EXPECT(retry == first,
+         "restored shared arena did not reuse the identical request");
+  rift_longlived_free(retry);
+  rift_longlived_free(tail);
+  EXPECT(rift_longlived_used() == 0,
+         "restored shared arena did not contract completely");
+  rift_pools_deinit();
+}
+
 static void bump_oom_invokes_handler(void) {
   init_test_arena(64);
   oom_called = 0; oom_pool = NULL;
@@ -351,7 +416,7 @@ static void bump_oom_invokes_handler(void) {
 }
 
 static void longlived_oom_invokes_handler(void) {
-  init_test_arena(32);
+  init_test_arena(64);
   oom_called = 0; oom_pool = NULL;
   rift_set_oom_handler(capture_oom);
   rift_longlived_alloc(128); /* exceeds cap */
@@ -424,18 +489,20 @@ int main(void) {
   RUN(longlived_free_marks_free);
   RUN(longlived_free_then_realloc_reuses);
   RUN(longlived_static_sentinel_not_freed);
+  RUN(forged_interior_static_free_is_fatal);
   RUN(longlived_payload_writable);
   RUN(longlived_payload_alignment);
 
-  RUN(reclaim_drains_magazines_and_coalesces_buddies);
+  RUN(collect_observes_already_coalesced_blocks);
   RUN(reclaim_does_not_merge_live_with_free);
   RUN(reclaim_chains_three_adjacent);
   RUN(coalesced_region_serves_smaller_allocation);
-  RUN(common_short_lived_workload_has_constant_scan_depth);
-  RUN(hot_small_block_cache_avoids_a_list_scan);
-  RUN(collect_reclaims_magazines_for_a_larger_class);
-  RUN(allocation_pressure_collects_before_oom);
-  RUN(fragmented_large_request_uses_bounded_buddy_classes);
+  RUN(common_short_lived_workload_has_constant_bin_work);
+  RUN(exact_small_block_reuse_uses_bounded_search);
+  RUN(immediate_coalescing_needs_no_collect_pass);
+  RUN(allocation_pressure_uses_already_coalesced_capacity);
+  RUN(fragmented_large_request_uses_constant_bin_search);
+  RUN(bump_restore_cannot_expose_a_raw_managed_block);
 
   RUN(bump_oom_invokes_handler);
   RUN(longlived_oom_invokes_handler);

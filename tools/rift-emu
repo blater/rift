@@ -97,6 +97,13 @@ def reserve_port():
   return port
 
 
+def zrcp_prompt_seen(output):
+  pattern = rb"(?:^|[\r\n])command(?:@cpu-step)?>[ \t]*\Z" \
+      if isinstance(output, bytes) \
+      else r"(?:^|[\r\n])command(?:@cpu-step)?>[ \t]*\Z"
+  return re.search(pattern, output) is not None
+
+
 def write_text(path, value):
   path.write_text(value, encoding="utf-8")
 
@@ -134,7 +141,7 @@ def zrcp_command(port, command, timeout=1.0, require_prompt=False):
       if not data:
         break
       greeting += data
-      if b"command>" in greeting:
+      if zrcp_prompt_seen(greeting):
         break
     conn.sendall((command + "\n").encode("ascii"))
     chunks = []
@@ -147,10 +154,10 @@ def zrcp_command(port, command, timeout=1.0, require_prompt=False):
       if not data:
         break
       chunks.append(data)
-      if b"command>" in b"".join(chunks):
+      if zrcp_prompt_seen(b"".join(chunks)):
         break
     response = b"".join(chunks).decode("utf-8", errors="replace")
-    if require_prompt and "command>" not in response:
+    if require_prompt and not zrcp_prompt_seen(response):
       raise LauncherError("ZRCP command did not complete: %s" % command)
     if require_prompt and re.search(r"(^|\n)ERROR", response, re.IGNORECASE):
       raise LauncherError("ZRCP command failed: %s" % response.strip())

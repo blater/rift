@@ -45,6 +45,91 @@ class RiftEmuMeasureTest(unittest.TestCase):
     self.assertEqual(
         source.count("finally:\n    stop_owned_process(adapter, process)"), 1)
 
+  def test_cpu_step_prompt_is_a_complete_zrcp_prompt(self):
+    self.assertTrue(RIFT_EMU.zrcp_prompt_seen(b"command>"))
+    self.assertTrue(RIFT_EMU.zrcp_prompt_seen(b"command@cpu-step>"))
+    self.assertTrue(RIFT_EMU.zrcp_prompt_seen("OK\ncommand@cpu-step>"))
+    for value in (
+        b"command@cpu-step",
+        b"not-command>",
+        b"payload command@cpu-step> still data",
+        b"command@>",
+        b"command@bogus-state>",
+    ):
+      with self.subTest(value=value):
+        self.assertFalse(RIFT_EMU.zrcp_prompt_seen(value))
+
+  def test_cpu_step_prompt_does_not_consume_full_socket_deadline(self):
+    class FakeConnection:
+      def __init__(self):
+        self.responses = iter((
+            b"ZEsarUX ZRCP\ncommand@cpu-step>",
+            b"PC=7100\ncommand@cpu-step>",
+        ))
+        self.recv_calls = 0
+        self.sent = []
+
+      def __enter__(self):
+        return self
+
+      def __exit__(self, exc_type, exc, traceback):
+        return False
+
+      def settimeout(self, timeout):
+        self.timeout = timeout
+
+      def recv(self, size):
+        self.recv_calls += 1
+        return next(self.responses)
+
+      def sendall(self, data):
+        self.sent.append(data)
+
+    connection = FakeConnection()
+    with mock.patch.object(
+        RIFT_EMU.socket, "create_connection", return_value=connection):
+      response = RIFT_EMU.zrcp_command(
+          10000, "get-registers", require_prompt=True)
+    self.assertEqual(response, "PC=7100\ncommand@cpu-step>")
+    self.assertEqual(connection.recv_calls, 2)
+    self.assertEqual(connection.sent, [b"get-registers\n"])
+
+  def test_prompt_like_payload_waits_for_real_cpu_step_prompt(self):
+    class FakeConnection:
+      def __init__(self):
+        self.responses = iter((
+            b"ZEsarUX ZRCP\ncommand>",
+            b"payload: not-command@bogus-state> incomplete",
+            b"\ncommand@cpu-step> ",
+        ))
+        self.recv_calls = 0
+
+      def __enter__(self):
+        return self
+
+      def __exit__(self, exc_type, exc, traceback):
+        return False
+
+      def settimeout(self, timeout):
+        self.timeout = timeout
+
+      def recv(self, size):
+        self.recv_calls += 1
+        return next(self.responses)
+
+      def sendall(self, data):
+        self.sent = data
+
+    connection = FakeConnection()
+    with mock.patch.object(
+        RIFT_EMU.socket, "create_connection", return_value=connection):
+      response = RIFT_EMU.zrcp_command(
+          10000, "get-registers", require_prompt=True)
+    self.assertEqual(
+        response,
+        "payload: not-command@bogus-state> incomplete\ncommand@cpu-step> ")
+    self.assertEqual(connection.recv_calls, 3)
+
   def assert_failure_cleans_owned_process(self, output, message):
     adapter = mock.Mock()
     process = mock.Mock()

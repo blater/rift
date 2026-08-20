@@ -15,7 +15,7 @@ DRIVER_OBJECTS = $(BUILD)driver_main.o $(BUILD)driver_options.o \
                  $(BUILD)driver_sidecar.o $(BUILD)driver_build_plan.o
 DEPS = $(OBJECTS:.o=.d) $(DRIVER_OBJECTS:.o=.d)
 
-.PHONY: all clean test-driver-locations test-driver-options test-driver-sidecar test-arena test-pools test-managed-allocator test-name-table test-semantic-ir test-ownership-plan test-semantic-plan test-type-method-autocast test-component-manifest test-asset-language test-negative test-refcount test-sprite-runtime test-inferred-input test-zesarux-index-cache test-zesarux-noupdates test-zesarux-silent-startup test-zesarux-zrcp test-zesarux-maintenance test-zxn-assets test-zxn-sprite test-zxn test-zxn-tiny-print test-zxn-light-core test-autolink test-memory-options test-memory-profile test-zxn-size test-zxn-memory-report check-rift-rename
+.PHONY: all clean test-driver-locations test-driver-options test-driver-sidecar test-arena test-pools test-managed-allocator test-managed-handles test-name-table test-semantic-ir test-ownership-plan test-semantic-plan test-type-method-autocast test-component-manifest test-asset-language test-negative test-refcount test-sprite-runtime test-inferred-input test-zesarux-index-cache test-zesarux-noupdates test-zesarux-silent-startup test-zesarux-zrcp test-zesarux-maintenance test-zxn-assets test-zxn-sprite test-zxn test-zxn-tiny-print test-zxn-light-core test-zxn-managed-handles test-autolink test-memory-options test-memory-profile test-zxn-size test-zxn-memory-report check-rift-rename
 
 all: $(BUILD) riftc rift $(BUILD)verify-zxn-assets
 
@@ -111,6 +111,32 @@ $(BUILD)managed_allocator_test: test/managed_allocator_test.c \
 
 test-managed-allocator: $(BUILD)managed_allocator_test
 	$(BUILD)managed_allocator_test
+
+$(BUILD)managed_heap_test: test/managed_heap_test.c $(LIB)managed_heap.c \
+                              $(LIB)managed_heap.h $(LIB)managed_ref.h \
+                              $(LIB)segregated_heap.c \
+                              $(LIB)segregated_heap.h $(LIB)pools.h \
+                              $(LIB)error_sink.c | $(BUILD)
+	$(CC) $(CFLAGS) -DRIFT_MANAGED_TEST -DRIFT_ALLOCATOR_TEST -o $@ \
+		test/managed_heap_test.c $(LIB)managed_heap.c \
+		$(LIB)segregated_heap.c $(LIB)error_sink.c
+
+$(BUILD)managed_ref_static_link_test: test/managed_ref_static_link_test.c \
+                                        $(LIB)managed_ref.h | $(BUILD)
+	$(CC) $(CFLAGS) -o $@ test/managed_ref_static_link_test.c
+
+test-managed-handles: $(BUILD)managed_heap_test \
+                      $(BUILD)managed_ref_static_link_test
+	$(BUILD)managed_heap_test
+	$(BUILD)managed_ref_static_link_test
+	@if nm -u $(BUILD)managed_ref_static_link_test | \
+		grep -Eq 'managed_heap|rift_heap|rift_pools|rift_arena'; then \
+		echo 'FAIL: static managed references linked the dynamic heap' >&2; \
+		exit 1; \
+	fi
+
+test-zxn-managed-handles:
+	sh test/test_zxn_managed_handles.sh
 
 $(BUILD)arena_test: test/arena_test.c $(BUILD)arena_host.o | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $^

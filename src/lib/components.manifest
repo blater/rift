@@ -3,6 +3,7 @@
 # component|id|dependencies|headers|host_sources|zxn_sources|host_asm|zxn_asm|init|shutdown|always?|zxn-capabilities
 component|core|tiny_print,error_sink,host_ui|pools.h,fundefs.h,fundefs_internal.h,typedefs.h|arena_host.c,segregated_heap.c,pools.c,fundefs.c,termination.c|zxn/arena_zxn.c,segregated_heap.c,pools.c,fundefs.c,termination.c||zxn/arena_bounds.asm|||always|startup31,pools
 component|handles|core||handle_runtime.c|handle_runtime.c||||||startup31,pools
+component|managed_heap|core|managed_ref.h,managed_heap.h|managed_heap.c|managed_heap.c||||||startup31,pools
 component|arrays|core,handles||fundefs_internal.c|fundefs_internal.c||||||startup31,pools
 component|process_args|arrays||process_args.c|process_args.c||||||startup31,pools
 component|file_io|core||file_io.c|file_io.c||||||pools

@@ -37,6 +37,8 @@ typedef struct rift_block_header {
 
 #define RIFT_RC_FREE    0xFFFEu
 #define RIFT_RC_STATIC  0xFFFFu
+#define RIFT_RC_DESTROYING 0xFFFDu
+#define RIFT_RC_MAX_LIVE 0xFFFCu
 
 /* Initialise the arena-backed allocator. Must be called before any other pool
  * API. On failure to obtain the target region, prints a diagnostic and exits. */

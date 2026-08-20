@@ -111,6 +111,12 @@ static ownership_token bool_token(void) {
   return token;
 }
 
+static ownership_token int_token(void) {
+  ownership_token token = bool_token();
+  token.type = sir_builtin_type(SIR_TYPE_INT);
+  return token;
+}
+
 static int add_test_callees(ownership_plan *plan, size_t count) {
   size_t index;
   plan->callees = calloc(count, sizeof(*plan->callees));
@@ -146,9 +152,10 @@ static int add_test_callees(ownership_plan *plan, size_t count) {
   return 1;
 }
 
-static int configure_concat_callee(ownership_plan *plan, size_t index) {
+static int configure_intrinsic_callee(ownership_plan *plan, size_t index,
+                                      char *name, size_t arity) {
   const sir_intrinsic_descriptor *descriptor =
-      sir_intrinsic_lookup((string_view){"concat", 6}, 2);
+      sir_intrinsic_lookup((string_view){name, strlen(name)}, arity);
   ownership_callee *callee;
   if (descriptor == NULL || index >= plan->callee_count)
     return 0;
@@ -175,6 +182,10 @@ static int configure_concat_callee(ownership_plan *plan, size_t index) {
   callee->effects = descriptor->signature.effects;
   callee->call_abi = descriptor->signature.call_abi;
   return 1;
+}
+
+static int configure_concat_callee(ownership_plan *plan, size_t index) {
+  return configure_intrinsic_callee(plan, index, "concat", 2);
 }
 
 static void test_representative_plan(void) {
@@ -487,6 +498,188 @@ static void test_use_after_move_rejected(void) {
   ownership_plan_internal_destroy(&plan);
 }
 
+static void test_loop_backedge_requires_body_cleanup(void) {
+  ownership_plan plan;
+  ownership_diagnostic diagnostic;
+  ownership_operation op;
+  ownership_token slot_token = managed_string_token();
+  ownership_id entry;
+  ownership_id header;
+  ownership_id body;
+  ownership_id exit;
+  ownership_id outer;
+  ownership_id local;
+  ownership_id condition;
+
+  ownership_plan_internal_init(&plan);
+  slot_token.origin_kind = OWNERSHIP_ORIGIN_SLOT;
+  slot_token.origin = 0;
+  outer = ownership_plan_internal_add_token(&plan, slot_token);
+  local = ownership_plan_internal_add_token(&plan, managed_string_token());
+  condition = ownership_plan_internal_add_token(&plan, bool_token());
+  entry = ownership_plan_internal_add_block(&plan);
+  header = ownership_plan_internal_add_block(&plan);
+  body = ownership_plan_internal_add_block(&plan);
+  exit = ownership_plan_internal_add_block(&plan);
+  plan.entry_block = entry;
+  op = operation(OWNERSHIP_OP_ADOPT);
+  op.result = outer;
+  (void)ownership_plan_internal_add_operation(&plan, entry, op);
+  op = operation(OWNERSHIP_OP_JUMP);
+  op.targets[0] = header;
+  op.target_count = 1;
+  (void)ownership_plan_internal_add_operation(&plan, entry, op);
+  op = operation(OWNERSHIP_OP_DEFINE_SCALAR);
+  op.result = condition;
+  (void)ownership_plan_internal_add_operation(&plan, header, op);
+  op = operation(OWNERSHIP_OP_BRANCH);
+  op.operand = condition;
+  op.targets[0] = body;
+  op.targets[1] = exit;
+  op.target_count = 2;
+  (void)ownership_plan_internal_add_operation(&plan, header, op);
+  op = operation(OWNERSHIP_OP_ACQUIRE);
+  op.result = local;
+  (void)ownership_plan_internal_add_operation(&plan, body, op);
+  op = operation(OWNERSHIP_OP_JUMP);
+  op.targets[0] = header;
+  op.target_count = 1;
+  (void)ownership_plan_internal_add_operation(&plan, body, op);
+  op = operation(OWNERSHIP_OP_RELEASE);
+  op.operand = outer;
+  (void)ownership_plan_internal_add_operation(&plan, exit, op);
+  op = operation(OWNERSHIP_OP_RETURN);
+  (void)ownership_plan_internal_add_operation(&plan, exit, op);
+  expect(!ownership_plan_internal_verify_and_seal(&plan, &diagnostic) &&
+             diagnostic.code == OWNERSHIP_DIAGNOSTIC_UNBALANCED_JOIN &&
+             diagnostic.token == local,
+         "loop verifier rejects a body-local owner on the backedge");
+  ownership_plan_internal_destroy(&plan);
+}
+
+static void test_loop_backedge_rejects_live_loan(void) {
+  ownership_plan plan;
+  ownership_diagnostic diagnostic;
+  ownership_operation op;
+  ownership_token slot_token = managed_string_token();
+  ownership_id entry;
+  ownership_id header;
+  ownership_id body;
+  ownership_id exit;
+  ownership_id outer;
+  ownership_id loan;
+  ownership_id condition;
+
+  ownership_plan_internal_init(&plan);
+  slot_token.origin_kind = OWNERSHIP_ORIGIN_SLOT;
+  slot_token.origin = 0;
+  outer = ownership_plan_internal_add_token(&plan, slot_token);
+  loan = ownership_plan_internal_add_token(&plan, managed_string_token());
+  condition = ownership_plan_internal_add_token(&plan, bool_token());
+  entry = ownership_plan_internal_add_block(&plan);
+  header = ownership_plan_internal_add_block(&plan);
+  body = ownership_plan_internal_add_block(&plan);
+  exit = ownership_plan_internal_add_block(&plan);
+  plan.entry_block = entry;
+  op = operation(OWNERSHIP_OP_ADOPT);
+  op.result = outer;
+  (void)ownership_plan_internal_add_operation(&plan, entry, op);
+  op = operation(OWNERSHIP_OP_JUMP);
+  op.targets[0] = header;
+  op.target_count = 1;
+  (void)ownership_plan_internal_add_operation(&plan, entry, op);
+  op = operation(OWNERSHIP_OP_DEFINE_SCALAR);
+  op.result = condition;
+  (void)ownership_plan_internal_add_operation(&plan, header, op);
+  op = operation(OWNERSHIP_OP_BRANCH);
+  op.operand = condition;
+  op.targets[0] = body;
+  op.targets[1] = exit;
+  op.target_count = 2;
+  (void)ownership_plan_internal_add_operation(&plan, header, op);
+  op = operation(OWNERSHIP_OP_BORROW);
+  op.operand = outer;
+  op.result = loan;
+  (void)ownership_plan_internal_add_operation(&plan, body, op);
+  op = operation(OWNERSHIP_OP_JUMP);
+  op.targets[0] = header;
+  op.target_count = 1;
+  (void)ownership_plan_internal_add_operation(&plan, body, op);
+  op = operation(OWNERSHIP_OP_RELEASE);
+  op.operand = outer;
+  (void)ownership_plan_internal_add_operation(&plan, exit, op);
+  op = operation(OWNERSHIP_OP_RETURN);
+  (void)ownership_plan_internal_add_operation(&plan, exit, op);
+  expect(!ownership_plan_internal_verify_and_seal(&plan, &diagnostic) &&
+             diagnostic.code == OWNERSHIP_DIAGNOSTIC_UNBALANCED_JOIN &&
+             diagnostic.token == loan,
+         "loop verifier rejects a live loan on the backedge");
+  ownership_plan_internal_destroy(&plan);
+}
+
+static void test_loop_use_after_move_rejected(void) {
+  ownership_plan plan;
+  ownership_diagnostic diagnostic;
+  ownership_operation op;
+  ownership_token slot_token = managed_string_token();
+  ownership_id entry;
+  ownership_id header;
+  ownership_id body;
+  ownership_id exit;
+  ownership_id outer;
+  ownership_id moved;
+  ownership_id condition;
+
+  ownership_plan_internal_init(&plan);
+  slot_token.origin_kind = OWNERSHIP_ORIGIN_SLOT;
+  slot_token.origin = 0;
+  outer = ownership_plan_internal_add_token(&plan, slot_token);
+  moved = ownership_plan_internal_add_token(&plan, managed_string_token());
+  condition = ownership_plan_internal_add_token(&plan, bool_token());
+  entry = ownership_plan_internal_add_block(&plan);
+  header = ownership_plan_internal_add_block(&plan);
+  body = ownership_plan_internal_add_block(&plan);
+  exit = ownership_plan_internal_add_block(&plan);
+  plan.entry_block = entry;
+  op = operation(OWNERSHIP_OP_ADOPT);
+  op.result = outer;
+  (void)ownership_plan_internal_add_operation(&plan, entry, op);
+  op = operation(OWNERSHIP_OP_JUMP);
+  op.targets[0] = header;
+  op.target_count = 1;
+  (void)ownership_plan_internal_add_operation(&plan, entry, op);
+  op = operation(OWNERSHIP_OP_DEFINE_SCALAR);
+  op.result = condition;
+  (void)ownership_plan_internal_add_operation(&plan, header, op);
+  op = operation(OWNERSHIP_OP_BRANCH);
+  op.operand = condition;
+  op.targets[0] = body;
+  op.targets[1] = exit;
+  op.target_count = 2;
+  (void)ownership_plan_internal_add_operation(&plan, header, op);
+  op = operation(OWNERSHIP_OP_MOVE);
+  op.operand = outer;
+  op.result = moved;
+  (void)ownership_plan_internal_add_operation(&plan, body, op);
+  op = operation(OWNERSHIP_OP_RELEASE);
+  op.operand = outer;
+  (void)ownership_plan_internal_add_operation(&plan, body, op);
+  op = operation(OWNERSHIP_OP_JUMP);
+  op.targets[0] = header;
+  op.target_count = 1;
+  (void)ownership_plan_internal_add_operation(&plan, body, op);
+  op = operation(OWNERSHIP_OP_RELEASE);
+  op.operand = outer;
+  (void)ownership_plan_internal_add_operation(&plan, exit, op);
+  op = operation(OWNERSHIP_OP_RETURN);
+  (void)ownership_plan_internal_add_operation(&plan, exit, op);
+  expect(!ownership_plan_internal_verify_and_seal(&plan, &diagnostic) &&
+             diagnostic.code == OWNERSHIP_DIAGNOSTIC_INVALID_OPERATION &&
+             diagnostic.token == outer,
+         "loop verifier rejects use of an outer owner after move");
+  ownership_plan_internal_destroy(&plan);
+}
+
 static void test_malformed_call_frames_rejected(void) {
   ownership_plan plan;
   ownership_diagnostic diagnostic;
@@ -598,6 +791,98 @@ static void test_malformed_call_frames_rejected(void) {
   ownership_plan_internal_destroy(&plan);
 }
 
+static void test_duplicate_scalar_call_capture_ends_once(void) {
+  ownership_plan plan;
+  ownership_diagnostic diagnostic;
+  ownership_operation op;
+  ownership_token slot_token = managed_string_token();
+  ownership_id operands[3];
+  ownership_id entry;
+  ownership_id header;
+  ownership_id body;
+  ownership_id exit;
+  ownership_id source;
+  ownership_id loan;
+  ownership_id held;
+  ownership_id index;
+  ownership_id result;
+  ownership_id condition;
+
+  ownership_plan_internal_init(&plan);
+  expect(add_test_callees(&plan, 1) &&
+             configure_intrinsic_callee(&plan, 0, "substring", 3),
+         "duplicate-scalar loop test creates substring callee");
+  slot_token.origin_kind = OWNERSHIP_ORIGIN_SLOT;
+  slot_token.origin = 0;
+  source = ownership_plan_internal_add_token(&plan, slot_token);
+  loan = ownership_plan_internal_add_token(&plan, managed_string_token());
+  held = ownership_plan_internal_add_token(&plan, managed_string_token());
+  index = ownership_plan_internal_add_token(&plan, int_token());
+  result = ownership_plan_internal_add_token(&plan, managed_string_token());
+  condition = ownership_plan_internal_add_token(&plan, bool_token());
+  entry = ownership_plan_internal_add_block(&plan);
+  header = ownership_plan_internal_add_block(&plan);
+  body = ownership_plan_internal_add_block(&plan);
+  exit = ownership_plan_internal_add_block(&plan);
+  plan.entry_block = entry;
+  op = operation(OWNERSHIP_OP_ADOPT);
+  op.result = source;
+  (void)ownership_plan_internal_add_operation(&plan, entry, op);
+  op = operation(OWNERSHIP_OP_JUMP);
+  op.targets[0] = header;
+  op.target_count = 1;
+  (void)ownership_plan_internal_add_operation(&plan, entry, op);
+  op = operation(OWNERSHIP_OP_DEFINE_SCALAR);
+  op.result = condition;
+  (void)ownership_plan_internal_add_operation(&plan, header, op);
+  op = operation(OWNERSHIP_OP_BRANCH);
+  op.operand = condition;
+  op.targets[0] = body;
+  op.targets[1] = exit;
+  op.target_count = 2;
+  (void)ownership_plan_internal_add_operation(&plan, header, op);
+  op = operation(OWNERSHIP_OP_BORROW);
+  op.operand = source;
+  op.result = loan;
+  (void)ownership_plan_internal_add_operation(&plan, body, op);
+  op = operation(OWNERSHIP_OP_HOLD);
+  op.operand = loan;
+  op.result = held;
+  op.callee = 0;
+  op.parameter_index = 0;
+  (void)ownership_plan_internal_add_operation(&plan, body, op);
+  op = operation(OWNERSHIP_OP_DEFINE_SCALAR);
+  op.result = index;
+  (void)ownership_plan_internal_add_operation(&plan, body, op);
+  operands[0] = held;
+  operands[1] = index;
+  operands[2] = index;
+  op = operation(OWNERSHIP_OP_CALL);
+  op.callee = 0;
+  op.operands = operands;
+  op.operand_count = 3;
+  op.result = result;
+  (void)ownership_plan_internal_add_operation(&plan, body, op);
+  op = operation(OWNERSHIP_OP_RELEASE);
+  op.operand = held;
+  (void)ownership_plan_internal_add_operation(&plan, body, op);
+  op.operand = result;
+  (void)ownership_plan_internal_add_operation(&plan, body, op);
+  op = operation(OWNERSHIP_OP_JUMP);
+  op.targets[0] = header;
+  op.target_count = 1;
+  (void)ownership_plan_internal_add_operation(&plan, body, op);
+  op = operation(OWNERSHIP_OP_RELEASE);
+  op.operand = source;
+  (void)ownership_plan_internal_add_operation(&plan, exit, op);
+  op = operation(OWNERSHIP_OP_RETURN);
+  (void)ownership_plan_internal_add_operation(&plan, exit, op);
+  expect(ownership_plan_internal_verify_and_seal(&plan, &diagnostic),
+         "duplicate scalar call operands share one capture and end once "
+         "before the backedge");
+  ownership_plan_internal_destroy(&plan);
+}
+
 static void test_unsupported_semantic_op_rejected(void) {
   sir_function semantic;
   sir_diagnostic semantic_diagnostic;
@@ -651,7 +936,11 @@ int main(void) {
   test_slot_owner_join_accepts_distinct_backing_tokens();
   test_live_branch_loan_join_rejected();
   test_use_after_move_rejected();
+  test_loop_backedge_requires_body_cleanup();
+  test_loop_backedge_rejects_live_loan();
+  test_loop_use_after_move_rejected();
   test_malformed_call_frames_rejected();
+  test_duplicate_scalar_call_capture_ends_once();
   test_unsupported_semantic_op_rejected();
   if (failures != 0) {
     fprintf(stderr, "%d ownership plan test(s) failed\n", failures);

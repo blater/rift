@@ -944,15 +944,17 @@ static int validate_static_structure(const ownership_plan *plan,
                 parameter->representation ||
             preparation == NULL ||
             (parameter->mode == SIR_ARGUMENT_SCALAR &&
-             plan->tokens[call->operands[argument_index]].kind !=
-                 OWNERSHIP_TOKEN_SCALAR) ||
+             (plan->tokens[call->operands[argument_index]].kind !=
+                  OWNERSHIP_TOKEN_SCALAR ||
+              plan->tokens[call->operands[argument_index]].origin_kind ==
+                  OWNERSHIP_ORIGIN_SLOT)) ||
             (parameter->mode != SIR_ARGUMENT_SCALAR &&
              ((preparation->kind != OWNERSHIP_OP_HOLD &&
                preparation->kind != OWNERSHIP_OP_MOVE) ||
               preparation->callee != call->callee ||
               preparation->parameter_index != argument_index)) ||
             (has_previous_definition &&
-             definition_index <= previous_definition)) {
+             definition_index < previous_definition)) {
           set_diagnostic(diagnostic, OWNERSHIP_DIAGNOSTIC_INVALID_OPERATION,
                          block_index, operation_index,
                          call->operands[argument_index],
@@ -1019,6 +1021,10 @@ static int process_operation(const ownership_plan *plan,
           state->states[operation->operand] != OWNERSHIP_STATE_SCALAR) {
         break;
       }
+      if (plan->tokens[operation->operand].origin_kind !=
+          OWNERSHIP_ORIGIN_SLOT) {
+        state->states[operation->operand] = OWNERSHIP_STATE_RELEASED;
+      }
       return 1;
     }
     if (state->states[operation->result] != OWNERSHIP_STATE_OWNED ||
@@ -1064,6 +1070,10 @@ static int process_operation(const ownership_plan *plan,
       break;
     }
     state->states[operation->result] = OWNERSHIP_STATE_SCALAR;
+    if (plan->tokens[operation->result].origin_kind == OWNERSHIP_ORIGIN_SLOT &&
+        plan->tokens[operation->operand].origin_kind != OWNERSHIP_ORIGIN_SLOT) {
+      state->states[operation->operand] = OWNERSHIP_STATE_RELEASED;
+    }
     return 1;
   case OWNERSHIP_OP_BORROW:
     if (!require_uninitialized(state, operation->result, block_index,
@@ -1186,13 +1196,28 @@ static int process_operation(const ownership_plan *plan,
         return 0;
       }
     }
+    for (argument_index = 0; argument_index < operation->operand_count;
+         argument_index++) {
+      ownership_id argument = operation->operands[argument_index];
+      size_t earlier;
+      if (plan->tokens[argument].kind != OWNERSHIP_TOKEN_SCALAR)
+        continue;
+      for (earlier = 0; earlier < argument_index; earlier++) {
+        if (operation->operands[earlier] == argument)
+          break;
+      }
+      if (earlier == argument_index)
+        state->states[argument] = OWNERSHIP_STATE_RELEASED;
+    }
     state->states[operation->result] = OWNERSHIP_STATE_OWNED;
     return 1;
   }
   case OWNERSHIP_OP_BRANCH:
     if (operation->target_count == 2 &&
         state->states[operation->operand] == OWNERSHIP_STATE_SCALAR &&
-        plan->tokens[operation->operand].type.kind == SIR_TYPE_BOOL) {
+        plan->tokens[operation->operand].type.kind == SIR_TYPE_BOOL &&
+        plan->tokens[operation->operand].origin_kind != OWNERSHIP_ORIGIN_SLOT) {
+      state->states[operation->operand] = OWNERSHIP_STATE_RELEASED;
       return 1;
     }
     break;

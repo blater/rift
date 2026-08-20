@@ -1,0 +1,12 @@
+sub unsupported(bool enter, string value) returns string {
+  while enter {
+    for i := 1 to 2 {
+      value := value;
+    }
+    enter := false;
+  }
+  return value;
+}
+
+sub main() {
+}

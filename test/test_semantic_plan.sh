@@ -68,7 +68,7 @@ gcc -Werror -Wall -Wextra -Wno-sign-compare -pedantic \
   -o "$WORK/host.exe"
 [ "$("$WORK/host.exe")" = "hello" ] || fail "plan-emitted host function returned the wrong string"
 
-if "$ROOT/riftc" "$ROOT/test/fixtures/semantic_plan_unsupported.rift" \
+if "$ROOT/riftc" "$ROOT/test/fixtures/semantic_plan_while_unsupported.rift" \
     "$WORK/unsupported" --target=gcc --semantic-plan \
     --component-manifest="$ROOT/src/lib/components.manifest" \
     >"$WORK/unsupported.log" 2>&1; then
@@ -396,5 +396,113 @@ for rejected_intrinsic in arity type; do
   [ ! -s "$WORK/intrinsic-$rejected_intrinsic.c" ] ||
     fail "unsupported intrinsic $rejected_intrinsic emitted partial C"
 done
+
+"$ROOT/riftc" "$ROOT/test/fixtures/semantic_plan_while.rift" \
+  "$WORK/while" --target=gcc --semantic-plan \
+  --component-manifest="$ROOT/src/lib/components.manifest"
+once_body=$(awk '/^string rift_plan_body_0\(/ { seen++ }
+                 seen == 2 { print }
+                 seen == 2 && /^}$/ { exit }' "$WORK/while.c")
+printf '%s\n' "$once_body" | awk '
+  /rift_plan_block_1:/ { header = NR }
+  header && /int rift_plan_tmp_.* = rift_plan_slot_0;/ { captured = NR }
+  captured && /if \(rift_plan_tmp_.*\) goto rift_plan_block_2; else goto rift_plan_block_3;/ {
+    branched = NR
+  }
+  END { exit header < captured && captured < branched ? 0 : 1 }
+' || fail "while header did not capture and test its condition exactly once"
+[ "$(printf '%s\n' "$once_body" | grep -c '= rift_plan_slot_0;')" -eq 1 ] ||
+  fail "while condition was evaluated more than once in its header"
+printf '%s\n' "$once_body" | awk '
+  /__string_release\(rift_plan_slot_3\);/ {
+    if (getline > 0 && /goto rift_plan_block_1;/) cleaned++
+  }
+  END { exit cleaned == 1 ? 0 : 1 }
+' || fail "while body-local string was not ended before the backedge"
+printf '%s\n' "$once_body" | awk '
+  /__substring_range\(&/ { rhs = NR }
+  /__string_release\(rift_plan_slot_2\);/ { if (rhs && rhs < NR) released = NR }
+  /rift_plan_slot_2 = rift_plan_tmp_/ {
+    if (released && released < NR) assigned++
+  }
+  END { exit assigned == 1 ? 0 : 1 }
+' || fail "loop replacement did not evaluate RHS before replacing the outer owner"
+printf '%s\n' "$once_body" | grep -q \
+  'if (rift_plan_tmp_.*) goto rift_plan_block_2; else goto rift_plan_block_3;' ||
+  fail "while zero-iteration exit was not the header false edge"
+
+nested_body=$(awk '/^string rift_plan_body_1\(/ { seen++ }
+                   seen == 2 { print }
+                   seen == 2 && /^}$/ { exit }' "$WORK/while.c")
+printf '%s\n' "$nested_body" | awk '
+  /__string_release\(rift_plan_slot_5\);/ {
+    if (getline > 0 && /goto rift_plan_block_4;/) inner++
+  }
+  /__string_release\(rift_plan_slot_4\);/ {
+    if (getline > 0 && /goto rift_plan_block_1;/) outer++
+  }
+  END { exit inner == 1 && outer == 1 ? 0 : 1 }
+' || fail "nested loop locals were not ended at their respective backedges"
+inner_header=$(printf '%s\n' "$nested_body" | grep -n 'rift_plan_block_4:' | cut -d: -f1)
+outer_release=$(printf '%s\n' "$nested_body" | grep -n '__string_release(rift_plan_slot_4);' | cut -d: -f1)
+[ "$inner_header" -lt "$outer_release" ] ||
+  fail "outer-body owner was not preserved through the inner loop"
+
+early_body=$(awk '/^string rift_plan_body_2\(/ { seen++ }
+                  seen == 2 { print }
+                  seen == 2 && /^}$/ { exit }' "$WORK/while.c")
+printf '%s\n' "$early_body" | awk '
+  /__substring_range\(&/ { produced = NR }
+  /__string_release\(rift_plan_slot_3\);/ { local = NR }
+  /__string_release\(rift_plan_slot_2\);/ { outer = NR }
+  /__string_release\(rift_plan_slot_1\);/ { parameter = NR }
+  /^return rift_plan_tmp_/ { returned = NR }
+  END {
+    exit produced < local && local < outer && outer < parameter &&
+         parameter < returned ? 0 : 1
+  }
+' || fail "early loop return did not reverse-unwind body and outer owners"
+
+exercise_body=$(awk '/^string rift_plan_body_3\(/ { seen++ }
+                     seen == 2 { print }
+                     seen == 2 && /^}$/ { exit }' "$WORK/while.c")
+[ "$(printf '%s\n' "$exercise_body" | grep -c '= rift_plan_body_0(')" -eq 2 ] ||
+  fail "zero- and one-iteration calls did not share the selected loop body"
+printf '%s\n' "$exercise_body" | grep -q 'int rift_plan_tmp_.* = 0;' ||
+  fail "zero-iteration runtime bool input was not emitted"
+printf '%s\n' "$exercise_body" | grep -q 'int rift_plan_tmp_.* = 1;' ||
+  fail "one-iteration runtime bool input was not emitted"
+if printf '%s\n%s\n%s\n%s\n' "$once_body" "$nested_body" "$early_body" \
+    "$exercise_body" | grep -Eq '__strtmp_|__bm_|selected body entered legacy'; then
+  fail "selected while body entered legacy AST lowering"
+fi
+
+gcc -Werror -Wall -Wextra -Wno-sign-compare -pedantic \
+  -I"$ROOT/src/lib" -I"$ROOT/src/ext/lib" \
+  "$WORK/while.c" \
+  "$ROOT/src/lib/arena_host.c" "$ROOT/src/lib/pools.c" \
+  "$ROOT/src/lib/fundefs.c" "$ROOT/src/lib/termination.c" \
+  "$ROOT/src/lib/print_bytes.c" "$ROOT/src/lib/error_sink.c" \
+  "$ROOT/src/lib/host_caps.c" "$ROOT/src/lib/host/termbox2_impl.c" \
+  -o "$WORK/while.exe"
+[ "$("$WORK/while.exe")" = "aba" ] ||
+  fail "zero/one/nested/early while paths returned the wrong value"
+sed 's/rift_pools_init(NULL);/rift_arena_options rift_test_arena = { .memory_max = 1024, .memory_max_present = 1 }; rift_pools_init(\&rift_test_arena);/' \
+  "$WORK/while.c" >"$WORK/while-constrained.c"
+gcc -Werror -Wall -Wextra -Wno-sign-compare -pedantic \
+  -I"$ROOT/src/lib" -I"$ROOT/src/ext/lib" \
+  "$WORK/while-constrained.c" \
+  "$ROOT/src/lib/arena_host.c" "$ROOT/src/lib/pools.c" \
+  "$ROOT/src/lib/fundefs.c" "$ROOT/src/lib/termination.c" \
+  "$ROOT/src/lib/print_bytes.c" "$ROOT/src/lib/error_sink.c" \
+  "$ROOT/src/lib/host_caps.c" "$ROOT/src/lib/host/termbox2_impl.c" \
+  -o "$WORK/while-constrained.exe"
+[ "$("$WORK/while-constrained.exe")" = "aba" ] ||
+  fail "while ownership did not reuse a 1 KiB arena across 200 iterations"
+"$ROOT/riftc" "$ROOT/test/fixtures/semantic_plan_while.rift" \
+  "$WORK/while-zxn" --target=zxn --semantic-plan \
+  --component-manifest="$ROOT/src/lib/components.manifest"
+zcc +zxn -vn -c -clib=sdcc_iy -I"$ROOT/src/lib" \
+  "$WORK/while-zxn.c" -o "$WORK/while-zxn.o"
 
 echo "PASS: semantic-plan generated-C seam"

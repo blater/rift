@@ -1,0 +1,47 @@
+sub once(bool enter, string seed) returns string {
+  string result := seed;
+  while enter {
+    string local := concat(result, result);
+    result := substring(local, 1, 3);
+    enter := false;
+  }
+  return result;
+}
+
+sub nested(bool outer, bool inner, string seed) returns string {
+  string result := seed;
+  while outer {
+    string outer_local := concat(result, result);
+    while inner {
+      string inner_local := substring(outer_local, 1, 3);
+      result := inner_local;
+      inner := false;
+    }
+    outer := false;
+  }
+  return result;
+}
+
+sub early(bool enter, string seed) returns string {
+  string result := seed;
+  while enter {
+    string local := concat(result, result);
+    return substring(local, 1, 3);
+  }
+  return result;
+}
+
+sub exercise(string seed) returns string {
+  string zero := once(false, seed);
+  string one := once(true, zero);
+  string deep := nested(true, true, one);
+  return early(true, deep);
+}
+
+sub main() {
+  string result := "";
+  for i := 1 to 200 {
+    result := exercise("ab");
+  }
+  print(result);
+}

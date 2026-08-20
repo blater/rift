@@ -734,6 +734,60 @@ static int lower_if(lower_state *state, ast_t statement, int *terminated) {
   return 1;
 }
 
+static int lower_while(lower_state *state, ast_t statement, int *terminated) {
+  sir_id header_block;
+  sir_id body_block;
+  sir_id exit_block;
+  sir_id condition;
+  sir_operation branch;
+  int body_terminated;
+
+  header_block = sir_function_add_block(&state->function);
+  body_block = sir_function_add_block(&state->function);
+  exit_block = sir_function_add_block(&state->function);
+  if (header_block == SIR_INVALID_ID || body_block == SIR_INVALID_ID ||
+      exit_block == SIR_INVALID_ID) {
+    lower_error(state, SIR_DIAGNOSTIC_ALLOCATION_FAILED,
+                "could not allocate while blocks");
+    return 0;
+  }
+  if (!append_jump(state, state->block, header_block))
+    return 0;
+
+  state->block = header_block;
+  condition = lower_expression(state, statement->data.while_loop.condition);
+  if (condition == SIR_INVALID_ID ||
+      state->function.values[condition].type.kind != SIR_TYPE_BOOL ||
+      state->function.values[condition].representation != SIR_REP_SCALAR ||
+      state->function.values[condition].ownership != SIR_OWNERSHIP_SCALAR) {
+    lower_error(state, SIR_DIAGNOSTIC_TYPE_MISMATCH,
+                "while condition must be a bool scalar value");
+    return 0;
+  }
+  branch = empty_operation(SIR_OP_BRANCH);
+  branch.operands = &condition;
+  branch.operand_count = 1;
+  branch.targets[0] = body_block;
+  branch.targets[1] = exit_block;
+  branch.target_count = 2;
+  if (!sir_block_add_operation(&state->function, header_block, &branch)) {
+    lower_error(state, SIR_DIAGNOSTIC_ALLOCATION_FAILED,
+                "could not append while branch");
+    return 0;
+  }
+
+  state->block = body_block;
+  if (!lower_scoped_body(state, statement->data.while_loop.statement,
+                         &body_terminated))
+    return 0;
+  if (!body_terminated && !append_jump(state, state->block, header_block))
+    return 0;
+
+  state->block = exit_block;
+  *terminated = 0;
+  return 1;
+}
+
 static int lower_statement(lower_state *state, ast_t statement,
                            int *terminated) {
   *terminated = 0;
@@ -749,6 +803,8 @@ static int lower_statement(lower_state *state, ast_t statement,
   }
   if (statement != NULL && statement->tag == ifstmt)
     return lower_if(state, statement, terminated);
+  if (statement != NULL && statement->tag == while_loop)
+    return lower_while(state, statement, terminated);
   if (statement != NULL && statement->tag == funcall) {
     sir_id discarded = lower_call(state, statement);
     sir_operation boundary;

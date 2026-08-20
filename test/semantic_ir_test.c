@@ -85,6 +85,72 @@ static ast_t build_echo_function(node_t *nodes, token_t *arguments,
   return function;
 }
 
+static ast_t build_while_function(node_t *nodes, token_t *arguments,
+                                  ast_t *types, ast_t *body_statements,
+                                  ast_t *loop_statements) {
+  node_t *bool_type = &nodes[0];
+  node_t *string_type = &nodes[1];
+  node_t *condition = &nodes[2];
+  node_t *false_value = &nodes[3];
+  node_t *assignment_target = &nodes[4];
+  node_t *assignment = &nodes[5];
+  node_t *loop_body = &nodes[6];
+  node_t *while_statement = &nodes[7];
+  node_t *return_value = &nodes[8];
+  node_t *return_statement = &nodes[9];
+  node_t *body = &nodes[10];
+  node_t *function = &nodes[11];
+
+  memset(nodes, 0, 12 * sizeof(*nodes));
+  memset(arguments, 0, 2 * sizeof(*arguments));
+  bool_type->tag = type;
+  bool_type->data.type.name = named_token("bool");
+  string_type->tag = type;
+  string_type->data.type.name = named_token("string");
+  condition->tag = identifier;
+  condition->data.identifier.id = named_token("enter");
+  false_value->tag = identifier;
+  false_value->data.identifier.id = named_token("false");
+  assignment_target->tag = identifier;
+  assignment_target->data.identifier.id = named_token("enter");
+  assignment->tag = assign;
+  assignment->data.assign.target = assignment_target;
+  assignment->data.assign.expr = false_value;
+  loop_statements[0] = assignment;
+  loop_body->tag = compound;
+  loop_body->data.compound.stmts.data = loop_statements;
+  loop_body->data.compound.stmts.length = 1;
+  loop_body->data.compound.stmts.capacity = 1;
+  while_statement->tag = while_loop;
+  while_statement->data.while_loop.condition = condition;
+  while_statement->data.while_loop.statement = loop_body;
+  return_value->tag = identifier;
+  return_value->data.identifier.id = named_token("value");
+  return_statement->tag = ret;
+  return_statement->data.ret.expr = return_value;
+  body_statements[0] = while_statement;
+  body_statements[1] = return_statement;
+  body->tag = compound;
+  body->data.compound.stmts.data = body_statements;
+  body->data.compound.stmts.length = 2;
+  body->data.compound.stmts.capacity = 2;
+  arguments[0] = named_token("enter");
+  arguments[1] = named_token("value");
+  types[0] = bool_type;
+  types[1] = string_type;
+  function->tag = fundef;
+  function->data.fundef.name = named_token("loop_once");
+  function->data.fundef.args.data = arguments;
+  function->data.fundef.args.length = 2;
+  function->data.fundef.args.capacity = 2;
+  function->data.fundef.types.data = types;
+  function->data.fundef.types.length = 2;
+  function->data.fundef.types.capacity = 2;
+  function->data.fundef.body = body;
+  function->data.fundef.ret_type = string_type;
+  return function;
+}
+
 static void test_inactive_gate(void) {
   node_t nodes[7];
   token_t arguments[1];
@@ -136,6 +202,54 @@ static void test_representative_function(void) {
              function.blocks[0].operations[0].effects.known,
          "semantic values carry exact type, representation, ownership, and "
          "effect");
+  sir_function_destroy(&function);
+}
+
+static void test_while_cfg_lowering(void) {
+  node_t nodes[12];
+  token_t arguments[2];
+  ast_t types[2];
+  ast_t body_statements[2];
+  ast_t loop_statements[1];
+  sir_function function;
+  sir_lower_options options = sir_lower_default_options();
+  sir_diagnostic diagnostic;
+  ast_t ast = build_while_function(nodes, arguments, types, body_statements,
+                                   loop_statements);
+
+  sir_function_init(&function);
+  options.enabled = 1;
+  expect(sir_lower_function(ast, &options, &function, &diagnostic) ==
+             SIR_LOWER_OK,
+         "while function lowers through the semantic gate");
+  expect(sir_verify_function(&function, NULL, &diagnostic),
+         "while semantic CFG verifies");
+  expect(function.block_count == 4 && function.blocks[0].operation_count == 1 &&
+             function.blocks[0].operations[0].kind == SIR_OP_JUMP &&
+             function.blocks[0].operations[0].targets[0] == 1 &&
+             function.blocks[1].operation_count == 2 &&
+             function.blocks[1].operations[0].kind == SIR_OP_LOAD_SLOT &&
+             function.blocks[1].operations[1].kind == SIR_OP_BRANCH &&
+             function.blocks[1].operations[1].targets[0] == 2 &&
+             function.blocks[1].operations[1].targets[1] == 3 &&
+             function.blocks[2].operations[0].kind == SIR_OP_CONSTANT &&
+             function.blocks[2].operations[1].kind == SIR_OP_ASSIGN_SLOT &&
+             function.blocks[2].operations[2].kind == SIR_OP_JUMP &&
+             function.blocks[2].operations[2].targets[0] == 1 &&
+             function.blocks[3].operations[0].kind == SIR_OP_BORROW_SLOT &&
+             function.blocks[3].operations[1].kind == SIR_OP_RETURN,
+         "while CFG captures one condition per header visit and exits only "
+         "through its false edge");
+  sir_function_destroy(&function);
+
+  sir_function_init(&function);
+  ast = build_while_function(nodes, arguments, types, body_statements,
+                             loop_statements);
+  nodes[2].data.identifier.id = named_token("value");
+  expect(sir_lower_function(ast, &options, &function, &diagnostic) ==
+                 SIR_LOWER_ERROR &&
+             diagnostic.code == SIR_DIAGNOSTIC_TYPE_MISMATCH,
+         "while lowering rejects a non-bool condition before planning");
   sir_function_destroy(&function);
 }
 
@@ -578,6 +692,7 @@ static void test_intrinsic_registry_is_authoritative(void) {
 int main(void) {
   test_inactive_gate();
   test_representative_function();
+  test_while_cfg_lowering();
   test_lowerer_hard_errors();
   test_authoritative_call_abi();
   test_consuming_user_call_requires_prepared_arguments();

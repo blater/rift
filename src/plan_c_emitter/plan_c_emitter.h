@@ -10,6 +10,15 @@ typedef struct plan_c_abi {
   const char *string_type;
   const char *string_retain;
   const char *string_release;
+  const char *array_type;
+  const char *array_retain;
+  const char *array_release;
+  const char *string_array_make;
+  const char *string_array_push_copy;
+  const char *array_push_transfer;
+  const char *string_array_get;
+  const char *array_get;
+  const char *array_set;
 } plan_c_abi;
 
 typedef enum plan_c_diagnostic_code {

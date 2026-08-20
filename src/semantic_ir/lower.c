@@ -44,11 +44,19 @@ static int metadata_for_type(ast_t type_ast, sir_type *output_type,
                              sir_representation *representation,
                              sir_ownership *ownership) {
   string_view name;
-  if (type_ast == NULL || type_ast->tag != type ||
-      type_ast->data.type.is_array) {
+  if (type_ast == NULL || type_ast->tag != type) {
     return 0;
   }
   name = type_ast->data.type.name.lexeme;
+  if (type_ast->data.type.is_array) {
+    if (!view_is(name, "string") || type_ast->data.type.array_capacity != 0)
+      return 0;
+    output_type->kind = SIR_TYPE_ARRAY;
+    output_type->nominal_id = SIR_TYPE_STRING;
+    *representation = SIR_REP_MANAGED_HANDLE;
+    *ownership = SIR_OWNERSHIP_OWNED;
+    return 1;
+  }
   if (view_is(name, "void")) {
     *output_type = sir_builtin_type(SIR_TYPE_VOID);
     *representation = SIR_REP_NONE;
@@ -172,6 +180,7 @@ static sir_operation empty_operation(sir_op_kind kind) {
   operation.slot = SIR_INVALID_ID;
   operation.callee = SIR_INVALID_ID;
   operation.parameter_index = SIZE_MAX;
+  operation.array_input_mode = SIR_ARRAY_INPUT_UNKNOWN;
   operation.targets[0] = SIR_INVALID_ID;
   operation.targets[1] = SIR_INVALID_ID;
   return operation;
@@ -301,6 +310,195 @@ static sir_id lower_int_constant(lower_state *state, ast_t expression) {
 }
 
 static sir_id lower_expression(lower_state *state, ast_t expression);
+
+static int string_array_value(const sir_value *value) {
+  return value->type.kind == SIR_TYPE_ARRAY &&
+         value->type.nominal_id == SIR_TYPE_STRING &&
+         value->representation == SIR_REP_MANAGED_HANDLE &&
+         (value->ownership == SIR_OWNERSHIP_BORROWED ||
+          value->ownership == SIR_OWNERSHIP_OWNED);
+}
+
+static sir_effects array_effects(sir_op_kind kind) {
+  sir_effects effects = sir_effects_none();
+  effects.flags = SIR_EFFECT_CALL | SIR_EFFECT_TERMINATE;
+  if (kind == SIR_OP_ARRAY_NEW_STRING ||
+      kind == SIR_OP_ARRAY_APPEND_STRING ||
+      kind == SIR_OP_ARRAY_GET_STRING) {
+    effects.flags |= SIR_EFFECT_ALLOCATE | SIR_EFFECT_COLLECT;
+  }
+  if (kind == SIR_OP_ARRAY_APPEND_STRING ||
+      kind == SIR_OP_ARRAY_REPLACE_STRING) {
+    effects.mutation = SIR_MUTATION_ARGUMENT;
+  }
+  return effects;
+}
+
+static sir_id prepare_owned(lower_state *state, sir_id source,
+                            sir_array_input_mode *mode) {
+  sir_value value;
+  sir_operation operation;
+  sir_id result;
+  if (source >= state->function.value_count ||
+      (state->function.values[source].ownership != SIR_OWNERSHIP_BORROWED &&
+       state->function.values[source].ownership != SIR_OWNERSHIP_OWNED)) {
+    lower_error(state, SIR_DIAGNOSTIC_TYPE_MISMATCH,
+                "managed array operand is not ownable");
+    return SIR_INVALID_ID;
+  }
+  value = state->function.values[source];
+  *mode = value.ownership == SIR_OWNERSHIP_BORROWED
+              ? SIR_ARRAY_INPUT_COPY_BORROWED
+              : SIR_ARRAY_INPUT_TRANSFER_OWNED;
+  value.ownership = SIR_OWNERSHIP_OWNED;
+  result = sir_function_add_value(&state->function, value);
+  if (result == SIR_INVALID_ID) {
+    lower_error(state, SIR_DIAGNOSTIC_ALLOCATION_FAILED,
+                "could not allocate prepared managed operand");
+    return SIR_INVALID_ID;
+  }
+  operation = empty_operation(SIR_OP_PREPARE_OWNED);
+  operation.result = result;
+  operation.array_input_mode = *mode;
+  operation.operands = &source;
+  operation.operand_count = 1;
+  if (!sir_block_add_operation(&state->function, state->block, &operation)) {
+    lower_error(state, SIR_DIAGNOSTIC_ALLOCATION_FAILED,
+                "could not append prepared managed operand");
+    return SIR_INVALID_ID;
+  }
+  return result;
+}
+
+static sir_id lower_array_new(lower_state *state, ast_t expression) {
+  sir_value value;
+  sir_operation operation;
+  sir_id result;
+  if (expression == NULL || expression->tag != literal ||
+      expression->data.literal.lit.type != TOK_ARR_DECL)
+    return SIR_INVALID_ID;
+  value.type.kind = SIR_TYPE_ARRAY;
+  value.type.nominal_id = SIR_TYPE_STRING;
+  value.representation = SIR_REP_MANAGED_HANDLE;
+  value.ownership = SIR_OWNERSHIP_OWNED;
+  result = sir_function_add_value(&state->function, value);
+  if (result == SIR_INVALID_ID) {
+    lower_error(state, SIR_DIAGNOSTIC_ALLOCATION_FAILED,
+                "could not allocate string-array value");
+    return SIR_INVALID_ID;
+  }
+  operation = empty_operation(SIR_OP_ARRAY_NEW_STRING);
+  operation.effects = array_effects(operation.kind);
+  operation.result = result;
+  if (!sir_block_add_operation(&state->function, state->block, &operation)) {
+    lower_error(state, SIR_DIAGNOSTIC_ALLOCATION_FAILED,
+                "could not append string-array construction");
+    return SIR_INVALID_ID;
+  }
+  return result;
+}
+
+static int unresolved_array_builtin(ast_funcall *call, const char *name,
+                                    size_t arity) {
+  return call->resolved_target == NULL && view_is(call->name.lexeme, name) &&
+         call->args.length >= 0 && (size_t)call->args.length == arity;
+}
+
+static sir_id lower_array_get(lower_state *state, ast_t expression) {
+  ast_funcall *call = &expression->data.funcall;
+  sir_id receiver;
+  sir_id held_receiver;
+  sir_id index;
+  sir_id result;
+  sir_id operands[2];
+  sir_value value;
+  sir_operation operation;
+  sir_array_input_mode ignored;
+  if (!unresolved_array_builtin(call, "get", 2))
+    return SIR_INVALID_ID;
+  receiver = lower_expression(state, call->args.data[0]);
+  if (receiver == SIR_INVALID_ID ||
+      !string_array_value(&state->function.values[receiver])) {
+    lower_error(state, SIR_DIAGNOSTIC_TYPE_MISMATCH,
+                "get requires a dynamic string array");
+    return SIR_INVALID_ID;
+  }
+  held_receiver = prepare_owned(state, receiver, &ignored);
+  index = lower_expression(state, call->args.data[1]);
+  if (held_receiver == SIR_INVALID_ID || index == SIR_INVALID_ID ||
+      state->function.values[index].type.kind != SIR_TYPE_INT ||
+      state->function.values[index].representation != SIR_REP_SCALAR) {
+    lower_error(state, SIR_DIAGNOSTIC_TYPE_MISMATCH,
+                "get index must be an int");
+    return SIR_INVALID_ID;
+  }
+  value.type = sir_builtin_type(SIR_TYPE_STRING);
+  value.representation = SIR_REP_STRING_DESCRIPTOR;
+  value.ownership = SIR_OWNERSHIP_OWNED;
+  result = sir_function_add_value(&state->function, value);
+  if (result == SIR_INVALID_ID)
+    return SIR_INVALID_ID;
+  operands[0] = held_receiver;
+  operands[1] = index;
+  operation = empty_operation(SIR_OP_ARRAY_GET_STRING);
+  operation.effects = array_effects(operation.kind);
+  operation.result = result;
+  operation.operands = operands;
+  operation.operand_count = 2;
+  if (!sir_block_add_operation(&state->function, state->block, &operation)) {
+    lower_error(state, SIR_DIAGNOSTIC_ALLOCATION_FAILED,
+                "could not append string-array get");
+    return SIR_INVALID_ID;
+  }
+  return result;
+}
+
+static int lower_array_append(lower_state *state, ast_t expression) {
+  ast_funcall *call = &expression->data.funcall;
+  sir_id receiver;
+  sir_id held_receiver;
+  sir_id source;
+  sir_id prepared;
+  sir_id operands[2];
+  sir_operation operation;
+  sir_array_input_mode ignored;
+  sir_array_input_mode mode;
+  if (!unresolved_array_builtin(call, "append", 2))
+    return 0;
+  receiver = lower_expression(state, call->args.data[0]);
+  if (receiver == SIR_INVALID_ID ||
+      !string_array_value(&state->function.values[receiver])) {
+    lower_error(state, SIR_DIAGNOSTIC_TYPE_MISMATCH,
+                "append requires a dynamic string array");
+    return -1;
+  }
+  held_receiver = prepare_owned(state, receiver, &ignored);
+  source = lower_expression(state, call->args.data[1]);
+  if (held_receiver == SIR_INVALID_ID || source == SIR_INVALID_ID ||
+      state->function.values[source].type.kind != SIR_TYPE_STRING ||
+      state->function.values[source].representation !=
+          SIR_REP_STRING_DESCRIPTOR) {
+    lower_error(state, SIR_DIAGNOSTIC_TYPE_MISMATCH,
+                "append value must be a string");
+    return -1;
+  }
+  prepared = prepare_owned(state, source, &mode);
+  if (prepared == SIR_INVALID_ID)
+    return -1;
+  operands[0] = held_receiver;
+  operands[1] = prepared;
+  operation = empty_operation(SIR_OP_ARRAY_APPEND_STRING);
+  operation.effects = array_effects(operation.kind);
+  operation.array_input_mode = mode;
+  operation.operands = operands;
+  operation.operand_count = 2;
+  if (!sir_block_add_operation(&state->function, state->block, &operation)) {
+    lower_error(state, SIR_DIAGNOSTIC_ALLOCATION_FAILED,
+                "could not append string-array append");
+    return -1;
+  }
+  return 1;
+}
 
 static int resolved_callee(const lower_state *state, ast_t definition,
                            sir_id *signature_id) {
@@ -482,6 +680,12 @@ static sir_id lower_expression(lower_state *state, ast_t expression) {
   if (expression->tag == literal &&
       expression->data.literal.lit.type == TOK_NUM_LIT)
     return lower_int_constant(state, expression);
+  if (expression->tag == literal &&
+      expression->data.literal.lit.type == TOK_ARR_DECL)
+    return lower_array_new(state, expression);
+  if (expression->tag == funcall &&
+      unresolved_array_builtin(&expression->data.funcall, "get", 2))
+    return lower_array_get(state, expression);
   if (expression->tag == funcall)
     return lower_call(state, expression);
   lower_error(state, SIR_DIAGNOSTIC_UNSUPPORTED_AST,
@@ -498,9 +702,18 @@ static int lower_vardef(lower_state *state, ast_t statement) {
   if (statement->data.vardef.is_rec ||
       !metadata_for_type(statement->data.vardef.type, &slot.type,
                          &slot.representation, &slot.ownership) ||
-      (slot.type.kind != SIR_TYPE_STRING && slot.type.kind != SIR_TYPE_BOOL)) {
+      (slot.type.kind != SIR_TYPE_STRING && slot.type.kind != SIR_TYPE_BOOL &&
+       slot.type.kind != SIR_TYPE_ARRAY)) {
     lower_error(state, SIR_DIAGNOSTIC_UNSUPPORTED_AST,
                 "representative lowerer requires an explicit builtin type");
+    return 0;
+  }
+  if (slot.type.kind == SIR_TYPE_ARRAY &&
+      (statement->data.vardef.expr == NULL ||
+       statement->data.vardef.expr->tag != literal ||
+       statement->data.vardef.expr->data.literal.lit.type != TOK_ARR_DECL)) {
+    lower_error(state, SIR_DIAGNOSTIC_UNSUPPORTED_AST,
+                "checkpoint arrays require direct dynamic construction");
     return 0;
   }
   source = lower_expression(state, statement->data.vardef.expr);
@@ -541,6 +754,67 @@ static int lower_assignment(lower_state *state, ast_t statement) {
   sir_id source;
   sir_slot *slot;
   sir_operation operation;
+  if (statement->data.assign.target != NULL &&
+      statement->data.assign.target->tag == arr_index) {
+    ast_arr_index *target = &statement->data.assign.target->data.arr_index;
+    sir_id receiver;
+    sir_id held_receiver;
+    sir_id index;
+    sir_id source;
+    sir_id prepared;
+    sir_id operands[3];
+    sir_array_input_mode ignored;
+    sir_array_input_mode mode;
+    if (target->array == NULL || target->array->tag != identifier ||
+        target->has_field || target->field_path.length != 0 ||
+        target->field_expr != NULL) {
+      lower_error(state, SIR_DIAGNOSTIC_UNSUPPORTED_AST,
+                  "checkpoint indexed assignment requires a simple array");
+      return 0;
+    }
+    receiver = lower_expression(state, target->array);
+    if (receiver == SIR_INVALID_ID ||
+        !string_array_value(&state->function.values[receiver])) {
+      lower_error(state, SIR_DIAGNOSTIC_TYPE_MISMATCH,
+                  "indexed assignment requires a dynamic string array");
+      return 0;
+    }
+    held_receiver = prepare_owned(state, receiver, &ignored);
+    index = lower_expression(state, target->index);
+    if (held_receiver == SIR_INVALID_ID || index == SIR_INVALID_ID ||
+        state->function.values[index].type.kind != SIR_TYPE_INT ||
+        state->function.values[index].representation != SIR_REP_SCALAR) {
+      lower_error(state, SIR_DIAGNOSTIC_TYPE_MISMATCH,
+                  "indexed assignment index must be an int");
+      return 0;
+    }
+    source = lower_expression(state, statement->data.assign.expr);
+    if (source == SIR_INVALID_ID ||
+        state->function.values[source].type.kind != SIR_TYPE_STRING ||
+        state->function.values[source].representation !=
+            SIR_REP_STRING_DESCRIPTOR) {
+      lower_error(state, SIR_DIAGNOSTIC_TYPE_MISMATCH,
+                  "indexed assignment value must be a string");
+      return 0;
+    }
+    prepared = prepare_owned(state, source, &mode);
+    if (prepared == SIR_INVALID_ID)
+      return 0;
+    operands[0] = held_receiver;
+    operands[1] = index;
+    operands[2] = prepared;
+    operation = empty_operation(SIR_OP_ARRAY_REPLACE_STRING);
+    operation.effects = array_effects(operation.kind);
+    operation.array_input_mode = mode;
+    operation.operands = operands;
+    operation.operand_count = 3;
+    if (!sir_block_add_operation(&state->function, state->block, &operation)) {
+      lower_error(state, SIR_DIAGNOSTIC_ALLOCATION_FAILED,
+                  "could not append indexed string-array assignment");
+      return 0;
+    }
+    return 1;
+  }
   if (statement->data.assign.target == NULL ||
       statement->data.assign.target->tag != identifier ||
       !binding_index(state,
@@ -1059,8 +1333,14 @@ static int lower_statement(lower_state *state, ast_t statement,
   if (statement != NULL && statement->tag == match)
     return lower_match(state, statement, terminated);
   if (statement != NULL && statement->tag == funcall) {
-    sir_id discarded = lower_call(state, statement);
+    int array_append = lower_array_append(state, statement);
+    sir_id discarded;
     sir_operation boundary;
+    if (array_append != 0)
+      return array_append > 0;
+    discarded = unresolved_array_builtin(&statement->data.funcall, "get", 2)
+                    ? lower_array_get(state, statement)
+                    : lower_call(state, statement);
     if (discarded == SIR_INVALID_ID)
       return 0;
     boundary = empty_operation(SIR_OP_EXPRESSION_END);
@@ -1136,12 +1416,13 @@ int sir_lower_signature(ast_t function_ast, uint32_t symbol_id,
             definition->types.data[index], &parameters[index].type,
             &parameters[index].representation, &parameters[index].ownership) ||
         (parameters[index].type.kind != SIR_TYPE_STRING &&
-         parameters[index].type.kind != SIR_TYPE_BOOL)) {
+         parameters[index].type.kind != SIR_TYPE_BOOL &&
+         parameters[index].type.kind != SIR_TYPE_ARRAY)) {
       free(parameters);
       if (diagnostic != NULL) {
         diagnostic->code = SIR_DIAGNOSTIC_TYPE_MISMATCH;
         diagnostic->message =
-            "checkpoint call parameters require string or bool values";
+            "checkpoint call parameters require string, bool, or string[] values";
       }
       return 0;
     }
@@ -1155,7 +1436,10 @@ int sir_lower_signature(ast_t function_ast, uint32_t symbol_id,
   signature->parameters = parameters;
   signature->parameter_count = (size_t)definition->types.length;
   signature->effects = sir_effects_none();
-  signature->effects.flags = SIR_EFFECT_CALL;
+  signature->effects.flags =
+      SIR_EFFECT_CALL | SIR_EFFECT_ALLOCATE | SIR_EFFECT_COLLECT |
+      SIR_EFFECT_TERMINATE;
+  signature->effects.mutation = SIR_MUTATION_ARGUMENT;
   signature->call_abi = SIR_CALL_ABI_C_RETURN_VALUE;
   return 1;
 }
@@ -1215,7 +1499,8 @@ sir_lower_result sir_lower_function(ast_t function_ast,
     if (!metadata_for_type(definition->types.data[index], &slot.type,
                            &slot.representation, &slot.ownership) ||
         (slot.type.kind != SIR_TYPE_STRING &&
-         slot.type.kind != SIR_TYPE_BOOL)) {
+         slot.type.kind != SIR_TYPE_BOOL &&
+         slot.type.kind != SIR_TYPE_ARRAY)) {
       lower_error(&state, SIR_DIAGNOSTIC_UNKNOWN_TYPE,
                   "parameter type is not resolved by this checkpoint");
       goto failure;

@@ -57,6 +57,7 @@ static ownership_operation empty_operation(ownership_op_kind kind) {
   operation.operand = OWNERSHIP_INVALID_ID;
   operation.callee = OWNERSHIP_INVALID_ID;
   operation.parameter_index = SIZE_MAX;
+  operation.array_input_mode = SIR_ARRAY_INPUT_UNKNOWN;
   operation.targets[0] = OWNERSHIP_INVALID_ID;
   operation.targets[1] = OWNERSHIP_INVALID_ID;
   return operation;
@@ -72,7 +73,9 @@ static int operation_defines_token(ownership_op_kind kind) {
          kind == OWNERSHIP_OP_DEFINE_SCALAR ||
          kind == OWNERSHIP_OP_COPY_SCALAR || kind == OWNERSHIP_OP_BORROW ||
          kind == OWNERSHIP_OP_HOLD || kind == OWNERSHIP_OP_MOVE ||
-         kind == OWNERSHIP_OP_CALL;
+         kind == OWNERSHIP_OP_CALL ||
+         kind == OWNERSHIP_OP_ARRAY_NEW_STRING ||
+         kind == OWNERSHIP_OP_ARRAY_GET_STRING;
 }
 
 static int static_operation_contract(const ownership_operation *operation) {
@@ -126,6 +129,39 @@ static int static_operation_contract(const ownership_operation *operation) {
            operation->callee != OWNERSHIP_INVALID_ID &&
            operation->parameter_index == SIZE_MAX &&
            (operation->operand_count == 0 || operation->operands != NULL) &&
+           operation->target_count == 0;
+  case OWNERSHIP_OP_ARRAY_NEW_STRING:
+    return operation->result != OWNERSHIP_INVALID_ID &&
+           operation->operand == OWNERSHIP_INVALID_ID &&
+           operation->callee == OWNERSHIP_INVALID_ID &&
+           operation->parameter_index == SIZE_MAX &&
+           operation->array_input_mode == SIR_ARRAY_INPUT_UNKNOWN &&
+           operation->operand_count == 0 && operation->target_count == 0;
+  case OWNERSHIP_OP_ARRAY_APPEND_STRING:
+    return operation->result == OWNERSHIP_INVALID_ID &&
+           operation->operand == OWNERSHIP_INVALID_ID &&
+           operation->callee == OWNERSHIP_INVALID_ID &&
+           operation->parameter_index == SIZE_MAX &&
+           operation->array_input_mode > SIR_ARRAY_INPUT_UNKNOWN &&
+           operation->array_input_mode <= SIR_ARRAY_INPUT_TRANSFER_OWNED &&
+           operation->operand_count == 2 && operation->operands != NULL &&
+           operation->target_count == 0;
+  case OWNERSHIP_OP_ARRAY_GET_STRING:
+    return operation->result != OWNERSHIP_INVALID_ID &&
+           operation->operand == OWNERSHIP_INVALID_ID &&
+           operation->callee == OWNERSHIP_INVALID_ID &&
+           operation->parameter_index == SIZE_MAX &&
+           operation->array_input_mode == SIR_ARRAY_INPUT_UNKNOWN &&
+           operation->operand_count == 2 && operation->operands != NULL &&
+           operation->target_count == 0;
+  case OWNERSHIP_OP_ARRAY_REPLACE_STRING:
+    return operation->result == OWNERSHIP_INVALID_ID &&
+           operation->operand == OWNERSHIP_INVALID_ID &&
+           operation->callee == OWNERSHIP_INVALID_ID &&
+           operation->parameter_index == SIZE_MAX &&
+           operation->array_input_mode > SIR_ARRAY_INPUT_UNKNOWN &&
+           operation->array_input_mode <= SIR_ARRAY_INPUT_TRANSFER_OWNED &&
+           operation->operand_count == 3 && operation->operands != NULL &&
            operation->target_count == 0;
   case OWNERSHIP_OP_JUMP:
     return operation->result == OWNERSHIP_INVALID_ID &&
@@ -616,6 +652,57 @@ ownership_plan *ownership_plan_build(const sir_function *function,
         operation.callee = source->callee;
         operation.parameter_index = source->parameter_index;
         break;
+      case SIR_OP_PREPARE_OWNED:
+        source_token = value_tokens[source->operands[0]];
+        operation =
+            empty_operation(function->values[source->operands[0]].ownership ==
+                                    SIR_OWNERSHIP_BORROWED
+                                ? OWNERSHIP_OP_HOLD
+                                : OWNERSHIP_OP_MOVE);
+        operation.operand = source_token;
+        operation.result = value_tokens[source->result];
+        operation.array_input_mode = source->array_input_mode;
+        break;
+      case SIR_OP_ARRAY_NEW_STRING:
+        operation = empty_operation(OWNERSHIP_OP_ARRAY_NEW_STRING);
+        operation.result = value_tokens[source->result];
+        break;
+      case SIR_OP_ARRAY_APPEND_STRING:
+      case SIR_OP_ARRAY_GET_STRING:
+      case SIR_OP_ARRAY_REPLACE_STRING: {
+        size_t operand_index;
+        if (source->kind == SIR_OP_ARRAY_APPEND_STRING)
+          operation =
+              empty_operation(OWNERSHIP_OP_ARRAY_APPEND_STRING);
+        else if (source->kind == SIR_OP_ARRAY_GET_STRING)
+          operation = empty_operation(OWNERSHIP_OP_ARRAY_GET_STRING);
+        else
+          operation =
+              empty_operation(OWNERSHIP_OP_ARRAY_REPLACE_STRING);
+        if (source->result != SIR_INVALID_ID)
+          operation.result = value_tokens[source->result];
+        operation.array_input_mode = source->array_input_mode;
+        operation.operand_count = source->operand_count;
+        operation.operands =
+            malloc(source->operand_count * sizeof(*operation.operands));
+        if (operation.operands == NULL) {
+          set_diagnostic(diagnostic, OWNERSHIP_DIAGNOSTIC_ALLOCATION_FAILED,
+                         block_index, index, OWNERSHIP_INVALID_ID,
+                         "could not allocate ownership array operands");
+          goto failure;
+        }
+        for (operand_index = 0; operand_index < source->operand_count;
+             operand_index++) {
+          operation.operands[operand_index] =
+              value_tokens[source->operands[operand_index]];
+        }
+        if (!append_or_fail(built, block, operation, diagnostic)) {
+          free(operation.operands);
+          goto failure;
+        }
+        free(operation.operands);
+        continue;
+      }
       case SIR_OP_CALL: {
         size_t argument_index;
         operation = empty_operation(OWNERSHIP_OP_CALL);
@@ -897,6 +984,40 @@ static int validate_static_structure(const ownership_plan *plan,
       size_t argument_index;
       size_t previous_definition = 0;
       int has_previous_definition = 0;
+      if (call->kind == OWNERSHIP_OP_ARRAY_APPEND_STRING ||
+          call->kind == OWNERSHIP_OP_ARRAY_REPLACE_STRING) {
+        ownership_id receiver = call->operands[0];
+        ownership_id value = call->operands[call->operand_count - 1];
+        const ownership_operation *preparation = NULL;
+        size_t definition_index;
+        for (definition_index = 0; definition_index < operation_index;
+             definition_index++) {
+          const ownership_operation *candidate =
+              &block->operations[definition_index];
+          if (operation_defines_token(candidate->kind) &&
+              candidate->result == value) {
+            preparation = candidate;
+            break;
+          }
+        }
+        if (plan->tokens[receiver].type.kind != SIR_TYPE_ARRAY ||
+            plan->tokens[receiver].type.nominal_id != SIR_TYPE_STRING ||
+            plan->tokens[value].type.kind != SIR_TYPE_STRING ||
+            preparation == NULL ||
+            (call->array_input_mode == SIR_ARRAY_INPUT_COPY_BORROWED &&
+             (preparation->kind != OWNERSHIP_OP_HOLD ||
+              preparation->array_input_mode !=
+                  SIR_ARRAY_INPUT_COPY_BORROWED)) ||
+            (call->array_input_mode == SIR_ARRAY_INPUT_TRANSFER_OWNED &&
+             (preparation->kind != OWNERSHIP_OP_MOVE ||
+              preparation->array_input_mode !=
+                  SIR_ARRAY_INPUT_TRANSFER_OWNED))) {
+          set_diagnostic(diagnostic, OWNERSHIP_DIAGNOSTIC_INVALID_OPERATION,
+                         block_index, operation_index, value,
+                         "array input mode does not match its sealed preparation");
+          return 0;
+        }
+      }
       if (call->kind != OWNERSHIP_OP_CALL)
         continue;
       if (call->callee >= plan->callee_count ||
@@ -1210,6 +1331,65 @@ static int process_operation(const ownership_plan *plan,
         state->states[argument] = OWNERSHIP_STATE_RELEASED;
     }
     state->states[operation->result] = OWNERSHIP_STATE_OWNED;
+    return 1;
+  }
+  case OWNERSHIP_OP_ARRAY_NEW_STRING:
+    if (!require_uninitialized(state, operation->result, block_index,
+                               operation_index, diagnostic) ||
+        plan->tokens[operation->result].kind != OWNERSHIP_TOKEN_MANAGED ||
+        plan->tokens[operation->result].type.kind != SIR_TYPE_ARRAY ||
+        plan->tokens[operation->result].type.nominal_id != SIR_TYPE_STRING) {
+      break;
+    }
+    state->states[operation->result] = OWNERSHIP_STATE_OWNED;
+    return 1;
+  case OWNERSHIP_OP_ARRAY_APPEND_STRING:
+  case OWNERSHIP_OP_ARRAY_REPLACE_STRING: {
+    ownership_id receiver = operation->operands[0];
+    ownership_id value = operation->operands[operation->operand_count - 1];
+    if (state->states[receiver] != OWNERSHIP_STATE_OWNED ||
+        plan->tokens[receiver].type.kind != SIR_TYPE_ARRAY ||
+        plan->tokens[receiver].type.nominal_id != SIR_TYPE_STRING ||
+        state->states[value] != OWNERSHIP_STATE_OWNED ||
+        plan->tokens[value].type.kind != SIR_TYPE_STRING ||
+        has_live_borrow(plan, state, receiver) ||
+        has_live_borrow(plan, state, value)) {
+      break;
+    }
+    if (operation->kind == OWNERSHIP_OP_ARRAY_REPLACE_STRING) {
+      ownership_id index = operation->operands[1];
+      if (state->states[index] != OWNERSHIP_STATE_SCALAR ||
+          plan->tokens[index].type.kind != SIR_TYPE_INT)
+        break;
+      if (plan->tokens[index].origin_kind != OWNERSHIP_ORIGIN_SLOT)
+        state->states[index] = OWNERSHIP_STATE_RELEASED;
+    }
+    state->states[value] =
+        operation->kind == OWNERSHIP_OP_ARRAY_APPEND_STRING &&
+                operation->array_input_mode ==
+                    SIR_ARRAY_INPUT_COPY_BORROWED
+            ? OWNERSHIP_STATE_RELEASED
+            : OWNERSHIP_STATE_MOVED;
+    state->states[receiver] = OWNERSHIP_STATE_RELEASED;
+    return 1;
+  }
+  case OWNERSHIP_OP_ARRAY_GET_STRING: {
+    ownership_id receiver = operation->operands[0];
+    ownership_id index = operation->operands[1];
+    if (!require_uninitialized(state, operation->result, block_index,
+                               operation_index, diagnostic) ||
+        state->states[receiver] != OWNERSHIP_STATE_OWNED ||
+        plan->tokens[receiver].type.kind != SIR_TYPE_ARRAY ||
+        plan->tokens[receiver].type.nominal_id != SIR_TYPE_STRING ||
+        state->states[index] != OWNERSHIP_STATE_SCALAR ||
+        plan->tokens[index].type.kind != SIR_TYPE_INT ||
+        plan->tokens[operation->result].type.kind != SIR_TYPE_STRING) {
+      break;
+    }
+    if (plan->tokens[index].origin_kind != OWNERSHIP_ORIGIN_SLOT)
+      state->states[index] = OWNERSHIP_STATE_RELEASED;
+    state->states[operation->result] = OWNERSHIP_STATE_OWNED;
+    state->states[receiver] = OWNERSHIP_STATE_RELEASED;
     return 1;
   }
   case OWNERSHIP_OP_BRANCH:
@@ -1585,6 +1765,7 @@ int ownership_plan_operation_at(const ownership_plan *plan, ownership_id block,
     view->operand = source->operand;
     view->callee = source->callee;
     view->parameter_index = source->parameter_index;
+    view->array_input_mode = source->array_input_mode;
     view->bool_value = source->bool_value;
     view->int_value = source->int_value;
     view->operands = source->operands;

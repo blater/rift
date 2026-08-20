@@ -100,6 +100,14 @@ static ownership_token managed_string_token(void) {
   return token;
 }
 
+static ownership_token managed_string_array_token(void) {
+  ownership_token token = managed_string_token();
+  token.type.kind = SIR_TYPE_ARRAY;
+  token.type.nominal_id = SIR_TYPE_STRING;
+  token.representation = SIR_REP_MANAGED_HANDLE;
+  return token;
+}
+
 static ownership_token bool_token(void) {
   ownership_token token;
   memset(&token, 0, sizeof(token));
@@ -928,6 +936,143 @@ static void test_unsupported_semantic_op_rejected(void) {
   sir_function_destroy(&semantic);
 }
 
+static void test_array_input_mode_and_disposition(void) {
+  ownership_plan plan;
+  ownership_diagnostic diagnostic;
+  ownership_operation op;
+  ownership_id block;
+  ownership_id receiver;
+  ownership_id source;
+  ownership_id loan;
+  ownership_id prepared;
+  ownership_id index;
+  ownership_id operands[3];
+
+  ownership_plan_internal_init(&plan);
+  receiver = ownership_plan_internal_add_token(
+      &plan, managed_string_array_token());
+  source =
+      ownership_plan_internal_add_token(&plan, managed_string_token());
+  prepared =
+      ownership_plan_internal_add_token(&plan, managed_string_token());
+  block = ownership_plan_internal_add_block(&plan);
+  plan.entry_block = block;
+  op = operation(OWNERSHIP_OP_ACQUIRE);
+  op.result = receiver;
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  op.result = source;
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  op = operation(OWNERSHIP_OP_MOVE);
+  op.operand = source;
+  op.result = prepared;
+  op.array_input_mode = SIR_ARRAY_INPUT_TRANSFER_OWNED;
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  operands[0] = receiver;
+  operands[1] = prepared;
+  op = operation(OWNERSHIP_OP_ARRAY_APPEND_STRING);
+  op.operands = operands;
+  op.operand_count = 2;
+  op.array_input_mode = SIR_ARRAY_INPUT_COPY_BORROWED;
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  op = operation(OWNERSHIP_OP_RETURN);
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  expect(!ownership_plan_internal_verify_and_seal(&plan, &diagnostic) &&
+             diagnostic.code == OWNERSHIP_DIAGNOSTIC_INVALID_OPERATION,
+         "array input mode must match its sealed hold-or-move preparation");
+  ownership_plan_internal_destroy(&plan);
+
+  ownership_plan_internal_init(&plan);
+  receiver = ownership_plan_internal_add_token(
+      &plan, managed_string_array_token());
+  source =
+      ownership_plan_internal_add_token(&plan, managed_string_token());
+  loan = ownership_plan_internal_add_token(&plan, managed_string_token());
+  prepared =
+      ownership_plan_internal_add_token(&plan, managed_string_token());
+  block = ownership_plan_internal_add_block(&plan);
+  plan.entry_block = block;
+  op = operation(OWNERSHIP_OP_ACQUIRE);
+  op.result = receiver;
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  op.result = source;
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  op = operation(OWNERSHIP_OP_BORROW);
+  op.operand = source;
+  op.result = loan;
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  op = operation(OWNERSHIP_OP_HOLD);
+  op.operand = loan;
+  op.result = prepared;
+  op.array_input_mode = SIR_ARRAY_INPUT_COPY_BORROWED;
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  operands[0] = receiver;
+  operands[1] = prepared;
+  op = operation(OWNERSHIP_OP_ARRAY_APPEND_STRING);
+  op.operands = operands;
+  op.operand_count = 2;
+  op.array_input_mode = SIR_ARRAY_INPUT_COPY_BORROWED;
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  op = operation(OWNERSHIP_OP_RELEASE);
+  op.operand = prepared;
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  op.operand = source;
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  op = operation(OWNERSHIP_OP_RETURN);
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  expect(!ownership_plan_internal_verify_and_seal(&plan, &diagnostic) &&
+             diagnostic.code == OWNERSHIP_DIAGNOSTIC_DOUBLE_RELEASE,
+         "borrowed append releases its copied temporary exactly once");
+  ownership_plan_internal_destroy(&plan);
+
+  ownership_plan_internal_init(&plan);
+  receiver = ownership_plan_internal_add_token(
+      &plan, managed_string_array_token());
+  source =
+      ownership_plan_internal_add_token(&plan, managed_string_token());
+  loan = ownership_plan_internal_add_token(&plan, managed_string_token());
+  prepared =
+      ownership_plan_internal_add_token(&plan, managed_string_token());
+  index = ownership_plan_internal_add_token(&plan, int_token());
+  block = ownership_plan_internal_add_block(&plan);
+  plan.entry_block = block;
+  op = operation(OWNERSHIP_OP_ACQUIRE);
+  op.result = receiver;
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  op.result = source;
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  op = operation(OWNERSHIP_OP_BORROW);
+  op.operand = source;
+  op.result = loan;
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  op = operation(OWNERSHIP_OP_HOLD);
+  op.operand = loan;
+  op.result = prepared;
+  op.array_input_mode = SIR_ARRAY_INPUT_COPY_BORROWED;
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  op = operation(OWNERSHIP_OP_DEFINE_SCALAR);
+  op.result = index;
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  operands[0] = receiver;
+  operands[1] = index;
+  operands[2] = prepared;
+  op = operation(OWNERSHIP_OP_ARRAY_REPLACE_STRING);
+  op.operands = operands;
+  op.operand_count = 3;
+  op.array_input_mode = SIR_ARRAY_INPUT_COPY_BORROWED;
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  op = operation(OWNERSHIP_OP_RELEASE);
+  op.operand = prepared;
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  op.operand = source;
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  op = operation(OWNERSHIP_OP_RETURN);
+  (void)ownership_plan_internal_add_operation(&plan, block, op);
+  expect(!ownership_plan_internal_verify_and_seal(&plan, &diagnostic) &&
+             diagnostic.code == OWNERSHIP_DIAGNOSTIC_INVALID_OPERATION,
+         "borrowed replacement transfers its held descriptor into the slot");
+  ownership_plan_internal_destroy(&plan);
+}
+
 int main(void) {
   test_representative_plan();
   test_borrow_provenance_rejected();
@@ -942,6 +1087,7 @@ int main(void) {
   test_malformed_call_frames_rejected();
   test_duplicate_scalar_call_capture_ends_once();
   test_unsupported_semantic_op_rejected();
+  test_array_input_mode_and_disposition();
   if (failures != 0) {
     fprintf(stderr, "%d ownership plan test(s) failed\n", failures);
     return 1;

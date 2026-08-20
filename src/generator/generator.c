@@ -2963,7 +2963,7 @@ void generate_fundef(generator_t *g, ast_t fun) {
     if (g->zxn_test)
       fprintf(f, "zxn_test_stage(\"pools\");\n");
     fprintf(f, "rift_pools_init(NULL);\n");
-    if (g->target == TARGET_ZXN) {
+    {
       int arrays = component_index(g, "arrays");
       if (arrays >= 0 && g->closed_components[arrays])
         fprintf(f, "__internal_set_dynamic_array_initial_capacity(8);\n");

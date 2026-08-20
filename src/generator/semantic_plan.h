@@ -25,6 +25,7 @@ typedef struct semantic_plan_diagnostic {
 typedef enum semantic_plan_parameter_kind {
   SEMANTIC_PLAN_PARAMETER_BOOL_SCALAR,
   SEMANTIC_PLAN_PARAMETER_STRING_CONSUME,
+  SEMANTIC_PLAN_PARAMETER_STRING_ARRAY_CONSUME,
 } semantic_plan_parameter_kind;
 
 typedef struct semantic_plan_parameter_abi {

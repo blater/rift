@@ -285,6 +285,14 @@ int semantic_plan_parameter_at(const semantic_plan_program *program,
     parameter->c_type = abi->string_type;
     return 1;
   }
+  if (slot.type.kind == SIR_TYPE_ARRAY &&
+      slot.type.nominal_id == SIR_TYPE_STRING &&
+      slot.representation == SIR_REP_MANAGED_HANDLE &&
+      slot.ownership == SIR_OWNERSHIP_OWNED) {
+    parameter->kind = SEMANTIC_PLAN_PARAMETER_STRING_ARRAY_CONSUME;
+    parameter->c_type = abi->array_type;
+    return 1;
+  }
   return 0;
 }
 

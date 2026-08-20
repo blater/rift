@@ -38,6 +38,10 @@ typedef enum ownership_op_kind {
   OWNERSHIP_OP_RELEASE,
   OWNERSHIP_OP_END_BORROW,
   OWNERSHIP_OP_CALL,
+  OWNERSHIP_OP_ARRAY_NEW_STRING,
+  OWNERSHIP_OP_ARRAY_APPEND_STRING,
+  OWNERSHIP_OP_ARRAY_GET_STRING,
+  OWNERSHIP_OP_ARRAY_REPLACE_STRING,
   OWNERSHIP_OP_JUMP,
   OWNERSHIP_OP_BRANCH,
   OWNERSHIP_OP_RETURN,
@@ -117,6 +121,7 @@ typedef struct ownership_operation_view {
   ownership_id operand;
   ownership_id callee;
   size_t parameter_index;
+  sir_array_input_mode array_input_mode;
   int bool_value;
   int int_value;
   const ownership_id *operands;

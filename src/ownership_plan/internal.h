@@ -10,6 +10,7 @@ typedef struct ownership_operation {
   ownership_id operand;
   ownership_id callee;
   size_t parameter_index;
+  sir_array_input_mode array_input_mode;
   int bool_value;
   int int_value;
   ownership_id *operands;

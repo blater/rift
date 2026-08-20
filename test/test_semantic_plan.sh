@@ -656,4 +656,111 @@ grep -q 'representative function path must end in return' \
 [ ! -s "$WORK/match-missing.c" ] ||
   fail "missing match arm emitted partial C before failing closed"
 
+"$ROOT/riftc" "$ROOT/test/fixtures/semantic_plan_string_arrays.rift" \
+  "$WORK/arrays" --target=gcc --semantic-plan \
+  --component-manifest="$ROOT/src/lib/components.manifest"
+array_body=$(awk '/^string rift_plan_body_1\(/ { seen++ }
+                  seen == 2 { print }
+                  seen == 2 && /^}$/ { exit }' "$WORK/arrays.c")
+[ "$(printf '%s\n' "$array_body" | grep -c 'string_push_array(')" -eq 1 ] ||
+  fail "borrowed append did not preserve deep-copy value semantics"
+printf '%s\n' "$array_body" | grep -q '__internal_push_array(' ||
+  fail "produced append did not transfer directly into the array"
+printf '%s\n' "$array_body" | awk '
+  /rift_plan_body_0\(/ { rhs = NR }
+  /string rift_plan_array_old_/ { snapshot = NR }
+  /__internal_set_elem/ { commit = NR }
+  /__string_release\(rift_plan_array_old_/ { release = NR }
+  END { exit rhs < snapshot && snapshot < commit && commit < release ? 0 : 1 }
+' || fail "indexed replacement did not evaluate RHS, snapshot, commit, then release"
+if printf '%s\n' "$array_body" | grep -Eq 'string \*rift_plan_array|__string_release\(\*'; then
+  fail "indexed replacement retained a raw slot pointer across commit"
+fi
+printf '%s\n' "$array_body" | awk '
+  /string_get_elem\(&/ { get = NR }
+  get && /__string_release\(rift_plan_tmp_/ { released++; get = 0 }
+  END { exit released >= 1 ? 0 : 1 }
+' || fail "discarded owned array get was not released"
+grep -q '__internal_set_dynamic_array_initial_capacity(8);' "$WORK/arrays.c" ||
+  fail "dynamic array initial growth seed was not target-neutral"
+legacy_array_main=$(sed -n '/^int main(/,$p' "$WORK/arrays.c")
+if printf '%s\n' "$legacy_array_main" | grep -Eq 'rift_plan_fn_[01]\('; then
+  fail "legacy code entered the selected string-array parameter ABI"
+fi
+
+gcc -Werror -Wall -Wextra -Wno-sign-compare -pedantic \
+  -I"$ROOT/src/lib" -I"$ROOT/src/ext/lib" \
+  "$WORK/arrays.c" \
+  "$ROOT/src/lib/arena_host.c" "$ROOT/src/lib/pools.c" \
+  "$ROOT/src/lib/segregated_heap.c" \
+  "$ROOT/src/lib/fundefs.c" "$ROOT/src/lib/fundefs_internal.c" \
+  "$ROOT/src/lib/handle_runtime.c" "$ROOT/src/lib/termination.c" \
+  "$ROOT/src/lib/print_bytes.c" "$ROOT/src/lib/error_sink.c" \
+  "$ROOT/src/lib/host_caps.c" "$ROOT/src/lib/host/termbox2_impl.c" \
+  -o "$WORK/arrays.exe"
+[ "$("$WORK/arrays.exe")" = "xxxx" ] ||
+  fail "string-array ownership fixture returned the wrong value"
+sed 's/rift_pools_init(NULL);/rift_arena_options rift_test_arena = { .memory_max = 1024, .memory_max_present = 1 }; rift_pools_init(\&rift_test_arena);/' \
+  "$WORK/arrays.c" >"$WORK/arrays-constrained.c"
+gcc -Werror -Wall -Wextra -Wno-sign-compare -pedantic \
+  -I"$ROOT/src/lib" -I"$ROOT/src/ext/lib" \
+  "$WORK/arrays-constrained.c" \
+  "$ROOT/src/lib/arena_host.c" "$ROOT/src/lib/pools.c" \
+  "$ROOT/src/lib/segregated_heap.c" \
+  "$ROOT/src/lib/fundefs.c" "$ROOT/src/lib/fundefs_internal.c" \
+  "$ROOT/src/lib/handle_runtime.c" "$ROOT/src/lib/termination.c" \
+  "$ROOT/src/lib/print_bytes.c" "$ROOT/src/lib/error_sink.c" \
+  "$ROOT/src/lib/host_caps.c" "$ROOT/src/lib/host/termbox2_impl.c" \
+  -o "$WORK/arrays-constrained.exe"
+[ "$("$WORK/arrays-constrained.exe")" = "xxxx" ] ||
+  fail "string arrays did not reuse a 1 KiB arena across 200 calls"
+"$ROOT/riftc" "$ROOT/test/fixtures/semantic_plan_string_arrays.rift" \
+  "$WORK/arrays-zxn" --target=zxn --semantic-plan \
+  --component-manifest="$ROOT/src/lib/components.manifest"
+zcc +zxn -vn -c -clib=sdcc_iy -I"$ROOT/src/lib" \
+  "$WORK/arrays-zxn.c" -o "$WORK/arrays-zxn.o"
+
+reject_array_source() {
+  case_name=$1
+  source_text=$2
+  printf '%s\n' "$source_text" >"$WORK/array-reject-$case_name.rift"
+  if "$ROOT/riftc" "$WORK/array-reject-$case_name.rift" \
+      "$WORK/array-reject-$case_name" --target=gcc --semantic-plan \
+      --component-manifest="$ROOT/src/lib/components.manifest" \
+      >"$WORK/array-reject-$case_name.log" 2>&1; then
+    fail "unsupported string-array family $case_name unexpectedly compiled"
+  fi
+  [ ! -s "$WORK/array-reject-$case_name.c" ] ||
+    fail "unsupported string-array family $case_name emitted partial C"
+}
+
+reject_array_source fixed \
+  'sub bad(string seed) returns string { string[2] values := []; return seed; } sub main() {}'
+reject_array_source scalar_element \
+  'sub bad(string seed) returns string { int[] values := []; return seed; } sub main() {}'
+reject_array_source array_return \
+  'sub bad(string seed) returns string[] { string[] values := []; return values; } sub main() {}'
+reject_array_source array_alias_local \
+  'sub bad(string[] input, string seed) returns string { string[] values := input; return seed; } sub main() {}'
+reject_array_source set_builtin \
+  'sub bad(string seed) returns string { string[] values := []; set(values, 0, seed); return seed; } sub main() {}'
+reject_array_source direct_index \
+  'sub bad(string seed) returns string { string[] values := []; append(values, seed); return values[0]; } sub main() {}'
+reject_array_source bool_index \
+  'sub bad(string seed) returns string { string[] values := []; append(values, seed); return get(values, true); } sub main() {}'
+reject_array_source collect \
+  'sub bad(string seed) returns string { string[] values := []; collect; return seed; } sub main() {}'
+reject_array_source bad_arity \
+  'sub bad(string seed) returns string { string[] values := []; append(values); return seed; } sub main() {}'
+reject_array_source insert \
+  'sub bad(string seed) returns string { string[] values := []; insert(values, 0, seed); return seed; } sub main() {}'
+reject_array_source pop \
+  'sub bad(string seed) returns string { string[] values := []; append(values, seed); pop(values); return seed; } sub main() {}'
+reject_array_source length \
+  'sub bad(string seed) returns string { string[] values := []; length(values); return seed; } sub main() {}'
+reject_array_source array_method \
+  'sub string[].bad() returns string { return get(this, 0); } sub main() {}'
+reject_array_source deep_receiver \
+  'record Box { string[] values } sub bad(Box box) returns string { return get(box.values, 0); } sub main() {}'
+
 echo "PASS: semantic-plan generated-C seam"

@@ -153,6 +153,48 @@ static int value_is_numeric(const sir_value *value) {
          value->type.kind <= SIR_TYPE_FLOAT;
 }
 
+static int value_is_string_array(const sir_value *value) {
+  return value->type.kind == SIR_TYPE_ARRAY &&
+         value->type.nominal_id == SIR_TYPE_STRING &&
+         value->representation == SIR_REP_MANAGED_HANDLE;
+}
+
+static int value_is_owned_string(const sir_value *value) {
+  return value->type.kind == SIR_TYPE_STRING && value->type.nominal_id == 0 &&
+         value->representation == SIR_REP_STRING_DESCRIPTOR &&
+         value->ownership == SIR_OWNERSHIP_OWNED;
+}
+
+static sir_effects expected_array_effects(sir_op_kind kind) {
+  sir_effects effects = sir_effects_none();
+  effects.flags = SIR_EFFECT_CALL | SIR_EFFECT_TERMINATE;
+  if (kind == SIR_OP_ARRAY_NEW_STRING ||
+      kind == SIR_OP_ARRAY_APPEND_STRING ||
+      kind == SIR_OP_ARRAY_GET_STRING) {
+    effects.flags |= SIR_EFFECT_ALLOCATE | SIR_EFFECT_COLLECT;
+  }
+  if (kind == SIR_OP_ARRAY_APPEND_STRING ||
+      kind == SIR_OP_ARRAY_REPLACE_STRING) {
+    effects.mutation = SIR_MUTATION_ARGUMENT;
+  }
+  return effects;
+}
+
+static int prepared_mode_matches(const sir_function *function,
+                                 size_t block_index, size_t operation_index,
+                                 sir_id value, sir_array_input_mode mode) {
+  const sir_block *block = &function->blocks[block_index];
+  size_t index;
+  for (index = 0; index < operation_index; index++) {
+    const sir_operation *candidate = &block->operations[index];
+    if (candidate->result == value) {
+      return candidate->kind == SIR_OP_PREPARE_OWNED &&
+             candidate->array_input_mode == mode;
+    }
+  }
+  return 0;
+}
+
 static int effects_equal(sir_effects left, sir_effects right) {
   return left.known == right.known && left.flags == right.flags &&
          left.mutation == right.mutation;
@@ -797,6 +839,97 @@ static int validate_operation_contract(const sir_function *function,
       }
     }
     break;
+  case SIR_OP_PREPARE_OWNED:
+    if (result != NULL && operation->operand_count == 1 &&
+        operation->target_count == 0 && operation->slot == SIR_INVALID_ID &&
+        effects_are_pure(operation->effects)) {
+      const sir_value *source = &function->values[operation->operands[0]];
+      const sir_operation *previous =
+          operation_index == 0
+              ? NULL
+              : &function->blocks[block_index]
+                     .operations[operation_index - 1];
+      sir_array_input_mode expected =
+          source->ownership == SIR_OWNERSHIP_BORROWED
+              ? SIR_ARRAY_INPUT_COPY_BORROWED
+              : SIR_ARRAY_INPUT_TRANSFER_OWNED;
+      if (previous != NULL && previous->result == operation->operands[0] &&
+          (source->ownership == SIR_OWNERSHIP_BORROWED ||
+           source->ownership == SIR_OWNERSHIP_OWNED) &&
+          sir_type_equal(source->type, result->type) &&
+          source->representation == result->representation &&
+          result->ownership == SIR_OWNERSHIP_OWNED &&
+          operation->array_input_mode == expected) {
+        return 1;
+      }
+    }
+    break;
+  case SIR_OP_ARRAY_NEW_STRING:
+    if (result != NULL && value_is_string_array(result) &&
+        result->ownership == SIR_OWNERSHIP_OWNED &&
+        operation->operand_count == 0 && operation->target_count == 0 &&
+        operation->slot == SIR_INVALID_ID &&
+        operation->array_input_mode == SIR_ARRAY_INPUT_UNKNOWN &&
+        effects_equal(operation->effects,
+                      expected_array_effects(operation->kind))) {
+      return 1;
+    }
+    break;
+  case SIR_OP_ARRAY_APPEND_STRING:
+    if (result == NULL && operation->operand_count == 2 &&
+        operation->target_count == 0 &&
+        operation->array_input_mode > SIR_ARRAY_INPUT_UNKNOWN &&
+        operation->array_input_mode <= SIR_ARRAY_INPUT_TRANSFER_OWNED &&
+        effects_equal(operation->effects,
+                      expected_array_effects(operation->kind)) &&
+        value_is_string_array(
+            &function->values[operation->operands[0]]) &&
+        function->values[operation->operands[0]].ownership ==
+            SIR_OWNERSHIP_OWNED &&
+        value_is_owned_string(&function->values[operation->operands[1]]) &&
+        prepared_mode_matches(function, block_index, operation_index,
+                              operation->operands[1],
+                              operation->array_input_mode)) {
+      return 1;
+    }
+    break;
+  case SIR_OP_ARRAY_GET_STRING:
+    if (result != NULL && value_is_owned_string(result) &&
+        operation->operand_count == 2 && operation->target_count == 0 &&
+        operation->array_input_mode == SIR_ARRAY_INPUT_UNKNOWN &&
+        effects_equal(operation->effects,
+                      expected_array_effects(operation->kind)) &&
+        value_is_string_array(
+            &function->values[operation->operands[0]]) &&
+        function->values[operation->operands[0]].ownership ==
+            SIR_OWNERSHIP_OWNED &&
+        function->values[operation->operands[1]].type.kind == SIR_TYPE_INT &&
+        function->values[operation->operands[1]].representation ==
+            SIR_REP_SCALAR) {
+      return 1;
+    }
+    break;
+  case SIR_OP_ARRAY_REPLACE_STRING:
+    if (result == NULL && operation->operand_count == 3 &&
+        operation->target_count == 0 &&
+        operation->array_input_mode > SIR_ARRAY_INPUT_UNKNOWN &&
+        operation->array_input_mode <= SIR_ARRAY_INPUT_TRANSFER_OWNED &&
+        effects_equal(operation->effects,
+                      expected_array_effects(operation->kind)) &&
+        value_is_string_array(
+            &function->values[operation->operands[0]]) &&
+        function->values[operation->operands[0]].ownership ==
+            SIR_OWNERSHIP_OWNED &&
+        function->values[operation->operands[1]].type.kind == SIR_TYPE_INT &&
+        function->values[operation->operands[1]].representation ==
+            SIR_REP_SCALAR &&
+        value_is_owned_string(&function->values[operation->operands[2]]) &&
+        prepared_mode_matches(function, block_index, operation_index,
+                              operation->operands[2],
+                              operation->array_input_mode)) {
+      return 1;
+    }
+    break;
   case SIR_OP_PRIMITIVE:
     if (operation->primitive == SIR_PRIMITIVE_HIDDEN_CALL ||
         (operation->effects.flags & SIR_EFFECT_CALL) != 0) {
@@ -900,7 +1033,8 @@ static int validate_operation_contract(const sir_function *function,
               ? NULL
               : &function->blocks[block_index].operations[operation_index - 1];
       if (definition != NULL && definition->result == operation->operands[0] &&
-          definition->kind == SIR_OP_CALL &&
+          (definition->kind == SIR_OP_CALL ||
+           definition->kind == SIR_OP_ARRAY_GET_STRING) &&
           discarded->ownership == SIR_OWNERSHIP_OWNED &&
           discarded->representation == SIR_REP_STRING_DESCRIPTOR) {
         return 1;

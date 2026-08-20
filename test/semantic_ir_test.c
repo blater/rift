@@ -889,6 +889,207 @@ static void test_intrinsic_registry_is_authoritative(void) {
   sir_function_destroy(&function);
 }
 
+static void test_string_array_operations_are_total_calls(void) {
+  node_t nodes[13];
+  token_t arguments[1];
+  ast_t parameter_types[1];
+  ast_t statements[3];
+  ast_t append_args[2];
+  ast_t get_args[2];
+  sir_function function;
+  sir_lower_options options = sir_lower_default_options();
+  sir_diagnostic diagnostic;
+  sir_operation *append_operation = NULL;
+  sir_operation *new_operation = NULL;
+  size_t block_index;
+  int saw_new = 0;
+  int saw_append = 0;
+  int saw_get = 0;
+
+  memset(nodes, 0, sizeof(nodes));
+  nodes[0].tag = type;
+  nodes[0].data.type.name = named_token("string");
+  nodes[1].tag = type;
+  nodes[1].data.type.name = named_token("string");
+  nodes[1].data.type.is_array = 1;
+  nodes[2].tag = literal;
+  nodes[2].data.literal.lit.type = TOK_ARR_DECL;
+  nodes[3].tag = vardef;
+  nodes[3].data.vardef.name = named_token("values");
+  nodes[3].data.vardef.type = &nodes[1];
+  nodes[3].data.vardef.expr = &nodes[2];
+  nodes[4].tag = identifier;
+  nodes[4].data.identifier.id = named_token("values");
+  nodes[5].tag = identifier;
+  nodes[5].data.identifier.id = named_token("seed");
+  append_args[0] = &nodes[4];
+  append_args[1] = &nodes[5];
+  nodes[6].tag = funcall;
+  nodes[6].data.funcall.name = named_token("append");
+  nodes[6].data.funcall.args.data = append_args;
+  nodes[6].data.funcall.args.length = 2;
+  nodes[6].data.funcall.args.capacity = 2;
+  nodes[7].tag = identifier;
+  nodes[7].data.identifier.id = named_token("values");
+  nodes[8].tag = literal;
+  nodes[8].data.literal.lit.type = TOK_NUM_LIT;
+  nodes[8].data.literal.lit.lexeme.data = "0";
+  nodes[8].data.literal.lit.lexeme.length = 1;
+  get_args[0] = &nodes[7];
+  get_args[1] = &nodes[8];
+  nodes[9].tag = funcall;
+  nodes[9].data.funcall.name = named_token("get");
+  nodes[9].data.funcall.args.data = get_args;
+  nodes[9].data.funcall.args.length = 2;
+  nodes[9].data.funcall.args.capacity = 2;
+  nodes[10].tag = ret;
+  nodes[10].data.ret.expr = &nodes[9];
+  statements[0] = &nodes[3];
+  statements[1] = &nodes[6];
+  statements[2] = &nodes[10];
+  nodes[11].tag = compound;
+  nodes[11].data.compound.stmts.data = statements;
+  nodes[11].data.compound.stmts.length = 3;
+  nodes[11].data.compound.stmts.capacity = 3;
+  arguments[0] = named_token("seed");
+  parameter_types[0] = &nodes[0];
+  nodes[12].tag = fundef;
+  nodes[12].data.fundef.name = named_token("array_calls");
+  nodes[12].data.fundef.args.data = arguments;
+  nodes[12].data.fundef.args.length = 1;
+  nodes[12].data.fundef.args.capacity = 1;
+  nodes[12].data.fundef.types.data = parameter_types;
+  nodes[12].data.fundef.types.length = 1;
+  nodes[12].data.fundef.types.capacity = 1;
+  nodes[12].data.fundef.body = &nodes[11];
+  nodes[12].data.fundef.ret_type = &nodes[0];
+
+  sir_function_init(&function);
+  options.enabled = 1;
+  expect(sir_lower_function(&nodes[12], &options, &function, &diagnostic) ==
+             SIR_LOWER_OK,
+         "dynamic string-array operations lower through the semantic gate");
+  for (block_index = 0; block_index < function.block_count; block_index++) {
+    size_t operation_index;
+    for (operation_index = 0;
+         operation_index < function.blocks[block_index].operation_count;
+         operation_index++) {
+      sir_operation *current =
+          &function.blocks[block_index].operations[operation_index];
+      if (current->kind == SIR_OP_ARRAY_NEW_STRING) {
+        new_operation = current;
+        saw_new = current->effects.flags ==
+                      (SIR_EFFECT_CALL | SIR_EFFECT_ALLOCATE |
+                       SIR_EFFECT_COLLECT | SIR_EFFECT_TERMINATE) &&
+                  current->effects.mutation == SIR_MUTATION_NONE;
+      } else if (current->kind == SIR_OP_ARRAY_APPEND_STRING) {
+        append_operation = current;
+        saw_append = current->operand_count == 2 &&
+                     current->array_input_mode ==
+                         SIR_ARRAY_INPUT_COPY_BORROWED &&
+                     current->effects.flags ==
+                         (SIR_EFFECT_CALL | SIR_EFFECT_ALLOCATE |
+                          SIR_EFFECT_COLLECT | SIR_EFFECT_TERMINATE) &&
+                     current->effects.mutation == SIR_MUTATION_ARGUMENT;
+      } else if (current->kind == SIR_OP_ARRAY_GET_STRING) {
+        saw_get = current->operand_count == 2 &&
+                  current->effects.flags ==
+                      (SIR_EFFECT_CALL | SIR_EFFECT_ALLOCATE |
+                       SIR_EFFECT_COLLECT | SIR_EFFECT_TERMINATE) &&
+                  current->effects.mutation == SIR_MUTATION_NONE;
+      }
+    }
+  }
+  expect(saw_new && saw_append && saw_get,
+         "array runtime work has exact first-class call effects and input mode");
+  if (append_operation != NULL) {
+    sir_effects saved_effects = append_operation->effects;
+    append_operation->effects.flags &= ~SIR_EFFECT_CALL;
+    expect(!sir_verify_function(&function, NULL, &diagnostic) &&
+               diagnostic.code == SIR_DIAGNOSTIC_INVALID_OPERATION,
+           "array call cannot hide runtime work by weakening CALL effects");
+    append_operation->effects = saved_effects;
+    append_operation->effects.known = 0;
+    expect(!sir_verify_function(&function, NULL, &diagnostic) &&
+               diagnostic.code == SIR_DIAGNOSTIC_UNKNOWN_EFFECT,
+           "array call rejects an unknown runtime effect summary");
+    append_operation->effects = saved_effects;
+  }
+  if (new_operation != NULL) {
+    sir_type saved_type = function.values[new_operation->result].type;
+    function.values[new_operation->result].type.nominal_id = 0;
+    expect(!sir_verify_function(&function, NULL, &diagnostic) &&
+               diagnostic.code ==
+                   SIR_DIAGNOSTIC_INVALID_TYPE_REPRESENTATION,
+           "array construction rejects unknown element metadata");
+    function.values[new_operation->result].type = saved_type;
+  }
+  {
+    sir_signature signature;
+    memset(&signature, 0, sizeof(signature));
+    expect(sir_lower_signature(&nodes[12], 7, (string_view){"body", 4},
+                               &signature, &diagnostic) &&
+               signature.effects.flags ==
+                   (SIR_EFFECT_CALL | SIR_EFFECT_ALLOCATE |
+                    SIR_EFFECT_COLLECT | SIR_EFFECT_TERMINATE) &&
+               signature.effects.mutation == SIR_MUTATION_ARGUMENT,
+           "selected user calls seal conservative transitive effects");
+    sir_lower_signature_destroy(&signature);
+  }
+  sir_function_destroy(&function);
+}
+
+static void test_array_builtin_resolution_authority(void) {
+  node_t native_target;
+  node_t user_target;
+  node_t nodes[7];
+  token_t arguments[1];
+  ast_t types[1];
+  ast_t statements[2];
+  ast_t call_args[2];
+  sir_function function;
+  sir_lower_options options = sir_lower_default_options();
+  sir_diagnostic diagnostic;
+  ast_t function_ast =
+      build_echo_function(nodes, arguments, types, statements);
+
+  memset(&native_target, 0, sizeof(native_target));
+  native_target.tag = fundef;
+  native_target.data.fundef.name = named_token("append");
+  native_target.data.fundef.component_id = "native";
+  nodes[1].data.identifier.id = named_token("value");
+  call_args[0] = &nodes[1];
+  call_args[1] = &nodes[1];
+  nodes[2].tag = funcall;
+  nodes[2].data.funcall.name = named_token("append");
+  nodes[2].data.funcall.args.data = call_args;
+  nodes[2].data.funcall.args.length = 2;
+  nodes[2].data.funcall.args.capacity = 2;
+  nodes[2].data.funcall.resolved_target = &native_target;
+  statements[0] = &nodes[2];
+  statements[1] = &nodes[4];
+  sir_function_init(&function);
+  options.enabled = 1;
+  expect(sir_lower_function(function_ast, &options, &function, &diagnostic) ==
+             SIR_LOWER_ERROR &&
+             diagnostic.code == SIR_DIAGNOSTIC_UNRESOLVED_CALLEE,
+         "resolved native append cannot masquerade as the array primitive");
+  sir_function_destroy(&function);
+
+  memset(&user_target, 0, sizeof(user_target));
+  user_target.tag = fundef;
+  user_target.data.fundef.name = named_token("get");
+  user_target.data.fundef.body = &nodes[5];
+  nodes[2].data.funcall.name = named_token("get");
+  nodes[2].data.funcall.resolved_target = &user_target;
+  sir_function_init(&function);
+  expect(sir_lower_function(function_ast, &options, &function, &diagnostic) ==
+             SIR_LOWER_ERROR &&
+             diagnostic.code == SIR_DIAGNOSTIC_UNRESOLVED_CALLEE,
+         "resolved user get shadow cannot masquerade as the array primitive");
+  sir_function_destroy(&function);
+}
+
 int main(void) {
   test_inactive_gate();
   test_representative_function();
@@ -903,6 +1104,8 @@ int main(void) {
   test_hidden_call_rejected();
   test_match_missing_arm_rejected();
   test_intrinsic_registry_is_authoritative();
+  test_string_array_operations_are_total_calls();
+  test_array_builtin_resolution_authority();
   if (failures != 0) {
     fprintf(stderr, "%d semantic IR test(s) failed\n", failures);
     return 1;

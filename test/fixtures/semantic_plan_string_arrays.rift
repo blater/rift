@@ -1,0 +1,30 @@
+sub mutate_later(string[] values, string seed) returns string {
+  append(values, concat(seed, seed));
+  return concat(seed, seed);
+}
+
+sub array_path(bool enter, string seed) returns string {
+  string[] values := [];
+  append(values, seed);
+  append(values, concat(seed, seed));
+  get(values, 1);
+  values[0] := mutate_later(values, seed);
+  while enter {
+    string result := get(values, 0);
+    return result;
+  }
+  return get(values, 0);
+}
+
+sub exercise_arrays(string seed) returns string {
+  string first := array_path(false, seed);
+  return array_path(true, first);
+}
+
+sub main() {
+  string result := "seed";
+  for i := 1 to 200 {
+    result := exercise_arrays("x");
+  }
+  print(result);
+}

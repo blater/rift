@@ -94,6 +94,12 @@ typedef enum sir_call_abi {
   SIR_CALL_ABI_OUT_STRING_FIRST,
 } sir_call_abi;
 
+typedef enum sir_array_input_mode {
+  SIR_ARRAY_INPUT_UNKNOWN,
+  SIR_ARRAY_INPUT_COPY_BORROWED,
+  SIR_ARRAY_INPUT_TRANSFER_OWNED,
+} sir_array_input_mode;
+
 typedef enum sir_argument_mode {
   SIR_ARGUMENT_UNKNOWN,
   SIR_ARGUMENT_SCALAR,
@@ -147,6 +153,11 @@ typedef enum sir_op_kind {
   SIR_OP_ASSIGN_SLOT,
   SIR_OP_END_SLOT,
   SIR_OP_PREPARE_ARGUMENT,
+  SIR_OP_PREPARE_OWNED,
+  SIR_OP_ARRAY_NEW_STRING,
+  SIR_OP_ARRAY_APPEND_STRING,
+  SIR_OP_ARRAY_GET_STRING,
+  SIR_OP_ARRAY_REPLACE_STRING,
   SIR_OP_PRIMITIVE,
   SIR_OP_CALL,
   SIR_OP_EXPRESSION_END,
@@ -179,6 +190,7 @@ typedef struct sir_operation {
   sir_id slot;
   sir_id callee;
   size_t parameter_index;
+  sir_array_input_mode array_input_mode;
   int bool_value;
   int int_value;
   sir_id *operands;

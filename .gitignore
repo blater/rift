@@ -18,6 +18,7 @@ out.c
 *.lis
 *.sym
 *.map
+.clangd
 
 # Generated dep files in vendored deps
 src/ext/src/termbox2/demo/*.d

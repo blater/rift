@@ -1,5 +1,0 @@
-CompileFlags:
-  Add:
-    - -I./src
-    - -I./src/lib
-    - -I./src/ext/lib

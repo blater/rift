@@ -1,5 +1,7 @@
 #include "semantic_ir/semantic_ir.h"
 
+#include "semantic_ir/intrinsics.h"
+
 #include <stdlib.h>
 #include <string.h>
 
@@ -171,10 +173,14 @@ static int call_arguments_valid(const sir_function *function,
     const sir_signature_parameter *parameter = &signature->parameters[index];
     if (!sir_type_equal(value->type, parameter->type) ||
         value->representation != parameter->representation ||
-        value->ownership != parameter->ownership) {
+        (value->ownership != parameter->ownership &&
+         !(signature->kind == SIR_CALLEE_INTRINSIC &&
+           parameter->mode == SIR_ARGUMENT_BORROW &&
+           value->ownership == SIR_OWNERSHIP_OWNED))) {
       return 0;
     }
-    if (signature->kind == SIR_CALLEE_USER) {
+    if (signature->kind == SIR_CALLEE_USER ||
+        signature->kind == SIR_CALLEE_INTRINSIC) {
       const sir_block *block = &function->blocks[block_index];
       size_t definition_index;
       int prepared = 0;
@@ -251,6 +257,14 @@ static int environment_valid(const sir_environment *environment,
                              signature->return_ownership, diagnostic)) {
       set_diagnostic(diagnostic, SIR_DIAGNOSTIC_UNRESOLVED_CALLEE, 0, 0,
                      "semantic environment contains an invalid signature");
+      return 0;
+    }
+    if ((signature->kind == SIR_CALLEE_INTRINSIC &&
+         !sir_intrinsic_signature_matches(signature)) ||
+        (signature->kind != SIR_CALLEE_INTRINSIC &&
+         signature->call_abi != SIR_CALL_ABI_C_RETURN_VALUE)) {
+      set_diagnostic(diagnostic, SIR_DIAGNOSTIC_UNRESOLVED_CALLEE, 0, 0,
+                     "semantic call ABI is not authoritative");
       return 0;
     }
     if ((signature->return_representation == SIR_REP_STRING_DESCRIPTOR ||
@@ -691,10 +705,15 @@ static int validate_operation_contract(const sir_function *function,
     if (result == NULL || operation->operand_count != 0 ||
         operation->target_count != 0 || operation->slot != SIR_INVALID_ID ||
         !effects_are_pure(operation->effects) ||
-        result->type.kind != SIR_TYPE_BOOL ||
         result->representation != SIR_REP_SCALAR ||
         result->ownership != SIR_OWNERSHIP_SCALAR ||
-        (operation->bool_value != 0 && operation->bool_value != 1)) {
+        (result->type.kind != SIR_TYPE_BOOL &&
+         result->type.kind != SIR_TYPE_INT) ||
+        (result->type.kind == SIR_TYPE_BOOL && operation->bool_value != 0 &&
+         operation->bool_value != 1) ||
+        (result->type.kind == SIR_TYPE_INT &&
+         (operation->int_value < INT16_MIN ||
+          operation->int_value > INT16_MAX))) {
       break;
     }
     return 1;
@@ -754,14 +773,18 @@ static int validate_operation_contract(const sir_function *function,
       const sir_value *source = &function->values[operation->operands[0]];
       const sir_signature_parameter *parameter;
       const sir_operation *previous;
-      if (signature->kind != SIR_CALLEE_USER ||
+      if ((signature->kind != SIR_CALLEE_USER &&
+           signature->kind != SIR_CALLEE_INTRINSIC) ||
           operation->parameter_index >= signature->parameter_count ||
           operation_index == 0) {
         break;
       }
       parameter = &signature->parameters[operation->parameter_index];
       previous = &function->blocks[block_index].operations[operation_index - 1];
-      if (parameter->mode == SIR_ARGUMENT_CONSUME &&
+      if (((signature->kind == SIR_CALLEE_USER &&
+            parameter->mode == SIR_ARGUMENT_CONSUME) ||
+           (signature->kind == SIR_CALLEE_INTRINSIC &&
+            parameter->mode == SIR_ARGUMENT_BORROW)) &&
           previous->result == operation->operands[0] &&
           sir_type_equal(source->type, parameter->type) &&
           source->representation == parameter->representation &&
@@ -769,7 +792,7 @@ static int validate_operation_contract(const sir_function *function,
            source->ownership == SIR_OWNERSHIP_OWNED) &&
           sir_type_equal(result->type, parameter->type) &&
           result->representation == parameter->representation &&
-          result->ownership == parameter->ownership) {
+          result->ownership == SIR_OWNERSHIP_OWNED) {
         return 1;
       }
     }

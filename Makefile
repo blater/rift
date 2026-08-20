@@ -7,7 +7,7 @@ BUILD  = build/
 OBJECTS = $(BUILD)alloc.o $(BUILD)ast.o $(BUILD)lexer.o $(BUILD)token.o \
           $(BUILD)parser.o $(BUILD)generator.o $(BUILD)generator_components.o $(BUILD)generator_ownership.o $(BUILD)generator_profile.o $(BUILD)generator_type_info.o $(BUILD)name_table.o \
           $(BUILD)stringview.o $(BUILD)error.o $(BUILD)component_manifest.o $(BUILD)asset_generator.o $(BUILD)typechecker.o \
-          $(BUILD)semantic_resolve.o $(BUILD)semantic_ir.o $(BUILD)semantic_ir_lower.o \
+          $(BUILD)semantic_resolve.o $(BUILD)semantic_ir.o $(BUILD)semantic_ir_intrinsics.o $(BUILD)semantic_ir_lower.o \
           $(BUILD)ownership_plan.o $(BUILD)plan_c_emitter.o \
           $(BUILD)generator_semantic_plan.o $(BUILD)main.o
 DRIVER_OBJECTS = $(BUILD)driver_main.o $(BUILD)driver_options.o \
@@ -44,6 +44,9 @@ $(BUILD)semantic_resolve.o: $(SRC)semantic/resolve.c | $(BUILD)
 	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
 
 $(BUILD)semantic_ir.o: $(SRC)semantic_ir/semantic_ir.c | $(BUILD)
+	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
+
+$(BUILD)semantic_ir_intrinsics.o: $(SRC)semantic_ir/intrinsics.c | $(BUILD)
 	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
 
 $(BUILD)semantic_ir_lower.o: $(SRC)semantic_ir/lower.c | $(BUILD)
@@ -108,6 +111,7 @@ test-name-table: $(BUILD)name_table_test
 	$(BUILD)name_table_test
 
 $(BUILD)semantic_ir_test: test/semantic_ir_test.c $(BUILD)semantic_ir.o \
+                           $(BUILD)semantic_ir_intrinsics.o \
                            $(BUILD)semantic_ir_lower.o | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $^
 
@@ -116,6 +120,7 @@ test-semantic-ir: $(BUILD)semantic_ir_test
 
 $(BUILD)ownership_plan_test: test/ownership_plan_test.c \
                               $(BUILD)semantic_ir.o \
+                              $(BUILD)semantic_ir_intrinsics.o \
                               $(BUILD)semantic_ir_lower.o \
                               $(BUILD)ownership_plan.o | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $^
@@ -125,6 +130,7 @@ test-ownership-plan: $(BUILD)ownership_plan_test
 
 $(BUILD)plan_c_emitter_test: test/plan_c_emitter_test.c \
                                $(BUILD)semantic_ir.o \
+                               $(BUILD)semantic_ir_intrinsics.o \
                                $(BUILD)semantic_ir_lower.o \
                                $(BUILD)ownership_plan.o \
                                $(BUILD)plan_c_emitter.o | $(BUILD)

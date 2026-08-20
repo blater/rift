@@ -1,3 +1,4 @@
+#include "semantic_ir/intrinsics.h"
 #include "semantic_ir/lower.h"
 #include "semantic_ir/semantic_ir.h"
 
@@ -223,6 +224,7 @@ static void build_borrow_call_function(sir_function *function,
   signature->return_ownership = SIR_OWNERSHIP_NONE;
   signature->effects = sir_effects_none();
   signature->effects.flags = SIR_EFFECT_CALL | SIR_EFFECT_ALLOCATE;
+  signature->call_abi = SIR_CALL_ABI_C_RETURN_VALUE;
   environment->signatures = signature;
   environment->signature_count = 1;
 
@@ -366,6 +368,7 @@ static void test_consuming_user_call_requires_prepared_arguments(void) {
   signature.return_ownership = value.ownership;
   signature.effects = sir_effects_none();
   signature.effects.flags = SIR_EFFECT_CALL;
+  signature.call_abi = SIR_CALL_ABI_C_RETURN_VALUE;
   environment.signatures = &signature;
   environment.signature_count = 1;
   block = sir_function_add_block(&function);
@@ -512,6 +515,66 @@ static void test_hidden_call_rejected(void) {
   sir_function_destroy(&function);
 }
 
+static void test_intrinsic_registry_is_authoritative(void) {
+  const sir_intrinsic_descriptor *concat =
+      sir_intrinsic_lookup((string_view){"concat", 6}, 2);
+  const sir_intrinsic_descriptor *substring =
+      sir_intrinsic_lookup((string_view){"substring", 9}, 3);
+  sir_signature signature;
+  sir_signature_parameter parameters[3];
+  sir_environment environment;
+  sir_function function;
+  sir_operation return_op;
+  sir_diagnostic diagnostic;
+  sir_id block;
+
+  expect(concat != NULL &&
+             concat->signature.call_abi == SIR_CALL_ABI_OUT_STRING_FIRST &&
+             concat->signature.effects.flags ==
+                 (SIR_EFFECT_CALL | SIR_EFFECT_ALLOCATE | SIR_EFFECT_COLLECT |
+                  SIR_EFFECT_TERMINATE) &&
+             concat->signature.effects.mutation == SIR_MUTATION_NONE &&
+             substring != NULL &&
+             substring->signature.call_abi == SIR_CALL_ABI_OUT_STRING_FIRST &&
+             substring->signature.effects.flags ==
+                 (SIR_EFFECT_CALL | SIR_EFFECT_TERMINATE),
+         "string intrinsic registry binds exact runtime ABIs and effects");
+
+  signature = concat->signature;
+  memcpy(parameters, concat->signature.parameters,
+         concat->signature.parameter_count * sizeof(*parameters));
+  signature.parameters = parameters;
+  environment.signatures = &signature;
+  environment.signature_count = 1;
+  sir_function_init(&function);
+  function.return_type = sir_builtin_type(SIR_TYPE_VOID);
+  function.return_representation = SIR_REP_NONE;
+  function.return_ownership = SIR_OWNERSHIP_NONE;
+  block = sir_function_add_block(&function);
+  function.entry_block = block;
+  return_op = operation(SIR_OP_RETURN);
+  (void)sir_block_add_operation(&function, block, &return_op);
+  expect(sir_verify_function(&function, &environment, &diagnostic),
+         "canonical intrinsic signature is accepted by the verifier");
+
+  signature.effects.flags &= ~SIR_EFFECT_COLLECT;
+  expect(!sir_verify_function(&function, &environment, &diagnostic) &&
+             diagnostic.code == SIR_DIAGNOSTIC_UNRESOLVED_CALLEE,
+         "intrinsic signature cannot weaken its canonical effects");
+  signature = concat->signature;
+  signature.parameters = parameters;
+  parameters[0].mode = SIR_ARGUMENT_CONSUME;
+  expect(!sir_verify_function(&function, &environment, &diagnostic) &&
+             diagnostic.code == SIR_DIAGNOSTIC_UNRESOLVED_CALLEE,
+         "intrinsic signature cannot forge its borrow ownership mode");
+  parameters[0] = concat->signature.parameters[0];
+  signature.call_abi = SIR_CALL_ABI_C_RETURN_VALUE;
+  expect(!sir_verify_function(&function, &environment, &diagnostic) &&
+             diagnostic.code == SIR_DIAGNOSTIC_UNRESOLVED_CALLEE,
+         "intrinsic signature cannot forge its out-result ABI");
+  sir_function_destroy(&function);
+}
+
 int main(void) {
   test_inactive_gate();
   test_representative_function();
@@ -522,6 +585,7 @@ int main(void) {
   test_unknown_effect_rejected();
   test_hidden_expression_rejected();
   test_hidden_call_rejected();
+  test_intrinsic_registry_is_authoritative();
   if (failures != 0) {
     fprintf(stderr, "%d semantic IR test(s) failed\n", failures);
     return 1;

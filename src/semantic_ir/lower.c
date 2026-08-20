@@ -1,5 +1,9 @@
 #include "semantic_ir/lower.h"
 
+#include "semantic_ir/intrinsics.h"
+
+#include <errno.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -223,6 +227,61 @@ static sir_id lower_bool_constant(lower_state *state, ast_t expression) {
   return value_id;
 }
 
+static sir_id lower_int_constant(lower_state *state, ast_t expression) {
+  string_view text;
+  char *copy;
+  char *end;
+  long parsed;
+  sir_value value;
+  sir_operation operation;
+  sir_id value_id;
+  if (expression == NULL || expression->tag != literal ||
+      expression->data.literal.lit.type != TOK_NUM_LIT)
+    return SIR_INVALID_ID;
+  text = expression->data.literal.lit.lexeme;
+  if (text.data == NULL || text.length == 0 || text.length == SIZE_MAX) {
+    lower_error(state, SIR_DIAGNOSTIC_UNSUPPORTED_AST,
+                "substring indices require bounded integer literals");
+    return SIR_INVALID_ID;
+  }
+  copy = malloc(text.length + 1);
+  if (copy == NULL) {
+    lower_error(state, SIR_DIAGNOSTIC_ALLOCATION_FAILED,
+                "could not allocate integer literal text");
+    return SIR_INVALID_ID;
+  }
+  memcpy(copy, text.data, text.length);
+  copy[text.length] = '\0';
+  errno = 0;
+  parsed = strtol(copy, &end, 10);
+  if (errno != 0 || end != copy + text.length || parsed < 0 ||
+      parsed > INT16_MAX) {
+    free(copy);
+    lower_error(state, SIR_DIAGNOSTIC_UNSUPPORTED_AST,
+                "substring indices require bounded integer literals");
+    return SIR_INVALID_ID;
+  }
+  free(copy);
+  value.type = sir_builtin_type(SIR_TYPE_INT);
+  value.representation = SIR_REP_SCALAR;
+  value.ownership = SIR_OWNERSHIP_SCALAR;
+  value_id = sir_function_add_value(&state->function, value);
+  if (value_id == SIR_INVALID_ID) {
+    lower_error(state, SIR_DIAGNOSTIC_ALLOCATION_FAILED,
+                "could not allocate integer constant");
+    return SIR_INVALID_ID;
+  }
+  operation = empty_operation(SIR_OP_CONSTANT);
+  operation.result = value_id;
+  operation.int_value = (int)parsed;
+  if (!sir_block_add_operation(&state->function, state->block, &operation)) {
+    lower_error(state, SIR_DIAGNOSTIC_ALLOCATION_FAILED,
+                "could not append integer constant");
+    return SIR_INVALID_ID;
+  }
+  return value_id;
+}
+
 static sir_id lower_expression(lower_state *state, ast_t expression);
 
 static int resolved_callee(const lower_state *state, ast_t definition,
@@ -241,6 +300,34 @@ static int resolved_callee(const lower_state *state, ast_t definition,
   return 0;
 }
 
+static int intrinsic_callee(const lower_state *state, string_view name,
+                            size_t arity, sir_id *signature_id) {
+  const sir_intrinsic_descriptor *intrinsic;
+  size_t index;
+  if (state->options == NULL || state->options->environment == NULL)
+    return 0;
+  intrinsic = sir_intrinsic_lookup(name, arity);
+  if (intrinsic == NULL)
+    return 0;
+  for (index = 0; index < state->options->environment->signature_count;
+       index++) {
+    const sir_signature *candidate =
+        &state->options->environment->signatures[index];
+    if (candidate->kind == SIR_CALLEE_INTRINSIC &&
+        candidate->symbol_id == intrinsic->signature.symbol_id &&
+        sir_intrinsic_signature_matches(candidate)) {
+      *signature_id = (sir_id)index;
+      return 1;
+    }
+  }
+  return 0;
+}
+
+static int resolved_user_definition(ast_t definition) {
+  return definition != NULL && definition->tag == fundef &&
+         definition->data.fundef.body != NULL;
+}
+
 static sir_id lower_call(lower_state *state, ast_t expression) {
   ast_funcall *call;
   const sir_signature *signature;
@@ -257,17 +344,25 @@ static sir_id lower_call(lower_state *state, ast_t expression) {
     return SIR_INVALID_ID;
   }
   call = &expression->data.funcall;
-  if (!resolved_callee(state, call->resolved_target, &signature_id)) {
+  if (call->args.length < 0) {
+    lower_error(state, SIR_DIAGNOSTIC_CALL_ABI_MISMATCH,
+                "selected call has an invalid argument list");
+    return SIR_INVALID_ID;
+  }
+  if (!resolved_callee(state, call->resolved_target, &signature_id) &&
+      (resolved_user_definition(call->resolved_target) ||
+       !intrinsic_callee(state, call->name.lexeme, (size_t)call->args.length,
+                         &signature_id))) {
     lower_error(state, SIR_DIAGNOSTIC_UNRESOLVED_CALLEE,
                 "semantic call target is outside the selected user program");
     return SIR_INVALID_ID;
   }
   signature = &state->options->environment->signatures[signature_id];
-  if (signature->kind != SIR_CALLEE_USER ||
+  if ((signature->kind != SIR_CALLEE_USER &&
+       signature->kind != SIR_CALLEE_INTRINSIC) ||
       (signature->effects.flags & SIR_EFFECT_NONRETURNING) != 0 ||
       signature->return_type.kind != SIR_TYPE_STRING ||
       signature->return_ownership != SIR_OWNERSHIP_OWNED ||
-      call->args.length < 0 ||
       (size_t)call->args.length != signature->parameter_count) {
     lower_error(state, SIR_DIAGNOSTIC_CALL_ABI_MISMATCH,
                 "selected call does not match a returning string user ABI");
@@ -297,7 +392,10 @@ static sir_id lower_call(lower_state *state, ast_t expression) {
       arguments[index] = source;
       continue;
     }
-    if (parameter->mode != SIR_ARGUMENT_CONSUME ||
+    if (!((signature->kind == SIR_CALLEE_USER &&
+           parameter->mode == SIR_ARGUMENT_CONSUME) ||
+          (signature->kind == SIR_CALLEE_INTRINSIC &&
+           parameter->mode == SIR_ARGUMENT_BORROW)) ||
         (state->function.values[source].ownership != SIR_OWNERSHIP_BORROWED &&
          state->function.values[source].ownership != SIR_OWNERSHIP_OWNED)) {
       lower_error(state, SIR_DIAGNOSTIC_CALL_ABI_MISMATCH,
@@ -306,7 +404,7 @@ static sir_id lower_call(lower_state *state, ast_t expression) {
     }
     value.type = parameter->type;
     value.representation = parameter->representation;
-    value.ownership = parameter->ownership;
+    value.ownership = SIR_OWNERSHIP_OWNED;
     arguments[index] = sir_function_add_value(&state->function, value);
     if (arguments[index] == SIR_INVALID_ID) {
       lower_error(state, SIR_DIAGNOSTIC_ALLOCATION_FAILED,
@@ -363,6 +461,9 @@ static sir_id lower_expression(lower_state *state, ast_t expression) {
     return lower_bool_constant(state, expression);
   if (expression->tag == identifier)
     return lower_identifier(state, expression);
+  if (expression->tag == literal &&
+      expression->data.literal.lit.type == TOK_NUM_LIT)
+    return lower_int_constant(state, expression);
   if (expression->tag == funcall)
     return lower_call(state, expression);
   lower_error(state, SIR_DIAGNOSTIC_UNSUPPORTED_AST,
@@ -746,6 +847,7 @@ int sir_lower_signature(ast_t function_ast, uint32_t symbol_id,
   signature->parameter_count = (size_t)definition->types.length;
   signature->effects = sir_effects_none();
   signature->effects.flags = SIR_EFFECT_CALL;
+  signature->call_abi = SIR_CALL_ABI_C_RETURN_VALUE;
   return 1;
 }
 

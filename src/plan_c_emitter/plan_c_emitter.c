@@ -126,6 +126,16 @@ static int bool_token(const ownership_token_view *token) {
          token->representation == SIR_REP_SCALAR;
 }
 
+static int int_token(const ownership_token_view *token) {
+  return token->kind == OWNERSHIP_TOKEN_SCALAR &&
+         token->type.kind == SIR_TYPE_INT && token->type.nominal_id == 0 &&
+         token->representation == SIR_REP_SCALAR;
+}
+
+static int scalar_token(const ownership_token_view *token) {
+  return bool_token(token) || int_token(token);
+}
+
 static int token_name(const ownership_plan *plan, ownership_id token,
                       char *buffer, size_t buffer_size, const char **name_out) {
   ownership_token_view token_view;
@@ -222,10 +232,11 @@ static int validate_operation(const ownership_plan *plan, ownership_id block,
     break;
   case OWNERSHIP_OP_DEFINE_SCALAR:
     if (ownership_plan_token_at(plan, operation->result, &token) &&
-        bool_token(&token) &&
+        scalar_token(&token) &&
         token_name(plan, operation->result, name_buffer, sizeof(name_buffer),
                    &name) &&
-        (operation->bool_value == 0 || operation->bool_value == 1)) {
+        (!bool_token(&token) || operation->bool_value == 0 ||
+         operation->bool_value == 1)) {
       return 1;
     }
     break;
@@ -268,10 +279,16 @@ static int validate_operation(const ownership_plan *plan, ownership_id block,
     break;
   case OWNERSHIP_OP_CALL: {
     size_t argument_index;
-    const char *callee = ownership_plan_callee_symbol(plan, operation->callee);
-    if (callee == NULL || !c_identifier(callee) ||
+    ownership_callee_view callee;
+    if (!ownership_plan_callee_at(plan, operation->callee, &callee) ||
+        callee.c_symbol == NULL || !c_identifier(callee.c_symbol) ||
+        callee.parameter_count != operation->operand_count ||
+        (callee.call_abi != SIR_CALL_ABI_C_RETURN_VALUE &&
+         callee.call_abi != SIR_CALL_ABI_OUT_STRING_FIRST) ||
         !ownership_plan_token_at(plan, operation->result, &token) ||
         !string_token(&token) ||
+        !sir_type_equal(token.type, callee.return_type) ||
+        token.representation != callee.return_representation ||
         !token_name(plan, operation->result, name_buffer, sizeof(name_buffer),
                     &name)) {
       break;
@@ -280,7 +297,10 @@ static int validate_operation(const ownership_plan *plan, ownership_id block,
          argument_index++) {
       if (!ownership_plan_token_at(plan, operation->operands[argument_index],
                                    &token) ||
-          (!string_token(&token) && !bool_token(&token)) ||
+          !sir_type_equal(token.type, callee.parameters[argument_index].type) ||
+          token.representation !=
+              callee.parameters[argument_index].representation ||
+          (!string_token(&token) && !scalar_token(&token)) ||
           !token_name(plan, operation->operands[argument_index], name_buffer,
                       sizeof(name_buffer), &name)) {
         break;
@@ -591,14 +611,21 @@ int plan_c_emit_function_body(FILE *output, const ownership_plan *plan,
         size_t argument_index;
         char result_buffer[64];
         const char *result;
-        const char *callee =
-            ownership_plan_callee_symbol(plan, operation.callee);
-        if (callee == NULL ||
+        ownership_callee_view callee;
+        if (!ownership_plan_callee_at(plan, operation.callee, &callee) ||
             !token_name(plan, operation.result, result_buffer,
-                        sizeof(result_buffer), &result) ||
-            fprintf(output, "%s %s = %s(", abi->string_type, result, callee) <
-                0)
+                        sizeof(result_buffer), &result))
           goto output_failure;
+        if (callee.call_abi == SIR_CALL_ABI_OUT_STRING_FIRST) {
+          if (fprintf(output, "%s %s;\n%s(&%s", abi->string_type, result,
+                      callee.c_symbol, result) < 0)
+            goto output_failure;
+          if (operation.operand_count != 0 && fprintf(output, ", ") < 0)
+            goto output_failure;
+        } else if (fprintf(output, "%s %s = %s(", abi->string_type, result,
+                           callee.c_symbol) < 0) {
+          goto output_failure;
+        }
         for (argument_index = 0; argument_index < operation.operand_count;
              argument_index++) {
           char argument_buffer[64];
@@ -634,7 +661,9 @@ int plan_c_emit_function_body(FILE *output, const ownership_plan *plan,
             slot.is_parameter)
           break;
         if (fprintf(output, "%s %s = %d;\n", abi->bool_type, result,
-                    operation.bool_value) < 0)
+                    result_token.type.kind == SIR_TYPE_INT
+                        ? operation.int_value
+                        : operation.bool_value) < 0)
           goto output_failure;
         break;
       }

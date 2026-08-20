@@ -2,6 +2,7 @@
 
 #include "ownership_plan/ownership_plan.h"
 #include "plan_c_emitter/plan_c_emitter.h"
+#include "semantic_ir/intrinsics.h"
 #include "semantic_ir/lower.h"
 
 #include <stdint.h>
@@ -19,6 +20,7 @@ struct semantic_plan_program {
   semantic_plan_function *functions;
   size_t function_count;
   sir_signature *signatures;
+  size_t user_signature_count;
   sir_lower_callee *callees;
   sir_environment environment;
 };
@@ -70,6 +72,7 @@ semantic_plan_prepare(ast_t program_ast, semantic_plan_diagnostic *diagnostic) {
   ast_array_t statements;
   size_t index;
   size_t selected_count = 0;
+  size_t signature_count;
   size_t selected_index = 0;
   set_diagnostic(diagnostic, SEMANTIC_PLAN_STAGE_NONE, NULL, NULL);
   if (program_ast == NULL || program_ast->tag != program) {
@@ -95,18 +98,26 @@ semantic_plan_prepare(ast_t program_ast, semantic_plan_diagnostic *diagnostic) {
     }
     selected_count++;
   }
+  signature_count = selected_count + sir_intrinsic_count();
   if (selected_count != 0) {
     planned->functions = calloc(selected_count, sizeof(*planned->functions));
-    planned->signatures = calloc(selected_count, sizeof(*planned->signatures));
     planned->callees = calloc(selected_count, sizeof(*planned->callees));
-    if (planned->functions == NULL || planned->signatures == NULL ||
-        planned->callees == NULL) {
+    if (planned->functions == NULL || planned->callees == NULL) {
       set_diagnostic(diagnostic, SEMANTIC_PLAN_STAGE_SELECTION, NULL,
                      "could not allocate semantic-plan function table");
       goto failure;
     }
   }
+  if (signature_count != 0) {
+    planned->signatures = calloc(signature_count, sizeof(*planned->signatures));
+    if (planned->signatures == NULL) {
+      set_diagnostic(diagnostic, SEMANTIC_PLAN_STAGE_SELECTION, NULL,
+                     "could not allocate semantic-plan signature table");
+      goto failure;
+    }
+  }
   planned->function_count = selected_count;
+  planned->user_signature_count = selected_count;
   for (index = 0; index < (size_t)statements.length; index++) {
     ast_t function = statements.data[index];
     semantic_plan_function *entry;
@@ -135,8 +146,12 @@ semantic_plan_prepare(ast_t program_ast, semantic_plan_diagnostic *diagnostic) {
     planned->callees[selected_index].signature = (sir_id)selected_index;
     selected_index++;
   }
+  for (index = 0; index < sir_intrinsic_count(); index++) {
+    const sir_intrinsic_descriptor *intrinsic = sir_intrinsic_at(index);
+    planned->signatures[selected_count + index] = intrinsic->signature;
+  }
   planned->environment.signatures = planned->signatures;
-  planned->environment.signature_count = selected_count;
+  planned->environment.signature_count = signature_count;
   for (selected_index = 0; selected_index < selected_count; selected_index++) {
     semantic_plan_function *entry = &planned->functions[selected_index];
     ast_t function = entry->ast;
@@ -188,7 +203,7 @@ void semantic_plan_destroy(semantic_plan_program *program) {
   size_t index;
   if (program == NULL)
     return;
-  for (index = 0; index < program->function_count; index++)
+  for (index = 0; index < program->user_signature_count; index++)
     sir_lower_signature_destroy(&program->signatures[index]);
   for (index = 0; index < program->function_count; index++) {
     ownership_plan_destroy(program->functions[index].plan);

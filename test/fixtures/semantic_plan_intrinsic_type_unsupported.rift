@@ -1,0 +1,7 @@
+sub broken(bool flag, string value) returns string {
+  return concat(flag, value);
+}
+
+sub main() {
+  print(broken(true, "bad"));
+}

@@ -98,6 +98,7 @@ static ownership_plan *build_call_plan(void) {
   signature.return_ownership = slot.ownership;
   signature.effects = sir_effects_none();
   signature.effects.flags = SIR_EFFECT_CALL;
+  signature.call_abi = SIR_CALL_ABI_C_RETURN_VALUE;
   environment.signatures = &signature;
   environment.signature_count = 1;
   block = sir_function_add_block(&semantic);
@@ -463,6 +464,24 @@ static void test_malformed_call_preflight_is_output_free(void) {
          "emitter rejects a sealed call with an invalid operand");
   fflush(output);
   expect(size == 0, "bad call operand writes no output bytes");
+  fclose(output);
+  free(text);
+  ownership_plan_destroy(plan);
+
+  plan = build_call_plan();
+  call = mutable_call_operation(plan);
+  text = NULL;
+  size = 0;
+  output = open_memstream(&text, &size);
+  expect(plan != NULL && call != NULL && output != NULL,
+         "call-ABI preflight fixture is valid before corruption");
+  plan->callees[call->callee].call_abi = SIR_CALL_ABI_UNKNOWN;
+  expect(!plan_c_emit_function_body(output, plan, plan_c_rift_abi(),
+                                    &diagnostic) &&
+             diagnostic.code == PLAN_C_DIAGNOSTIC_UNSUPPORTED_PLAN,
+         "emitter rejects a sealed call with an unknown runtime ABI");
+  fflush(output);
+  expect(size == 0, "bad call ABI writes no output bytes");
   fclose(output);
   free(text);
   ownership_plan_destroy(plan);

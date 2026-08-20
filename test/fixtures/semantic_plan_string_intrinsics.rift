@@ -1,0 +1,22 @@
+sub identity(string value) returns string {
+  return value;
+}
+
+sub exercise(string source) returns string {
+  string alias := source;
+  string doubled := concat(source, alias);
+  doubled := concat(doubled, doubled);
+  string nested := concat(source, concat(alias, alias));
+  string prefix := substring(doubled, 1, 2);
+  string tail := substring(prefix, 2);
+  concat(nested, tail);
+  return identity(concat(tail, prefix));
+}
+
+sub main() {
+  string result := "seed";
+  for i := 1 to 200 {
+    result := exercise("ab");
+  }
+  print(result);
+}

@@ -1,4 +1,5 @@
 #include "ownership_plan/internal.h"
+#include "semantic_ir/intrinsics.h"
 #include "semantic_ir/lower.h"
 
 #include <stdio.h>
@@ -112,8 +113,8 @@ static ownership_token bool_token(void) {
 
 static int add_test_callees(ownership_plan *plan, size_t count) {
   size_t index;
-  plan->callee_symbols = calloc(count, sizeof(*plan->callee_symbols));
-  if (plan->callee_symbols == NULL)
+  plan->callees = calloc(count, sizeof(*plan->callees));
+  if (plan->callees == NULL)
     return 0;
   plan->callee_count = count;
   for (index = 0; index < count; index++) {
@@ -121,11 +122,58 @@ static int add_test_callees(ownership_plan *plan, size_t count) {
     size_t length;
     snprintf(name, sizeof(name), "rift_plan_body_%zu", index);
     length = strlen(name);
-    plan->callee_symbols[index] = malloc(length + 1);
-    if (plan->callee_symbols[index] == NULL)
+    plan->callees[index].kind = SIR_CALLEE_USER;
+    plan->callees[index].c_symbol = malloc(length + 1);
+    plan->callees[index].parameters =
+        calloc(1, sizeof(*plan->callees[index].parameters));
+    if (plan->callees[index].c_symbol == NULL ||
+        plan->callees[index].parameters == NULL)
       return 0;
-    memcpy(plan->callee_symbols[index], name, length + 1);
+    memcpy(plan->callees[index].c_symbol, name, length + 1);
+    plan->callees[index].parameter_count = 1;
+    plan->callees[index].parameters[0].type = sir_builtin_type(SIR_TYPE_STRING);
+    plan->callees[index].parameters[0].representation =
+        SIR_REP_STRING_DESCRIPTOR;
+    plan->callees[index].parameters[0].ownership = SIR_OWNERSHIP_OWNED;
+    plan->callees[index].parameters[0].mode = SIR_ARGUMENT_CONSUME;
+    plan->callees[index].return_type = sir_builtin_type(SIR_TYPE_STRING);
+    plan->callees[index].return_representation = SIR_REP_STRING_DESCRIPTOR;
+    plan->callees[index].return_ownership = SIR_OWNERSHIP_OWNED;
+    plan->callees[index].effects = sir_effects_none();
+    plan->callees[index].effects.flags = SIR_EFFECT_CALL;
+    plan->callees[index].call_abi = SIR_CALL_ABI_C_RETURN_VALUE;
   }
+  return 1;
+}
+
+static int configure_concat_callee(ownership_plan *plan, size_t index) {
+  const sir_intrinsic_descriptor *descriptor =
+      sir_intrinsic_lookup((string_view){"concat", 6}, 2);
+  ownership_callee *callee;
+  if (descriptor == NULL || index >= plan->callee_count)
+    return 0;
+  callee = &plan->callees[index];
+  free(callee->c_symbol);
+  free(callee->parameters);
+  memset(callee, 0, sizeof(*callee));
+  callee->kind = descriptor->signature.kind;
+  callee->symbol_id = descriptor->signature.symbol_id;
+  callee->c_symbol = malloc(descriptor->signature.c_symbol.length + 1);
+  callee->parameters = malloc(descriptor->signature.parameter_count *
+                              sizeof(*callee->parameters));
+  if (callee->c_symbol == NULL || callee->parameters == NULL)
+    return 0;
+  memcpy(callee->c_symbol, descriptor->signature.c_symbol.data,
+         descriptor->signature.c_symbol.length);
+  callee->c_symbol[descriptor->signature.c_symbol.length] = '\0';
+  memcpy(callee->parameters, descriptor->signature.parameters,
+         descriptor->signature.parameter_count * sizeof(*callee->parameters));
+  callee->parameter_count = descriptor->signature.parameter_count;
+  callee->return_type = descriptor->signature.return_type;
+  callee->return_representation = descriptor->signature.return_representation;
+  callee->return_ownership = descriptor->signature.return_ownership;
+  callee->effects = descriptor->signature.effects;
+  callee->call_abi = descriptor->signature.call_abi;
   return 1;
 }
 
@@ -514,7 +562,8 @@ static void test_malformed_call_frames_rejected(void) {
   ownership_plan_internal_destroy(&plan);
 
   ownership_plan_internal_init(&plan);
-  expect(add_test_callees(&plan, 1), "duplicate-operand test creates callee");
+  expect(add_test_callees(&plan, 1) && configure_concat_callee(&plan, 0),
+         "duplicate-operand test creates intrinsic callee");
   source = ownership_plan_internal_add_token(&plan, managed_string_token());
   prepared = ownership_plan_internal_add_token(&plan, managed_string_token());
   result = ownership_plan_internal_add_token(&plan, managed_string_token());
@@ -544,7 +593,8 @@ static void test_malformed_call_frames_rejected(void) {
   (void)ownership_plan_internal_add_operation(&plan, block, op);
   expect(!ownership_plan_internal_verify_and_seal(&plan, &diagnostic) &&
              diagnostic.code == OWNERSHIP_DIAGNOSTIC_INVALID_OPERATION,
-         "ownership verifier rejects duplicate consumption in one call");
+         "ownership verifier rejects one prepared share reused for aliased "
+         "intrinsic operands");
   ownership_plan_internal_destroy(&plan);
 }
 

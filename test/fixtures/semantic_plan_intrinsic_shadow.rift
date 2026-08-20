@@ -1,0 +1,11 @@
+sub concat(string first, string second) returns string {
+  return first;
+}
+
+sub route(string first, string second) returns string {
+  return concat(first, second);
+}
+
+sub main() {
+  print(route("user", "ignored"));
+}

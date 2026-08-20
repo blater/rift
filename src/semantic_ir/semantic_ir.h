@@ -81,6 +81,19 @@ typedef enum sir_callee_kind {
   SIR_CALLEE_INTRINSIC,
 } sir_callee_kind;
 
+typedef enum sir_intrinsic_id {
+  SIR_INTRINSIC_NONE,
+  SIR_INTRINSIC_CONCAT_STRING,
+  SIR_INTRINSIC_SUBSTRING_FROM,
+  SIR_INTRINSIC_SUBSTRING_RANGE,
+} sir_intrinsic_id;
+
+typedef enum sir_call_abi {
+  SIR_CALL_ABI_UNKNOWN,
+  SIR_CALL_ABI_C_RETURN_VALUE,
+  SIR_CALL_ABI_OUT_STRING_FIRST,
+} sir_call_abi;
+
 typedef enum sir_argument_mode {
   SIR_ARGUMENT_UNKNOWN,
   SIR_ARGUMENT_SCALAR,
@@ -106,6 +119,7 @@ typedef struct sir_signature {
   sir_representation return_representation;
   sir_ownership return_ownership;
   sir_effects effects;
+  sir_call_abi call_abi;
 } sir_signature;
 
 typedef struct sir_environment {
@@ -166,6 +180,7 @@ typedef struct sir_operation {
   sir_id callee;
   size_t parameter_index;
   int bool_value;
+  int int_value;
   sir_id *operands;
   size_t operand_count;
   sir_id *cleanup_slots;

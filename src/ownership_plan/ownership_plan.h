@@ -98,6 +98,19 @@ typedef struct ownership_slot_view {
   ownership_id token;
 } ownership_slot_view;
 
+typedef struct ownership_callee_view {
+  sir_callee_kind kind;
+  uint32_t symbol_id;
+  const char *c_symbol;
+  const sir_signature_parameter *parameters;
+  size_t parameter_count;
+  sir_type return_type;
+  sir_representation return_representation;
+  sir_ownership return_ownership;
+  sir_effects effects;
+  sir_call_abi call_abi;
+} ownership_callee_view;
+
 typedef struct ownership_operation_view {
   ownership_op_kind kind;
   ownership_id result;
@@ -105,6 +118,7 @@ typedef struct ownership_operation_view {
   ownership_id callee;
   size_t parameter_index;
   int bool_value;
+  int int_value;
   const ownership_id *operands;
   size_t operand_count;
   ownership_id targets[2];
@@ -124,6 +138,8 @@ int ownership_plan_slot_at(const ownership_plan *plan, ownership_id slot,
                            ownership_slot_view *view);
 const char *ownership_plan_callee_symbol(const ownership_plan *plan,
                                          ownership_id callee);
+int ownership_plan_callee_at(const ownership_plan *plan, ownership_id callee,
+                             ownership_callee_view *view);
 size_t ownership_plan_token_count(const ownership_plan *plan);
 size_t ownership_plan_block_count(const ownership_plan *plan);
 ownership_id ownership_plan_entry_block(const ownership_plan *plan);

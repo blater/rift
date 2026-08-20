@@ -304,4 +304,97 @@ gcc -Werror -Wall -Wextra -Wno-sign-compare -pedantic \
 zcc +zxn -vn -c -clib=sdcc_iy -I"$ROOT/src/lib" \
   "$WORK/branches-zxn.c" -o "$WORK/branches-zxn.o"
 
+"$ROOT/riftc" "$ROOT/test/fixtures/semantic_plan_string_intrinsics.rift" \
+  "$WORK/intrinsics" --target=gcc --semantic-plan \
+  --component-manifest="$ROOT/src/lib/components.manifest"
+intrinsic_body=$(awk '/^string rift_plan_body_1\(/ { seen++ }
+                      seen == 2 { print }
+                      seen == 2 && /^}$/ { exit }' "$WORK/intrinsics.c")
+[ "$(printf '%s\n' "$intrinsic_body" | grep -c '__concat_str(&')" -eq 6 ] ||
+  fail "concat calls did not route through the sealed intrinsic ABI"
+printf '%s\n' "$intrinsic_body" | grep -q '__substring_from(&' ||
+  fail "two-argument substring did not route through its sealed runtime ABI"
+printf '%s\n' "$intrinsic_body" | grep -q '__substring_range(&' ||
+  fail "three-argument substring did not route through its sealed runtime ABI"
+printf '%s\n' "$intrinsic_body" | awk '
+  /__concat_str\(&/ {
+    line = $0
+    sub(/^.*__concat_str\(&[^,]+, /, "", line)
+    split(line, args, /, |\);/)
+    first = args[1]
+    second = args[2]
+    if (first == second) exit 1
+    if (getline <= 0 || index($0, "__string_release(" second ")") == 0) exit 1
+    if (getline <= 0 || index($0, "__string_release(" first ")") == 0) exit 1
+    checked++
+  }
+  END { exit checked == 6 ? 0 : 1 }
+' || fail "intrinsic operands were not held distinctly and released in reverse"
+printf '%s\n' "$intrinsic_body" | awk '
+  /__concat_str\(&/ { calls++ }
+  calls == 4 && /__string_release\(rift_plan_tmp_/ { released_after_outer = 1 }
+  END { exit released_after_outer ? 0 : 1 }
+' || fail "a produced operand was not released after its consuming intrinsic"
+printf '%s\n' "$intrinsic_body" | awk '
+  /__concat_str\(&/ { result = $0; sub(/^.*&/, "", result); sub(/,.*/, "", result) }
+  result && index($0, "__string_release(" result ")") { discarded++; result = "" }
+  END { exit discarded >= 1 ? 0 : 1 }
+' || fail "discarded intrinsic result was not released at expression end"
+gcc -Werror -Wall -Wextra -Wno-sign-compare -pedantic \
+  -I"$ROOT/src/lib" -I"$ROOT/src/ext/lib" \
+  "$WORK/intrinsics.c" \
+  "$ROOT/src/lib/arena_host.c" "$ROOT/src/lib/pools.c" \
+  "$ROOT/src/lib/fundefs.c" "$ROOT/src/lib/termination.c" \
+  "$ROOT/src/lib/print_bytes.c" "$ROOT/src/lib/error_sink.c" \
+  "$ROOT/src/lib/host_caps.c" "$ROOT/src/lib/host/termbox2_impl.c" \
+  -o "$WORK/intrinsics.exe"
+[ "$("$WORK/intrinsics.exe")" = "bab" ] ||
+  fail "plan-emitted string intrinsics returned the wrong value"
+sed 's/rift_pools_init(NULL);/rift_arena_options rift_test_arena = { .memory_max = 1024, .memory_max_present = 1 }; rift_pools_init(\&rift_test_arena);/' \
+  "$WORK/intrinsics.c" >"$WORK/intrinsics-constrained.c"
+gcc -Werror -Wall -Wextra -Wno-sign-compare -pedantic \
+  -I"$ROOT/src/lib" -I"$ROOT/src/ext/lib" \
+  "$WORK/intrinsics-constrained.c" \
+  "$ROOT/src/lib/arena_host.c" "$ROOT/src/lib/pools.c" \
+  "$ROOT/src/lib/fundefs.c" "$ROOT/src/lib/termination.c" \
+  "$ROOT/src/lib/print_bytes.c" "$ROOT/src/lib/error_sink.c" \
+  "$ROOT/src/lib/host_caps.c" "$ROOT/src/lib/host/termbox2_impl.c" \
+  -o "$WORK/intrinsics-constrained.exe"
+[ "$("$WORK/intrinsics-constrained.exe")" = "bab" ] ||
+  fail "string intrinsics did not reuse a 1 KiB arena across 200 iterations"
+"$ROOT/riftc" "$ROOT/test/fixtures/semantic_plan_string_intrinsics.rift" \
+  "$WORK/intrinsics-zxn" --target=zxn --semantic-plan \
+  --component-manifest="$ROOT/src/lib/components.manifest"
+zcc +zxn -vn -c -clib=sdcc_iy -I"$ROOT/src/lib" \
+  "$WORK/intrinsics-zxn.c" -o "$WORK/intrinsics-zxn.o"
+
+"$ROOT/riftc" "$ROOT/test/fixtures/semantic_plan_intrinsic_shadow.rift" \
+  "$WORK/intrinsic-shadow" --target=gcc --semantic-plan \
+  --component-manifest="$ROOT/src/lib/components.manifest"
+if grep -q '__concat_str' "$WORK/intrinsic-shadow.c"; then
+  fail "intrinsic lookup outranked a resolved selected user function"
+fi
+gcc -Werror -Wall -Wextra -Wno-sign-compare -pedantic \
+  -I"$ROOT/src/lib" -I"$ROOT/src/ext/lib" \
+  "$WORK/intrinsic-shadow.c" \
+  "$ROOT/src/lib/arena_host.c" "$ROOT/src/lib/pools.c" \
+  "$ROOT/src/lib/fundefs.c" "$ROOT/src/lib/termination.c" \
+  "$ROOT/src/lib/print_bytes.c" "$ROOT/src/lib/error_sink.c" \
+  "$ROOT/src/lib/host_caps.c" "$ROOT/src/lib/host/termbox2_impl.c" \
+  -o "$WORK/intrinsic-shadow.exe"
+[ "$("$WORK/intrinsic-shadow.exe")" = "user" ] ||
+  fail "selected user shadow did not retain call precedence"
+
+for rejected_intrinsic in arity type; do
+  if "$ROOT/riftc" \
+      "$ROOT/test/fixtures/semantic_plan_intrinsic_${rejected_intrinsic}_unsupported.rift" \
+      "$WORK/intrinsic-$rejected_intrinsic" --target=gcc --semantic-plan \
+      --component-manifest="$ROOT/src/lib/components.manifest" \
+      >"$WORK/intrinsic-$rejected_intrinsic.log" 2>&1; then
+    fail "unsupported intrinsic $rejected_intrinsic unexpectedly compiled"
+  fi
+  [ ! -s "$WORK/intrinsic-$rejected_intrinsic.c" ] ||
+    fail "unsupported intrinsic $rejected_intrinsic emitted partial C"
+done
+
 echo "PASS: semantic-plan generated-C seam"

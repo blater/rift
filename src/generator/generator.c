@@ -4,19 +4,19 @@
 //  Copyright (c) 2024 Paul Passeron
 //-----------------------------------------------------------------------------
 
-#include "internal.h"
+#include "ast.h"
 #include "components.h"
+#include "error.h"
+#include "internal.h"
+#include "lib/alloc.h"
+#include "name_table.h"
 #include "ownership.h"
 #include "profile.h"
-#include "semantic_plan.h"
-#include "type_info.h"
 #include "semantic/resolve.h"
-#include "lib/alloc.h"
-#include "ast.h"
-#include "error.h"
-#include "name_table.h"
+#include "semantic_plan.h"
 #include "stringview.h"
 #include "token.h"
+#include "type_info.h"
 #include <assert.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -38,6 +38,8 @@ int is_builtin_typename(char *name);
 const char *allocate_string_tmp(generator_t *g);
 int get_literal_string_length(token_t tok);
 char *capture_expression(generator_t *g, ast_t expr);
+static char *capture_expression_for_type(generator_t *g, ast_t expr,
+                                         ast_type expected_type);
 ast_t make_native_fundef(component_interface_spec *entry,
                          method_kind_t method_kind);
 
@@ -62,7 +64,7 @@ static string_view c_scalar_type_name(string_view rift_type) {
 // Field names emitted into the C struct that backs every `union`.
 // The discriminator is `key` (an enum); the payload is `value` (a C union).
 // Centralised so a future rename touches one place.
-#define UNION_KEY_FIELD   "key"
+#define UNION_KEY_FIELD "key"
 #define UNION_VALUE_FIELD "value"
 
 // Helper: Capture expression into a temporary buffer and return it
@@ -80,9 +82,27 @@ char *capture_expression(generator_t *g, ast_t expr) {
   return buf;
 }
 
+/* input() remains a string producer in an unconstrained expression. A
+ * numeric destination consumes it through a checked conversion. */
+static char *capture_expression_for_type(generator_t *g, ast_t expr,
+                                         ast_type expected_type) {
+  if (!is_inferred_checked_input(expr, expected_type))
+    return capture_expression(g, expr);
+
+  char value_name[64];
+  char *line = capture_expression(g, expr);
+  snprintf(value_name, sizeof(value_name), "__converted_input_%d",
+           g->str_tmp_counter++);
+  fprintf(g->pre_f, "float %s = rift_parse_float_checked(%s);\n", value_name,
+          line);
+  free(line);
+  return strdup(value_name);
+}
+
 // Helper: Create a synthetic AST type node for registering builtin signatures
-// Build a mangled method name: "TypeName_methodName" or "TypeName_array_methodName".
-// Returns a null-terminated string allocated in the compiler persistent arena.
+// Build a mangled method name: "TypeName_methodName" or
+// "TypeName_array_methodName". Returns a null-terminated string allocated in
+// the compiler persistent arena.
 char *mangle_method(string_view type_name, string_view method_name,
                     int is_array_method) {
   size_t tl = type_name.length;
@@ -106,10 +126,10 @@ char *mangle_method(string_view type_name, string_view method_name,
 
 char *mangle_type_method(string_view type_name, string_view method_name,
                          int arity) {
-  int needed = snprintf(NULL, 0, "rift__tm_L%zu_%.*s_L%zu_%.*s_A%d",
-                        type_name.length, (int)type_name.length, type_name.data,
-                        method_name.length, (int)method_name.length,
-                        method_name.data, arity);
+  int needed =
+      snprintf(NULL, 0, "rift__tm_L%zu_%.*s_L%zu_%.*s_A%d", type_name.length,
+               (int)type_name.length, type_name.data, method_name.length,
+               (int)method_name.length, method_name.data, arity);
   char *buf = allocate_compiler_persistent((size_t)needed + 1);
   snprintf(buf, (size_t)needed + 1, "rift__tm_L%zu_%.*s_L%zu_%.*s_A%d",
            type_name.length, (int)type_name.length, type_name.data,
@@ -123,7 +143,8 @@ int is_instance_method_kind(method_kind_t kind) {
 }
 
 char *mangle_fundef_method(ast_fundef fundef) {
-  if (fundef.emitted_c_name) return fundef.emitted_c_name;
+  if (fundef.emitted_c_name)
+    return fundef.emitted_c_name;
   if (fundef.method_kind == METHOD_TYPE_LEVEL) {
     return mangle_type_method(fundef.type_name.lexeme, fundef.name.lexeme,
                               fundef.args.length);
@@ -135,7 +156,7 @@ char *mangle_fundef_method(ast_fundef fundef) {
 static ast_t make_type_node(const char *type_name) {
   node_t n = {0};
   n.tag = type;
-  n.data.type.name.lexeme = sv_from_cstr((char*)type_name);
+  n.data.type.name.lexeme = sv_from_cstr((char *)type_name);
   return new_ast(n);
 }
 
@@ -145,7 +166,8 @@ static ast_t make_manifest_type_node(const char *type_name) {
                  type_name[length - 1] == ']';
   char *base = allocate_compiler_persistent(length + 1);
   memcpy(base, type_name, length + 1);
-  if (is_array) base[length - 2] = '\0';
+  if (is_array)
+    base[length - 2] = '\0';
   ast_t result = make_type_node(base);
   result->data.type.is_array = is_array;
   return result;
@@ -182,8 +204,7 @@ ast_t make_native_fundef(component_interface_spec *entry,
     snprintf(argument_name, 24, "arg%d", i);
     argument.lexeme = sv_from_cstr(argument_name);
     token_array_push(&node.data.fundef.args, argument);
-    push_ast_array(&node.data.fundef.types,
-                   make_manifest_type_node(parameter));
+    push_ast_array(&node.data.fundef.types, make_manifest_type_node(parameter));
   }
   return new_ast(node);
 }
@@ -200,8 +221,7 @@ static void register_manifest_interfaces(generator_t *g) {
       push_nt(&g->table, sv_from_cstr(entry->owner), NT_OPAQUE_TYPE,
               make_manifest_type_node(entry->owner));
       ast_t constructor = make_native_fundef(entry, METHOD_NONE);
-      push_nt(&g->table, sv_from_cstr(entry->constructor), NT_FUN,
-              constructor);
+      push_nt(&g->table, sv_from_cstr(entry->constructor), NT_FUN, constructor);
     } else if (entry->kind == COMPONENT_BUILTIN) {
       ast_t builtin = make_native_fundef(entry, METHOD_NONE);
       push_nt(&g->table, sv_from_cstr(entry->name), NT_FUN, builtin);
@@ -227,22 +247,22 @@ static void register_builtin_type(name_table_t *table, const char *name) {
 
 // Helper: Register a builtin function in the name table with its return type
 static void register_builtin(name_table_t *table, const char *name,
-                              const char *ret_type) {
+                             const char *ret_type) {
   node_t fn = {0};
   fn.tag = fundef;
-  fn.data.fundef.name.lexeme = sv_from_cstr((char*)name);
+  fn.data.fundef.name.lexeme = sv_from_cstr((char *)name);
   fn.data.fundef.ret_type = make_type_node(ret_type);
-  push_nt(table, sv_from_cstr((char*)name), NT_FUN, new_ast(fn));
+  push_nt(table, sv_from_cstr((char *)name), NT_FUN, new_ast(fn));
 }
 
 // Variadic variant: also records parameter types so --auto-cast can wrap
 // numeric args in `(byte)`/`(word)`/`(dword)` for matching callee params.
 // Caller passes type names as `const char *` after `n_params`.
 static void register_builtin_typed(name_table_t *table, const char *name,
-                                    const char *ret_type, int n_params, ...) {
+                                   const char *ret_type, int n_params, ...) {
   node_t fn = {0};
   fn.tag = fundef;
-  fn.data.fundef.name.lexeme = sv_from_cstr((char*)name);
+  fn.data.fundef.name.lexeme = sv_from_cstr((char *)name);
   fn.data.fundef.ret_type = make_type_node(ret_type);
   if (n_params > 0) {
     ast_array_t types = new_ast_array();
@@ -255,14 +275,15 @@ static void register_builtin_typed(name_table_t *table, const char *name,
     va_end(ap);
     fn.data.fundef.types = types;
   }
-  push_nt(table, sv_from_cstr((char*)name), NT_FUN, new_ast(fn));
+  push_nt(table, sv_from_cstr((char *)name), NT_FUN, new_ast(fn));
 }
 
 // Count top-level user fundefs (non-methods) sharing a name. Used to decide
 // whether to mangle a name for arity-based overload dispatch. Only user fundefs
 // are counted — builtins are not overloaded in Phase 1.
 static int program_user_fundef_count(ast_t program, string_view name) {
-  if (program == NULL) return 0;
+  if (program == NULL)
+    return 0;
   int n = 0;
   ast_array_t stmts = program->data.program.prog;
   for (int i = 0; i < stmts.length; i++) {
@@ -285,7 +306,8 @@ static void emit_fun_name(FILE *f, generator_t *g, string_view name, int argc) {
                      svcmp(name, sv_from_cstr("concat")) == 0 ||
                      svcmp(name, sv_from_cstr("input")) == 0 ||
                      svcmp(name, sv_from_cstr("putchar")) == 0;
-  if (lowered_name) fprintf(f, "rift_user_");
+  if (lowered_name)
+    fprintf(f, "rift_user_");
   if (program_user_fundef_count(g->program, name) > 1)
     fprintf(f, SV_Fmt "__%d", SV_Arg(name), argc);
   else
@@ -302,7 +324,8 @@ typedef struct {
 } concat_leaf_array;
 
 static int intrinsic_concat(ast_t expr) {
-  if (!expr || expr->tag != funcall) return 0;
+  if (!expr || expr->tag != funcall)
+    return 0;
   ast_funcall call = expr->data.funcall;
   int resolved_user = call.resolved_target &&
                       call.resolved_target->tag == fundef &&
@@ -314,8 +337,8 @@ static int intrinsic_concat(ast_t expr) {
 static void push_concat_leaf(concat_leaf_array *leaves, ast_t leaf) {
   if (leaves->length == leaves->capacity) {
     leaves->capacity = leaves->capacity == 0 ? 4 : leaves->capacity * 2;
-    leaves->data = realloc(leaves->data,
-                           sizeof(*leaves->data) * (size_t)leaves->capacity);
+    leaves->data =
+        realloc(leaves->data, sizeof(*leaves->data) * (size_t)leaves->capacity);
     if (!leaves->data) {
       fprintf(stderr, "riftc: out of memory while lowering concat\n");
       exit(1);
@@ -364,17 +387,17 @@ void emit_concat(generator_t *g, ast_funcall call) {
     char *text;
     if (!printable_type_supported(type)) {
       error(token.filename, token.line, token.col,
-            "concat operand must be string, char, boolean, byte, word, dword, int, or float");
+            "concat operand must be string, char, boolean, byte, word, dword, "
+            "int, or float");
       valid = 0;
       continue;
     }
     text = capture_expression(g, leaf);
-    fprintf(g->pre_f, "%s __concat_value_%d_%d = %s;\n",
-            printable_c_type(type), id, i, text);
+    fprintf(g->pre_f, "%s __concat_value_%d_%d = %s;\n", printable_c_type(type),
+            id, i, text);
     if (printable_type_is(type, "string")) {
       if (rhs_is_borrower(leaf))
-        fprintf(g->pre_f, "__string_retain(__concat_value_%d_%d);\n", id,
-                i);
+        fprintf(g->pre_f, "__string_retain(__concat_value_%d_%d);\n", id, i);
       else if (strncmp(text, "__strtmp_", 9) == 0)
         emit_nullify_tmp(g->pre_f, text);
       fprintf(g->pre_f,
@@ -408,8 +431,9 @@ void emit_concat(generator_t *g, ast_funcall call) {
             "__concat_total_%d = __concat_checked_add(__concat_total_%d, "
             "__concat_length_%d_%d);\n",
             id, id, id, i);
-  fprintf(g->pre_f, "string %s; __rift_make_longlived_string(&%s, "
-                    "__concat_total_%d);\n",
+  fprintf(g->pre_f,
+          "string %s; __rift_make_longlived_string(&%s, "
+          "__concat_total_%d);\n",
           tmp_var, tmp_var, id);
   fprintf(g->pre_f, "size_t __concat_offset_%d = 0;\n", id);
   for (int i = 0; i < leaves.length; i++) {
@@ -449,7 +473,8 @@ static int emit_concat_assignment(generator_t *g, string_view target,
   concat_leaf_array leaves = {0};
   int id;
 
-  if (!intrinsic_concat(expr)) return 0;
+  if (!intrinsic_concat(expr))
+    return 0;
   collect_concat_leaves(&leaves, expr);
   if (leaves.length < 2 || leaves.data[0]->tag != identifier ||
       svcmp(leaves.data[0]->data.identifier.id.lexeme, target) != 0) {
@@ -469,17 +494,17 @@ static int emit_concat_assignment(generator_t *g, string_view target,
     char *text;
     if (!printable_type_supported(type)) {
       error(token.filename, token.line, token.col,
-            "concat operand must be string, char, boolean, byte, word, dword, int, or float");
+            "concat operand must be string, char, boolean, byte, word, dword, "
+            "int, or float");
       free(leaves.data);
       return 1;
     }
     text = capture_expression(g, leaf);
-    fprintf(g->pre_f, "%s __concat_value_%d_%d = %s;\n",
-            printable_c_type(type), id, i, text);
+    fprintf(g->pre_f, "%s __concat_value_%d_%d = %s;\n", printable_c_type(type),
+            id, i, text);
     if (printable_type_is(type, "string")) {
       if (rhs_is_borrower(leaf))
-        fprintf(g->pre_f, "__string_retain(__concat_value_%d_%d);\n", id,
-                i);
+        fprintf(g->pre_f, "__string_retain(__concat_value_%d_%d);\n", id, i);
       else if (strncmp(text, "__strtmp_", 9) == 0)
         emit_nullify_tmp(g->pre_f, text);
       fprintf(g->pre_f,
@@ -500,8 +525,8 @@ static int emit_concat_assignment(generator_t *g, string_view target,
     free(text);
   }
 
-  fprintf(g->pre_f, "size_t __concat_total_%d = __concat_base_%d.length;\n",
-          id, id);
+  fprintf(g->pre_f, "size_t __concat_total_%d = __concat_base_%d.length;\n", id,
+          id);
   for (int i = 1; i < leaves.length; i++)
     fprintf(g->pre_f,
             "__concat_total_%d = __concat_checked_add(__concat_total_%d, "
@@ -522,8 +547,8 @@ static int emit_concat_assignment(generator_t *g, string_view target,
       snprintf(data_name, sizeof(data_name), "__concat_buffer_%d_%d", id, i);
     fprintf(g->f,
             "__concat_append_owned(&__concat_base_%d, %s, "
-            "__concat_length_%d_%d, (" SV_Fmt ".backing != NULL && "
-            SV_Fmt ".backing == __concat_base_%d.backing && " SV_Fmt
+            "__concat_length_%d_%d, (" SV_Fmt ".backing != NULL && " SV_Fmt
+            ".backing == __concat_base_%d.backing && " SV_Fmt
             ".data == __concat_base_%d.data) ? 2u : 1u);\n",
             id, data_name, id, i, SV_Arg(target), SV_Arg(target), id,
             SV_Arg(target), id);
@@ -541,10 +566,14 @@ void emit_to_string(generator_t *g, ast_funcall call) {
   ast_t arg = call.args.data[0];
   const char *fn = "__to_string_int";
   string_view type = infer_expr_type(arg, g->table);
-  if (svcmp(type, sv_from_cstr("byte")) == 0) fn = "__to_string_byte";
-  else if (svcmp(type, sv_from_cstr("word")) == 0) fn = "__to_string_word";
-  else if (svcmp(type, sv_from_cstr("dword")) == 0) fn = "__to_string_dword";
-  else if (svcmp(type, sv_from_cstr("float")) == 0) fn = "__to_string_float";
+  if (svcmp(type, sv_from_cstr("byte")) == 0)
+    fn = "__to_string_byte";
+  else if (svcmp(type, sv_from_cstr("word")) == 0)
+    fn = "__to_string_word";
+  else if (svcmp(type, sv_from_cstr("dword")) == 0)
+    fn = "__to_string_dword";
+  else if (svcmp(type, sv_from_cstr("float")) == 0)
+    fn = "__to_string_float";
   else if (svcmp(type, sv_from_cstr("boolean")) == 0 ||
            svcmp(type, sv_from_cstr("bool")) == 0)
     fn = "__to_string_boolean";
@@ -571,8 +600,8 @@ void emit_substring(generator_t *g, ast_funcall call) {
     char *arg0_buf = capture_expression(g, call.args.data[0]);
     char *arg1_buf = capture_expression(g, call.args.data[1]);
 
-    fprintf(g->pre_f, "string %s; __substring_from(&%s, %s, %s);\n",
-            tmp_var, tmp_var, arg0_buf, arg1_buf);
+    fprintf(g->pre_f, "string %s; __substring_from(&%s, %s, %s);\n", tmp_var,
+            tmp_var, arg0_buf, arg1_buf);
     fprintf(g->f, "%s", tmp_var);
 
     free(arg0_buf);
@@ -593,8 +622,8 @@ void emit_substring(generator_t *g, ast_funcall call) {
     track_string_tmp(g, tmp_var);
   } else {
     token_t tok = call.name;
-    error(tok.filename, tok.line, tok.col, "substring() requires 2 or 3 arguments, got %d",
-          call.args.length);
+    error(tok.filename, tok.line, tok.col,
+          "substring() requires 2 or 3 arguments, got %d", call.args.length);
   }
 }
 
@@ -604,11 +633,12 @@ void emit_string_literal(generator_t *g, const char *tmp_var, token_t tok) {
    * first fields here would make literal strings unsafe on one target. */
   int byte_len = get_literal_string_length(tok) - 1;
   int id = g->lit_counter++;
-  fprintf(g->pre_f,
-          "static struct { rift_block_header header; char data[%d]; } "
-          "__rift_lit_%d = { .header = { .size = %d, .refcount = RIFT_RC_STATIC, "
-          ".next_free = 0 }, .data = " SV_Fmt " };\n",
-          byte_len + 1, id, byte_len, SV_Arg(tok.lexeme));
+  fprintf(
+      g->pre_f,
+      "static struct { rift_block_header header; char data[%d]; } "
+      "__rift_lit_%d = { .header = { .size = %d, .refcount = RIFT_RC_STATIC, "
+      ".next_free = 0 }, .data = " SV_Fmt " };\n",
+      byte_len + 1, id, byte_len, SV_Arg(tok.lexeme));
   fprintf(g->pre_f,
           "string %s; __rift_make_string(&%s, __rift_lit_%d.data, %d); "
           "%s.backing = &__rift_lit_%d.header;\n",
@@ -618,8 +648,7 @@ void emit_string_literal(generator_t *g, const char *tmp_var, token_t tok) {
 
 // Helper: Flush accumulated pre-statements to destination and reset pre_f
 // (used in Step 3 for ZXN statement splitting)
-__attribute__((unused))
-static void flush_pre_f(generator_t *g, FILE *dest) {
+__attribute__((unused)) static void flush_pre_f(generator_t *g, FILE *dest) {
   if (g->pre_f == NULL)
     return;
   fflush(g->pre_f);
@@ -636,15 +665,21 @@ static void flush_pre_f(generator_t *g, FILE *dest) {
 // Helper: Append a string to the deferred global init list, growing as needed.
 static void push_deferred_global_init(generator_t *g, char *code) {
   if (g->deferred_global_init_count >= g->deferred_global_init_capacity) {
-    g->deferred_global_init_capacity = g->deferred_global_init_capacity == 0 ? 8 : g->deferred_global_init_capacity * 2;
-    g->deferred_global_init_code = realloc(g->deferred_global_init_code,
-                                           g->deferred_global_init_capacity * sizeof(char *));
+    g->deferred_global_init_capacity =
+        g->deferred_global_init_capacity == 0
+            ? 8
+            : g->deferred_global_init_capacity * 2;
+    g->deferred_global_init_code =
+        realloc(g->deferred_global_init_code,
+                g->deferred_global_init_capacity * sizeof(char *));
   }
   g->deferred_global_init_code[g->deferred_global_init_count++] = code;
 }
 
-// Helper: Save deferred init code (pre_f setup + assignment) for emitting in main()
-static void defer_global_init(generator_t *g, string_view var_name, const char *expr_text) {
+// Helper: Save deferred init code (pre_f setup + assignment) for emitting in
+// main()
+static void defer_global_init(generator_t *g, string_view var_name,
+                              const char *expr_text) {
   // Build: pre_f_content + "var = expr;\n"
   char *code = NULL;
   size_t size = 0;
@@ -695,8 +730,7 @@ generator_t *new_generator(char *filename, const char *output_base,
   snprintf(res->component_output_path, component_path_size, "%s.components",
            output_base);
   size_t asset_path_size = strlen(output_base) + 12;
-  res->asset_asm_output_path =
-      allocate_compiler_persistent(asset_path_size);
+  res->asset_asm_output_path = allocate_compiler_persistent(asset_path_size);
   snprintf(res->asset_asm_output_path, asset_path_size, "%s.assets.asm",
            output_base);
   res->asset_decls = new_ast_array();
@@ -717,38 +751,38 @@ generator_t *new_generator(char *filename, const char *output_base,
 
   // Register C library builtin functions with their return types
   // Stdlib / I/O
-  register_builtin(&res->table, "print",                "void");
-  register_builtin(&res->table, "println",              "void");
+  register_builtin(&res->table, "print", "void");
+  register_builtin(&res->table, "println", "void");
   // Array operations - handled specially by name lookup in generator
-  register_builtin(&res->table, "length",               "int");
+  register_builtin(&res->table, "length", "int");
   // String operations from fundefs.h
-  register_builtin(&res->table, "charAt",               "char");
-  register_builtin(&res->table, "setCharAt",            "void");
-  register_builtin(&res->table, "equals",               "int");
-  register_builtin(&res->table, "string_to_cstr",       "void");
-  register_builtin(&res->table, "cstr_to_string",       "string");
-  register_builtin(&res->table, "new_string",           "string");
+  register_builtin(&res->table, "charAt", "char");
+  register_builtin(&res->table, "setCharAt", "void");
+  register_builtin(&res->table, "equals", "int");
+  register_builtin(&res->table, "string_to_cstr", "void");
+  register_builtin(&res->table, "cstr_to_string", "string");
+  register_builtin(&res->table, "new_string", "string");
   // Numeric conversions
-  register_builtin(&res->table, "to_int",               "int");
-  register_builtin(&res->table, "to_byte",              "byte");
-  register_builtin(&res->table, "to_word",              "word");
-  register_builtin(&res->table, "to_dword",             "dword");
-  register_builtin(&res->table, "to_float",             "float");
-  register_builtin(&res->table, "set_string_index_base","void");
+  register_builtin(&res->table, "to_int", "int");
+  register_builtin(&res->table, "to_byte", "byte");
+  register_builtin(&res->table, "to_word", "word");
+  register_builtin(&res->table, "to_dword", "dword");
+  register_builtin(&res->table, "to_float", "float");
+  register_builtin(&res->table, "set_string_index_base", "void");
   // Built-in array/string functions with special code generation
-  register_builtin(&res->table, "substring",            "string");
-  register_builtin(&res->table, "concat",               "string");
-  register_builtin(&res->table, "toString",             "string");
+  register_builtin(&res->table, "substring", "string");
+  register_builtin(&res->table, "concat", "string");
+  register_builtin(&res->table, "toString", "string");
   // Core compiler functions - always available
-  register_builtin(&res->table, "exit",                 "void");
-  register_builtin(&res->table, "halt",                 "void");
-  register_builtin(&res->table, "putchar",              "void");
-  register_builtin(&res->table, "putchar_at",           "void");
-  register_builtin(&res->table, "putchar_addr",         "void");
+  register_builtin(&res->table, "exit", "void");
+  register_builtin(&res->table, "halt", "void");
+  register_builtin(&res->table, "putchar", "void");
+  register_builtin(&res->table, "putchar_at", "void");
+  register_builtin(&res->table, "putchar_addr", "void");
   /* Generated startup markers use the compiler-private C-string stage ABI.
    * Rift-visible target-test helpers are declared by the manifest. */
-  register_builtin(&res->table, "zxn_test_stage",       "void");
-  register_builtin_typed(&res->table, "Sprite",         "Sprite", 1, "byte");
+  register_builtin(&res->table, "zxn_test_stage", "void");
+  register_builtin_typed(&res->table, "Sprite", "Sprite", 1, "byte");
 
   /* Component-backed built-ins are registered from components.manifest by
    * register_manifest_interfaces(). Keep only compiler-core built-ins here. */
@@ -770,7 +804,8 @@ generator_t *new_generator(char *filename, const char *output_base,
 
 void kill_generator(generator_t *g) {
   // Free any remaining scope nodes (handles error-exit paths)
-  while (g->scope) pop_scope(g);
+  while (g->scope)
+    pop_scope(g);
   fclose(g->f);
   // Clean up pre_f buffer if initialized (ZXN target only)
   if (g->pre_f != NULL) {
@@ -785,7 +820,8 @@ void generate_subscript(generator_t *g, ast_t expr) {
   FILE *f = g->f;
   ast_arr_index sub = expr->data.arr_index;
   token_t call_token = token_for_expr(sub.array);
-  string_view elem_type = get_array_element_type(sub.array, g->table, call_token);
+  string_view elem_type =
+      get_array_element_type(sub.array, g->table, call_token);
 
   // For string arrays, use pre_f to emit setup statements
   if (svcmp(elem_type, SV_STRING) == 0) {
@@ -838,8 +874,8 @@ void generate_array_op(generator_t *g, ast_funcall call, array_op_t op) {
   // Validate argument count
   if (call.args.length != op.expected_args) {
     error(call.name.filename, call.name.line, call.name.col,
-          "%s() requires %d argument(s), got %d", op.name,
-          op.expected_args, call.args.length);
+          "%s() requires %d argument(s), got %d", op.name, op.expected_args,
+          call.args.length);
     return;
   }
 
@@ -860,9 +896,11 @@ void generate_array_op(generator_t *g, ast_funcall call, array_op_t op) {
                                    element_type);
   }
 
-  // For string arrays with get_elem or pop_array, use pre_f for setup statements
+  // For string arrays with get_elem or pop_array, use pre_f for setup
+  // statements
   if (svcmp(type_name, SV_STRING) == 0 &&
-      (strcmp(op.suffix, "_get_elem") == 0 || strcmp(op.suffix, "_pop_array") == 0)) {
+      (strcmp(op.suffix, "_get_elem") == 0 ||
+       strcmp(op.suffix, "_pop_array") == 0)) {
     const char *tmp = allocate_string_tmp(g);
     if (strcmp(op.suffix, "_get_elem") == 0) {
       // string_get_elem: 2 args (array, index)
@@ -876,8 +914,8 @@ void generate_array_op(generator_t *g, ast_funcall call, array_op_t op) {
     } else {
       // string_pop_array: 1 arg (array)
       char *arr_buf = capture_expression(g, call.args.data[0]);
-      fprintf(g->pre_f, "string %s; string_pop_array(&%s, %s);\n",
-              tmp, tmp, arr_buf);
+      fprintf(g->pre_f, "string %s; string_pop_array(&%s, %s);\n", tmp, tmp,
+              arr_buf);
       fprintf(f, "%s", tmp);
       free(arr_buf);
     }
@@ -888,7 +926,20 @@ void generate_array_op(generator_t *g, ast_funcall call, array_op_t op) {
     for (int i = 0; i < call.args.length; i++) {
       if (i > 0)
         fprintf(f, ", ");
-      generate_expression(g, call.args.data[i]);
+      int value_argument = (strcmp(op.suffix, "_push_array") == 0 && i == 1) ||
+                           (strcmp(op.suffix, "_set_elem") == 0 && i == 2) ||
+                           (strcmp(op.suffix, "_insert") == 0 && i == 2);
+      ast_type expected_type = {0};
+      expected_type.name.lexeme = type_name;
+      if (value_argument &&
+          is_inferred_checked_input(call.args.data[i], expected_type)) {
+        char *argument =
+            capture_expression_for_type(g, call.args.data[i], expected_type);
+        fprintf(f, "%s", argument);
+        free(argument);
+      } else {
+        generate_expression(g, call.args.data[i]);
+      }
     }
     fprintf(f, ")");
   }
@@ -940,16 +991,16 @@ void generate_substring(generator_t *g, ast_funcall call) {
 
 void generate_concat(generator_t *g, ast_funcall call) {
   if (call.args.length != 2) {
-    error(call.name.filename, call.name.line, call.name.col, "concat() requires 2 arguments, got %d",
-          call.args.length);
+    error(call.name.filename, call.name.line, call.name.col,
+          "concat() requires 2 arguments, got %d", call.args.length);
   }
   emit_concat(g, call);
 }
 
 void generate_to_string(generator_t *g, ast_funcall call) {
   if (call.args.length != 1) {
-    error(call.name.filename, call.name.line, call.name.col, "toString() requires 1 argument, got %d",
-          call.args.length);
+    error(call.name.filename, call.name.line, call.name.col,
+          "toString() requires 1 argument, got %d", call.args.length);
   }
   emit_to_string(g, call);
 }
@@ -960,21 +1011,29 @@ static int printable_type_is(string_view type, const char *name) {
 
 static int printable_type_supported(string_view type) {
   return printable_type_is(type, "string") || printable_type_is(type, "char") ||
-         printable_type_is(type, "boolean") || printable_type_is(type, "bool") ||
-         printable_type_is(type, "byte") || printable_type_is(type, "word") ||
-         printable_type_is(type, "dword") || printable_type_is(type, "int") ||
-         printable_type_is(type, "float");
+         printable_type_is(type, "boolean") ||
+         printable_type_is(type, "bool") || printable_type_is(type, "byte") ||
+         printable_type_is(type, "word") || printable_type_is(type, "dword") ||
+         printable_type_is(type, "int") || printable_type_is(type, "float");
 }
 
 static const char *printable_c_type(string_view type) {
-  if (printable_type_is(type, "bool")) return "boolean";
-  if (printable_type_is(type, "string")) return "string";
-  if (printable_type_is(type, "char")) return "char";
-  if (printable_type_is(type, "boolean")) return "boolean";
-  if (printable_type_is(type, "byte")) return "byte";
-  if (printable_type_is(type, "word")) return "word";
-  if (printable_type_is(type, "dword")) return "dword";
-  if (printable_type_is(type, "float")) return "float";
+  if (printable_type_is(type, "bool"))
+    return "boolean";
+  if (printable_type_is(type, "string"))
+    return "string";
+  if (printable_type_is(type, "char"))
+    return "char";
+  if (printable_type_is(type, "boolean"))
+    return "boolean";
+  if (printable_type_is(type, "byte"))
+    return "byte";
+  if (printable_type_is(type, "word"))
+    return "word";
+  if (printable_type_is(type, "dword"))
+    return "dword";
+  if (printable_type_is(type, "float"))
+    return "float";
   return "int";
 }
 
@@ -1003,7 +1062,8 @@ static void emit_printable_call(generator_t *g, ast_t value) {
   token_t token = token_for_expr(value);
   if (!printable_type_supported(type)) {
     error(token.filename, token.line, token.col,
-          "print value must be string, char, boolean, byte, word, dword, int, or float");
+          "print value must be string, char, boolean, byte, word, dword, int, "
+          "or float");
     fprintf(g->f, "(void)0");
     return;
   }
@@ -1029,7 +1089,8 @@ static void emit_positioned_print(generator_t *g, ast_funcall call) {
   token_t value_token = token_for_expr(call.args.data[2]);
   if (!printable_type_supported(value_type)) {
     error(value_token.filename, value_token.line, value_token.col,
-          "positioned print value must be string, char, boolean, byte, word, dword, int, or float");
+          "positioned print value must be string, char, boolean, byte, word, "
+          "dword, int, or float");
     fprintf(g->f, "(void)0");
     return;
   }
@@ -1044,17 +1105,16 @@ static void emit_positioned_print(generator_t *g, ast_funcall call) {
   if (call.args.data[2]->tag == literal &&
       call.args.data[2]->data.literal.lit.type == TOK_STR_LIT) {
     token_t literal = call.args.data[2]->data.literal.lit;
-    fprintf(g->pre_f,
-            "rift_console_set_cursor(__print_x_%d, __print_y_%d);\n", id,
-            id);
+    fprintf(g->pre_f, "rift_console_set_cursor(__print_x_%d, __print_y_%d);\n",
+            id, id);
     fprintf(g->pre_f, "rift_print_bytes(" SV_Fmt ", %d);\n",
             SV_Arg(literal.lexeme), get_literal_string_length(literal) - 1);
     fprintf(g->f, "(void)0");
     return;
   }
   char *value_text = capture_expression(g, call.args.data[2]);
-  fprintf(g->pre_f, "%s __print_value_%d = %s;\n",
-          printable_c_type(value_type), id, value_text);
+  fprintf(g->pre_f, "%s __print_value_%d = %s;\n", printable_c_type(value_type),
+          id, value_text);
   if (printable_type_is(value_type, "string")) {
     if (rhs_is_borrower(call.args.data[2]))
       fprintf(g->pre_f, "__string_retain(__print_value_%d);\n", id);
@@ -1082,8 +1142,7 @@ static void emit_positioned_putchar(generator_t *g, ast_funcall call,
     fprintf(g->pre_f, "word __putchar_address_%d = (word)(%s);\n", id,
             first_text);
   else
-    fprintf(g->pre_f, "byte __putchar_x_%d = (byte)(%s);\n", id,
-            first_text);
+    fprintf(g->pre_f, "byte __putchar_x_%d = (byte)(%s);\n", id, first_text);
   free(first_text);
   if (!raw_address) {
     char *y_text = capture_expression(g, call.args.data[1]);
@@ -1091,8 +1150,7 @@ static void emit_positioned_putchar(generator_t *g, ast_funcall call,
     free(y_text);
   }
   value_text = capture_expression(g, call.args.data[raw_address ? 1 : 2]);
-  fprintf(g->pre_f, "char __putchar_value_%d = (char)(%s);\n", id,
-          value_text);
+  fprintf(g->pre_f, "char __putchar_value_%d = (char)(%s);\n", id, value_text);
   free(value_text);
   if (raw_address)
     fprintf(g->pre_f,
@@ -1111,9 +1169,10 @@ void generate_funcall(generator_t *g, ast_t fun) {
   FILE *f = g->f;
   ast_funcall funcall = fun->data.funcall;
   ast_t resolved = funcall.resolved_target;
-  int resolved_user = resolved && resolved->tag == fundef &&
-                      resolved->data.fundef.body != NULL;
-  if (!resolved_user && svcmp(funcall.name.lexeme, sv_from_cstr("Sprite")) == 0) {
+  int resolved_user =
+      resolved && resolved->tag == fundef && resolved->data.fundef.body != NULL;
+  if (!resolved_user &&
+      svcmp(funcall.name.lexeme, sv_from_cstr("Sprite")) == 0) {
     if (funcall.args.length != 1) {
       error(funcall.name.filename, funcall.name.line, funcall.name.col,
             "Sprite() expects exactly one byte slot argument");
@@ -1123,21 +1182,29 @@ void generate_funcall(generator_t *g, ast_t fun) {
     fprintf(f, "(byte)(");
     generate_expression(g, funcall.args.data[0]);
     fprintf(f, ")");
-  } else if (!resolved_user && svcmp(funcall.name.lexeme, sv_from_cstr("append")) == 0) {
+  } else if (!resolved_user &&
+             svcmp(funcall.name.lexeme, sv_from_cstr("append")) == 0) {
     generate_append(g, funcall);
-  } else if (!resolved_user && svcmp(funcall.name.lexeme, sv_from_cstr("get")) == 0) {
+  } else if (!resolved_user &&
+             svcmp(funcall.name.lexeme, sv_from_cstr("get")) == 0) {
     generate_get(g, funcall);
-  } else if (!resolved_user && svcmp(funcall.name.lexeme, sv_from_cstr("set")) == 0) {
+  } else if (!resolved_user &&
+             svcmp(funcall.name.lexeme, sv_from_cstr("set")) == 0) {
     generate_set(g, funcall);
-  } else if (!resolved_user && svcmp(funcall.name.lexeme, sv_from_cstr("pop")) == 0) {
+  } else if (!resolved_user &&
+             svcmp(funcall.name.lexeme, sv_from_cstr("pop")) == 0) {
     generate_pop(g, funcall);
-  } else if (!resolved_user && svcmp(funcall.name.lexeme, sv_from_cstr("insert")) == 0) {
+  } else if (!resolved_user &&
+             svcmp(funcall.name.lexeme, sv_from_cstr("insert")) == 0) {
     generate_insert(g, funcall);
-  } else if (!resolved_user && svcmp(funcall.name.lexeme, sv_from_cstr("substring")) == 0) {
+  } else if (!resolved_user &&
+             svcmp(funcall.name.lexeme, sv_from_cstr("substring")) == 0) {
     generate_substring(g, funcall);
-  } else if (!resolved_user && svcmp(funcall.name.lexeme, sv_from_cstr("concat")) == 0) {
+  } else if (!resolved_user &&
+             svcmp(funcall.name.lexeme, sv_from_cstr("concat")) == 0) {
     generate_concat(g, funcall);
-  } else if (!resolved_user && svcmp(funcall.name.lexeme, sv_from_cstr("toString")) == 0) {
+  } else if (!resolved_user &&
+             svcmp(funcall.name.lexeme, sv_from_cstr("toString")) == 0) {
     generate_to_string(g, funcall);
   } else if (!resolved_user &&
              svcmp(funcall.name.lexeme, sv_from_cstr("length")) == 0 &&
@@ -1159,7 +1226,8 @@ void generate_funcall(generator_t *g, ast_t fun) {
     fprintf(g->pre_f, "string %s = input();\n", tmp);
     fprintf(g->f, "%s", tmp);
     track_string_tmp(g, tmp);
-  } else if (!resolved_user && svcmp(funcall.name.lexeme, sv_from_cstr("halt")) == 0) {
+  } else if (!resolved_user &&
+             svcmp(funcall.name.lexeme, sv_from_cstr("halt")) == 0) {
     /* halt is terminal just like return: release every active owned value and
      * restore bump marks before entering the runtime's non-returning exit. */
     FILE *saved_f = g->f;
@@ -1168,22 +1236,24 @@ void generate_funcall(generator_t *g, ast_t fun) {
     g->f = saved_f;
     fprintf(f, "halt(");
     for (int i = 0; i < funcall.args.length; i++) {
-      if (i > 0) fprintf(f, ", ");
+      if (i > 0)
+        fprintf(f, ", ");
       generate_expression(g, funcall.args.data[i]);
     }
     fprintf(f, ")");
-  } else if (!resolved_user && svcmp(funcall.name.lexeme, sv_from_cstr("print")) == 0 &&
-             funcall.args.length == 1 &&
-             funcall.args.data[0]->tag == literal &&
+  } else if (!resolved_user &&
+             svcmp(funcall.name.lexeme, sv_from_cstr("print")) == 0 &&
+             funcall.args.length == 1 && funcall.args.data[0]->tag == literal &&
              funcall.args.data[0]->data.literal.lit.type == TOK_STR_LIT) {
     /* A literal does not need a Rift string descriptor, static allocation
      * header, refcount assignment, or scope cleanup.  Keep the byte length
      * explicit so this remains equivalent to print(string), including for
      * literals that are not safely represented by a C `%s` conversion. */
     token_t tok = funcall.args.data[0]->data.literal.lit;
-    fprintf(g->f, "rift_print_bytes(" SV_Fmt ", %d)",
-            SV_Arg(tok.lexeme), get_literal_string_length(tok) - 1);
-  } else if (!resolved_user && svcmp(funcall.name.lexeme, sv_from_cstr("print")) == 0 &&
+    fprintf(g->f, "rift_print_bytes(" SV_Fmt ", %d)", SV_Arg(tok.lexeme),
+            get_literal_string_length(tok) - 1);
+  } else if (!resolved_user &&
+             svcmp(funcall.name.lexeme, sv_from_cstr("print")) == 0 &&
              funcall.args.length == 3) {
     emit_positioned_print(g, funcall);
   } else if (!resolved_user &&
@@ -1217,17 +1287,20 @@ void generate_funcall(generator_t *g, ast_t fun) {
              svcmp(funcall.name.lexeme, sv_from_cstr("putchar_addr")) == 0 &&
              funcall.args.length == 2) {
     emit_positioned_putchar(g, funcall, 1);
-  } else if (!resolved_user && svcmp(funcall.name.lexeme, sv_from_cstr("sleep")) == 0) {
+  } else if (!resolved_user &&
+             svcmp(funcall.name.lexeme, sv_from_cstr("sleep")) == 0) {
     // Rift `sleep` → C `rift_sleep` to avoid POSIX unistd.h collision.
     FILE *f = g->f;
     fprintf(f, "rift_sleep(");
     for (int i = 0; i < funcall.args.length; i++) {
-      if (i > 0) fprintf(f, ", ");
+      if (i > 0)
+        fprintf(f, ", ");
       generate_expression(g, funcall.args.data[i]);
     }
     fprintf(f, ")");
   } else {
-    // Check if function is defined (either in name table or as a special builtin)
+    // Check if function is defined (either in name table or as a special
+    // builtin)
     string_view fname = funcall.name.lexeme;
     ast_t func_ref = resolved ? resolved : get_ref(fname, g->table);
 
@@ -1255,7 +1328,8 @@ void generate_funcall(generator_t *g, ast_t fun) {
               constructor.type->tag == type) {
             payload_type = constructor.type->data.type;
             has_payload_type = 1;
-            emit_borrowed_container_retain(g, funcall.args.data[0], payload_type);
+            emit_borrowed_container_retain(g, funcall.args.data[0],
+                                           payload_type);
             break;
           }
         }
@@ -1264,11 +1338,11 @@ void generate_funcall(generator_t *g, ast_t fun) {
        * __strtmp.  A direct constructor call cannot put a nullification
        * statement after its argument, so lower it through a prelude local and
        * transfer that temporary explicitly. */
-      if (has_payload_type &&
-          svcmp(payload_type.name.lexeme, SV_STRING) == 0) {
+      if (has_payload_type && svcmp(payload_type.name.lexeme, SV_STRING) == 0) {
         char *payload = capture_expression(g, funcall.args.data[0]);
         char union_tmp[64];
-        snprintf(union_tmp, sizeof(union_tmp), "__uniontmp_%d", g->str_tmp_counter++);
+        snprintf(union_tmp, sizeof(union_tmp), "__uniontmp_%d",
+                 g->str_tmp_counter++);
         fprintf(g->pre_f, SV_Fmt " %s;\n", SV_Arg(type_name), union_tmp);
         fprintf(g->pre_f, "%s = " SV_Fmt "_" SV_Fmt "(%s);\n", union_tmp,
                 SV_Arg(type_name), SV_Arg(fname), payload);
@@ -1370,13 +1444,15 @@ void generate_funcall(generator_t *g, ast_t fun) {
       /* User functions consume owned values. This retain is deliberately at
        * the call site: aliases keep their source share; constructor, pop, and
        * subscript results transfer without an otherwise-ownerless reference. */
-        for (int i = 0; i < funcall.args.length && i < param_types.length; i++) {
       if (user_function && !semantic_symbol) {
+        for (int i = 0; i < funcall.args.length && i < param_types.length;
+             i++) {
           if (param_types.data[i] && param_types.data[i]->tag == type) {
             ast_type param_type = param_types.data[i]->data.type;
             if (param_type.is_array ||
                 is_heap_allocated_type(param_type.name.lexeme, g->table))
-              emit_borrowed_container_retain(g, funcall.args.data[i], param_type);
+              emit_borrowed_container_retain(g, funcall.args.data[i],
+                                             param_type);
           }
         }
       }
@@ -1387,19 +1463,29 @@ void generate_funcall(generator_t *g, ast_t fun) {
         if (!semantic_symbol && g->auto_cast && i < param_types.length &&
             param_types.data[i] && param_types.data[i]->tag == type) {
           string_view ptn = param_types.data[i]->data.type.name.lexeme;
-          if (svcmp(ptn, sv_from_cstr("byte"))  == 0 ||
-              svcmp(ptn, sv_from_cstr("word"))  == 0 ||
+          if (svcmp(ptn, sv_from_cstr("byte")) == 0 ||
+              svcmp(ptn, sv_from_cstr("word")) == 0 ||
               svcmp(ptn, sv_from_cstr("dword")) == 0) {
             cast = ptn;
           }
         }
-        if (cast.length > 0) fprintf(f, "(" SV_Fmt ")(", SV_Arg(cast));
-        if (cast.length > 0) fprintf(f, ")");
+        if (cast.length > 0)
+          fprintf(f, "(" SV_Fmt ")(", SV_Arg(cast));
         if (semantic_symbol) {
           fprintf(f, "%s", semantic_arguments[i]);
+        } else if (i < param_types.length && param_types.data[i] &&
+                   param_types.data[i]->tag == type &&
+                   is_inferred_checked_input(funcall.args.data[i],
+                                             param_types.data[i]->data.type)) {
+          char *argument = capture_expression_for_type(
+              g, funcall.args.data[i], param_types.data[i]->data.type);
+          fprintf(f, "%s", argument);
+          free(argument);
         } else {
           generate_expression(g, funcall.args.data[i]);
         }
+        if (cast.length > 0)
+          fprintf(f, ")");
       }
       fprintf(f, ")");
       free(semantic_arguments);
@@ -1460,37 +1546,55 @@ void generate_if_statement(generator_t *g, ast_t stmt) {
 
   // Wrap non-compound bodies in braces to allow setup statements
   int wrap_body = (ifstmt.body->tag != compound);
-  if (wrap_body) { fprintf(f, "{\n"); push_scope(g, -1); }
+  if (wrap_body) {
+    fprintf(f, "{\n");
+    push_scope(g, -1);
+  }
   generate_statement(g, ifstmt.body);
-  if (wrap_body) { emit_scope_cleanup(g); pop_scope(g); fprintf(f, "}\n"); }
+  if (wrap_body) {
+    emit_scope_cleanup(g);
+    pop_scope(g);
+    fprintf(f, "}\n");
+  }
 
   if (ifstmt.elsestmt != NULL) {
     fprintf(f, "else\n");
     int wrap_else = (ifstmt.elsestmt->tag != compound);
-    if (wrap_else) { fprintf(f, "{\n"); push_scope(g, -1); }
+    if (wrap_else) {
+      fprintf(f, "{\n");
+      push_scope(g, -1);
+    }
     generate_statement(g, ifstmt.elsestmt);
-    if (wrap_else) { emit_scope_cleanup(g); pop_scope(g); fprintf(f, "}\n"); }
+    if (wrap_else) {
+      emit_scope_cleanup(g);
+      pop_scope(g);
+      fprintf(f, "}\n");
+    }
   }
 }
 
-// Generate all type-specific array helper functions (make_array, push_array, pop_array, etc.)
-// This is a template that generates 6 helper functions for a given element type
+// Generate all type-specific array helper functions (make_array, push_array,
+// pop_array, etc.) This is a template that generates 6 helper functions for a
+// given element type
 void generate_array_funcs(generator_t *g, char *type_name) {
   FILE *f = g->f;
   int owns_handles = !is_builtin_typename(type_name);
 
   if (owns_handles) {
-    fprintf(f, "static void __rift_release_array_elem_%s(void *slot) {\n", type_name);
+    fprintf(f, "static void __rift_release_array_elem_%s(void *slot) {\n",
+            type_name);
     fprintf(f, "  __rift_release_%s(*(%s *)slot);\n", type_name, type_name);
     fprintf(f, "}\n\n");
   }
 
-  // Template group: make_array, push_array, pop_array, get_elem, set_elem, insert
-  // Each generates a wrapper around __internal_* functions with proper type handling
+  // Template group: make_array, push_array, pop_array, get_elem, set_elem,
+  // insert Each generates a wrapper around __internal_* functions with proper
+  // type handling
 
   fprintf(f, "__internal_dynamic_array_t %s_make_array(void) {\n", type_name);
   if (owns_handles) {
-    fprintf(f, "  return __internal_make_array_with_release(sizeof(%s), 0, ", type_name);
+    fprintf(f, "  return __internal_make_array_with_release(sizeof(%s), 0, ",
+            type_name);
     fprintf(f, "__rift_release_array_elem_%s);\n", type_name);
   } else {
     fprintf(f, "  return __internal_make_array(sizeof(%s), 0);\n", type_name);
@@ -1546,7 +1650,6 @@ void generate_array_funcs(generator_t *g, char *type_name) {
   fprintf(f, "}\n\n");
 }
 
-
 void generate_loop(generator_t *g, ast_t loop_ast) {
   FILE *f = g->f;
   ast_loop loop = loop_ast->data.loop;
@@ -1560,9 +1663,16 @@ void generate_loop(generator_t *g, ast_t loop_ast) {
 
   // Wrap non-compound bodies in braces to allow setup statements
   int wrap_body = (loop.statement->tag != compound);
-  if (wrap_body) { fprintf(f, "{\n"); push_scope(g, -1); }
+  if (wrap_body) {
+    fprintf(f, "{\n");
+    push_scope(g, -1);
+  }
   generate_statement(g, loop.statement);
-  if (wrap_body) { emit_scope_cleanup(g); pop_scope(g); fprintf(f, "}\n"); }
+  if (wrap_body) {
+    emit_scope_cleanup(g);
+    pop_scope(g);
+    fprintf(f, "}\n");
+  }
 
   end_nt_scope(&g->table);
 }
@@ -1570,17 +1680,17 @@ void generate_loop(generator_t *g, ast_t loop_ast) {
 void generate_method_call(generator_t *g, ast_t node) {
   FILE *f = g->f;
   ast_method_call mc = node->data.method_call;
-  if (!mc.is_resolved || mc.resolved_target == NULL || mc.resolved_c_name == NULL) {
+  if (!mc.is_resolved || mc.resolved_target == NULL ||
+      mc.resolved_c_name == NULL) {
     error(mc.method.filename, mc.method.line, mc.method.col,
-          "unresolved method call '" SV_Fmt "'",
-          SV_Arg(mc.method.lexeme));
+          "unresolved method call '" SV_Fmt "'", SV_Arg(mc.method.lexeme));
     return;
   }
   string_view recv_type = mc.resolved_owner;
   ast_t method_ref = mc.resolved_target;
   int receiver_is_array = mc.resolved_kind == METHOD_ARRAY_INSTANCE;
-  int native_method = method_ref->tag == fundef &&
-                      method_ref->data.fundef.body == NULL;
+  int native_method =
+      method_ref->tag == fundef && method_ref->data.fundef.body == NULL;
   char receiver_tmp[64] = {0};
   char argument_tmps[COMPONENT_MANIFEST_MAX_PARAMS][64] = {{0}};
   ast_type argument_tmp_types[COMPONENT_MANIFEST_MAX_PARAMS] = {{0}};
@@ -1593,11 +1703,11 @@ void generate_method_call(generator_t *g, ast_t node) {
              g->str_tmp_counter++);
     char *receiver = capture_expression(g, mc.receiver);
     if (receiver_is_array)
-      fprintf(g->pre_f, "__internal_dynamic_array_t %s = %s;\n",
-              receiver_tmp, receiver);
+      fprintf(g->pre_f, "__internal_dynamic_array_t %s = %s;\n", receiver_tmp,
+              receiver);
     else
-      fprintf(g->pre_f, SV_Fmt " %s = %s;\n", SV_Arg(recv_type),
-              receiver_tmp, receiver);
+      fprintf(g->pre_f, SV_Fmt " %s = %s;\n", SV_Arg(recv_type), receiver_tmp,
+              receiver);
     free(receiver);
     cleanup_receiver = 1;
     cleanup_count++;
@@ -1629,32 +1739,35 @@ void generate_method_call(generator_t *g, ast_t node) {
       cleanup_count++;
     }
   }
-  if (mc.resolved_kind != METHOD_TYPE_LEVEL &&
-      method_ref && method_ref->tag == fundef &&
-      method_ref->data.fundef.body != NULL &&
+  if (mc.resolved_kind != METHOD_TYPE_LEVEL && method_ref &&
+      method_ref->tag == fundef && method_ref->data.fundef.body != NULL &&
       (receiver_is_array || is_heap_allocated_type(recv_type, g->table))) {
     ast_type receiver_type = {0};
     receiver_type.is_array = receiver_is_array;
-    receiver_type.name.lexeme = receiver_is_array ?
-        (string_view){.data = recv_type.data, .length = recv_type.length - 6} : recv_type;
+    receiver_type.name.lexeme =
+        receiver_is_array ? (string_view){.data = recv_type.data,
+                                          .length = recv_type.length - 6}
+                          : recv_type;
     emit_borrowed_container_retain(g, mc.receiver, receiver_type);
   }
   if (method_ref && method_ref->tag == fundef &&
       method_ref->data.fundef.body != NULL) {
     ast_array_t params = method_ref->data.fundef.types;
     int param_offset = mc.resolved_kind == METHOD_TYPE_LEVEL ? 0 : 1;
-    for (int i = 0; i < mc.args.length && i + param_offset < params.length; i++) {
+    for (int i = 0; i < mc.args.length && i + param_offset < params.length;
+         i++) {
       if (params.data[i + param_offset] &&
           params.data[i + param_offset]->tag == type) {
         ast_type param = params.data[i + param_offset]->data.type;
-        if (param.is_array || is_heap_allocated_type(param.name.lexeme, g->table))
+        if (param.is_array ||
+            is_heap_allocated_type(param.name.lexeme, g->table))
           emit_borrowed_container_retain(g, mc.args.data[i], param);
       }
     }
   }
   ast_type native_return = method_ref->data.fundef.ret_type->data.type;
-  int native_returns_void = svcmp(native_return.name.lexeme,
-                                  sv_from_cstr("void")) == 0;
+  int native_returns_void =
+      svcmp(native_return.name.lexeme, sv_from_cstr("void")) == 0;
   char result_tmp[64] = {0};
   if (cleanup_count) {
     fprintf(f, "(");
@@ -1668,16 +1781,20 @@ void generate_method_call(generator_t *g, ast_t node) {
   }
   fprintf(f, "%s(", mc.resolved_c_name);
   if (mc.resolved_kind != METHOD_TYPE_LEVEL) {
-    if (receiver_tmp[0]) fprintf(f, "%s", receiver_tmp);
-    else generate_expression(g, mc.receiver);
+    if (receiver_tmp[0])
+      fprintf(f, "%s", receiver_tmp);
+    else
+      generate_expression(g, mc.receiver);
   }
   ast_array_t param_types = method_ref->data.fundef.types;
   int param_offset = mc.resolved_kind == METHOD_TYPE_LEVEL ? 0 : 1;
   for (int i = 0; i < mc.args.length; i++) {
-    if (i > 0 || mc.resolved_kind != METHOD_TYPE_LEVEL) fprintf(f, ", ");
-    int asset_argument = mc.resolved_kind == METHOD_INSTANCE && i == 0 &&
-                         svcmp(mc.resolved_owner, sv_from_cstr("Sprite")) == 0 &&
-                         svcmp(mc.method.lexeme, sv_from_cstr("frame")) == 0;
+    if (i > 0 || mc.resolved_kind != METHOD_TYPE_LEVEL)
+      fprintf(f, ", ");
+    int asset_argument =
+        mc.resolved_kind == METHOD_INSTANCE && i == 0 &&
+        svcmp(mc.resolved_owner, sv_from_cstr("Sprite")) == 0 &&
+        svcmp(mc.method.lexeme, sv_from_cstr("frame")) == 0;
     if (asset_argument) {
       ast_t declaration = mc.resolved_asset;
       int base = asset_generator_base(g->assets, declaration);
@@ -1691,24 +1808,40 @@ void generate_method_call(generator_t *g, ast_t node) {
       }
       continue;
     }
-    if (g->auto_cast && i + param_offset < param_types.length &&
-        param_types.data[i + param_offset] &&
-        param_types.data[i + param_offset]->tag == type) {
-      string_view parameter_name =
-          param_types.data[i + param_offset]->data.type.name.lexeme;
+    ast_t parameter = i + param_offset < param_types.length
+                          ? param_types.data[i + param_offset]
+                          : NULL;
+    char *converted_argument = NULL;
+    if (parameter && parameter->tag == type &&
+        is_inferred_checked_input(mc.args.data[i], parameter->data.type))
+      converted_argument =
+          capture_expression_for_type(g, mc.args.data[i], parameter->data.type);
+    if (g->auto_cast && parameter && parameter->tag == type) {
+      string_view parameter_name = parameter->data.type.name.lexeme;
       if (svcmp(parameter_name, sv_from_cstr("byte")) == 0 ||
           svcmp(parameter_name, sv_from_cstr("word")) == 0 ||
           svcmp(parameter_name, sv_from_cstr("dword")) == 0)
         fprintf(f, "(" SV_Fmt ")(", SV_Arg(parameter_name));
       else
         parameter_name = sv_from_cstr("");
-      if (argument_tmps[i][0]) fprintf(f, "%s", argument_tmps[i]);
-      else generate_expression(g, mc.args.data[i]);
-      if (parameter_name.length > 0) fprintf(f, ")");
+      if (argument_tmps[i][0])
+        fprintf(f, "%s", argument_tmps[i]);
+      else if (converted_argument)
+        fprintf(f, "%s", converted_argument);
+      else
+        generate_expression(g, mc.args.data[i]);
+      if (parameter_name.length > 0)
+        fprintf(f, ")");
+      free(converted_argument);
       continue;
     }
-    if (argument_tmps[i][0]) fprintf(f, "%s", argument_tmps[i]);
-    else generate_expression(g, mc.args.data[i]);
+    if (argument_tmps[i][0])
+      fprintf(f, "%s", argument_tmps[i]);
+    else if (converted_argument)
+      fprintf(f, "%s", converted_argument);
+    else
+      generate_expression(g, mc.args.data[i]);
+    free(converted_argument);
   }
   fprintf(f, ")");
   if (cleanup_count) {
@@ -1721,7 +1854,8 @@ void generate_method_call(generator_t *g, ast_t node) {
     }
     for (int i = 0; i < mc.args.length && i < COMPONENT_MANIFEST_MAX_PARAMS;
          i++) {
-      if (!argument_tmps[i][0]) continue;
+      if (!argument_tmps[i][0])
+        continue;
       ast_type param = argument_tmp_types[i];
       if (param.is_array)
         fprintf(f, ", __internal_free_array(%s, %d)", argument_tmps[i],
@@ -1729,10 +1863,11 @@ void generate_method_call(generator_t *g, ast_t node) {
       else if (svcmp(param.name.lexeme, SV_STRING) == 0)
         fprintf(f, ", __string_release(%s)", argument_tmps[i]);
       else
-        fprintf(f, ", __rift_release_" SV_Fmt "(%s)",
-                SV_Arg(param.name.lexeme), argument_tmps[i]);
+        fprintf(f, ", __rift_release_" SV_Fmt "(%s)", SV_Arg(param.name.lexeme),
+                argument_tmps[i]);
     }
-    if (!native_returns_void) fprintf(f, ", %s", result_tmp);
+    if (!native_returns_void)
+      fprintf(f, ", %s", result_tmp);
     fprintf(f, ")");
   }
 }
@@ -1757,9 +1892,16 @@ void generate_while_loop(generator_t *g, ast_t loop) {
 
   // Wrap non-compound bodies in braces to allow setup statements
   int wrap_body = (while_loop.statement->tag != compound);
-  if (wrap_body) { fprintf(f, "{\n"); push_scope(g, -1); }
+  if (wrap_body) {
+    fprintf(f, "{\n");
+    push_scope(g, -1);
+  }
   generate_statement(g, while_loop.statement);
-  if (wrap_body) { emit_scope_cleanup(g); pop_scope(g); fprintf(f, "}\n"); }
+  if (wrap_body) {
+    emit_scope_cleanup(g);
+    pop_scope(g);
+    fprintf(f, "}\n");
+  }
 }
 
 void generate_iter_loop(generator_t *g, ast_t loop) {
@@ -1773,8 +1915,8 @@ void generate_iter_loop(generator_t *g, ast_t loop) {
 
   fprintf(f, "{\n");
 
-  string_view element_type = get_array_element_type(
-      iter_loop.iterable, g->table, iter_loop.variable);
+  string_view element_type =
+      get_array_element_type(iter_loop.iterable, g->table, iter_loop.variable);
   string_view c_element_type = c_scalar_type_name(element_type);
   fprintf(f, SV_Fmt " " SV_Fmt " = ((", SV_Arg(c_element_type),
           SV_Arg(iter_loop.variable.lexeme));
@@ -1820,10 +1962,9 @@ void generate_expression(generator_t *g, ast_t expr) {
     string_view lexeme = expr->data.identifier.id.lexeme;
     // In a module method, rewrite module field names to this->field
     if (g->current_module_type.length > 0) {
-      nt_lookup_t lexical_value =
-          lookup_nt_by_kind(lexeme, NT_VAR, g->table);
-      ast_t mod_ref = get_ref_by_kind(g->current_module_type, NT_USER_TYPE,
-                                      g->table);
+      nt_lookup_t lexical_value = lookup_nt_by_kind(lexeme, NT_VAR, g->table);
+      ast_t mod_ref =
+          get_ref_by_kind(g->current_module_type, NT_USER_TYPE, g->table);
       if ((!lexical_value.found || lexical_value.scope == 0) && mod_ref &&
           mod_ref->tag == tdef && mod_ref->data.tdef.t == TDEF_MODULE) {
         ast_array_t fields = mod_ref->data.tdef.module_fields;
@@ -1896,9 +2037,8 @@ void generate_assignement(generator_t *g, ast_t assignment) {
      * transfer their existing reference into the destination. */
     ast_type target_array_type = {0};
     if (assign.target->tag == identifier &&
-        get_identifier_array_type(
-            assign.target->data.identifier.id.lexeme, g->table,
-            &target_array_type)) {
+        get_identifier_array_type(assign.target->data.identifier.id.lexeme,
+                                  g->table, &target_array_type)) {
       char *rhs_text = capture_expression(g, assign.expr);
       char *target_text = capture_expression(g, assign.target);
       flush_pre_f(g, f);
@@ -1916,10 +2056,11 @@ void generate_assignement(generator_t *g, ast_t assignment) {
     }
     // For string reassignment, free the old value before overwriting
     if (assign.target->tag == identifier &&
-        is_scalar_string_var(assign.target->data.identifier.id.lexeme, g->table)) {
+        is_scalar_string_var(assign.target->data.identifier.id.lexeme,
+                             g->table)) {
       {
-        if (emit_concat_assignment(
-                g, assign.target->data.identifier.id.lexeme, assign.expr))
+        if (emit_concat_assignment(g, assign.target->data.identifier.id.lexeme,
+                                   assign.expr))
           return;
         // Capture RHS (populates pre_f with setup like __strtmp declarations)
         char *rhs_text = capture_expression(g, assign.expr);
@@ -1938,7 +2079,8 @@ void generate_assignement(generator_t *g, ast_t assignment) {
         } else {
           fprintf(f, SV_Fmt " = %s;\n",
                   SV_Arg(assign.target->data.identifier.id.lexeme), rhs_text);
-          // Transfer ownership from temp to user var (prevents double-free at scope exit)
+          // Transfer ownership from temp to user var (prevents double-free at
+          // scope exit)
           if (strncmp(rhs_text, "__strtmp_", 9) == 0) {
             emit_nullify_tmp(f, rhs_text);
           }
@@ -1951,7 +2093,8 @@ void generate_assignement(generator_t *g, ast_t assignment) {
     // Producer RHS (funcall): accept the rc=1 reference __return_handle
     // already supplied on the callee side.
     if (assign.target->tag == identifier &&
-        is_scalar_aggregate_var(assign.target->data.identifier.id.lexeme, g->table)) {
+        is_scalar_aggregate_var(assign.target->data.identifier.id.lexeme,
+                                g->table)) {
       string_view tname = assign.target->data.identifier.id.lexeme;
       // Self-assignment (`x := x`): release-then-retain on rc=1 would free
       // the block before the retain runs. Skip the no-op entirely.
@@ -1980,8 +2123,7 @@ void generate_assignement(generator_t *g, ast_t assignment) {
         char *rhs_text;
         if (assign.expr->tag == literal &&
             assign.expr->data.literal.lit.type == TOK_ARR_DECL) {
-          string_view c_element_type =
-              c_scalar_type_name(array_element_type);
+          string_view c_element_type = c_scalar_type_name(array_element_type);
           rhs_text = malloc(c_element_type.length + 48);
           snprintf(rhs_text, c_element_type.length + 48,
                    "__internal_make_array(sizeof(" SV_Fmt "), 0)",
@@ -2004,7 +2146,8 @@ void generate_assignement(generator_t *g, ast_t assignment) {
         return;
       }
     }
-    if (assign.target->tag == sub && is_sub_target_scalar_aggregate(assign.target, g->table)) {
+    if (assign.target->tag == sub &&
+        is_sub_target_scalar_aggregate(assign.target, g->table)) {
       char *rhs_text = capture_expression(g, assign.expr);
       char *target_text = capture_expression(g, assign.target);
       flush_pre_f(g, f);
@@ -2015,11 +2158,11 @@ void generate_assignement(generator_t *g, ast_t assignment) {
         return;
       }
       string_view target_type = infer_expr_type(assign.target, g->table);
-      fprintf(f, "__rift_release_" SV_Fmt "(%s);\n",
-              SV_Arg(target_type), target_text);
+      fprintf(f, "__rift_release_" SV_Fmt "(%s);\n", SV_Arg(target_type),
+              target_text);
       if (rhs_is_borrower(assign.expr)) {
-        fprintf(f, "%s = %s; __handle_retain(%s);\n",
-                target_text, rhs_text, target_text);
+        fprintf(f, "%s = %s; __handle_retain(%s);\n", target_text, rhs_text,
+                target_text);
       } else {
         fprintf(f, "%s = %s;\n", target_text, rhs_text);
       }
@@ -2027,8 +2170,10 @@ void generate_assignement(generator_t *g, ast_t assignment) {
       free(target_text);
       return;
     }
-    // For string record field assignment (p.name := "Bob"), free old + deep-copy new
-    if (assign.target->tag == sub && is_sub_target_scalar_string(assign.target, g->table)) {
+    // For string record field assignment (p.name := "Bob"), free old +
+    // deep-copy new
+    if (assign.target->tag == sub &&
+        is_sub_target_scalar_string(assign.target, g->table)) {
       {
         char *rhs_text = capture_expression(g, assign.expr);
         char *target_text = capture_expression(g, assign.target);
@@ -2052,28 +2197,40 @@ void generate_assignement(generator_t *g, ast_t assignment) {
         return;
       }
     }
-    generate_expression(g, assign.target);
-    fprintf(f, " = ");
-    generate_expression(g, assign.expr);
+    ast_type expected_type = {0};
+    expected_type.name.lexeme = infer_expr_type(assign.target, g->table);
+    if (is_inferred_checked_input(assign.expr, expected_type)) {
+      char *rhs_text =
+          capture_expression_for_type(g, assign.expr, expected_type);
+      generate_expression(g, assign.target);
+      fprintf(f, " = %s", rhs_text);
+      free(rhs_text);
+    } else {
+      generate_expression(g, assign.target);
+      fprintf(f, " = ");
+      generate_expression(g, assign.expr);
+    }
   }
 }
 
 // Returns 1 if type_name refers to a module type
 static int is_module_type(string_view type_name, name_table_t table) {
-  if (lookup_nt_by_kind(type_name, NT_OPAQUE_TYPE, table).found) return 1;
+  if (lookup_nt_by_kind(type_name, NT_OPAQUE_TYPE, table).found)
+    return 1;
   ast_t ref = get_ref_by_kind(type_name, NT_USER_TYPE, table);
   return ref && ref->tag == tdef && ref->data.tdef.t == TDEF_MODULE;
 }
 
-// Returns 1 if the type is a pointer-allocated user type (module, record, or union)
+// Returns 1 if the type is a pointer-allocated user type (module, record, or
+// union)
 void generate_vardef(generator_t *g, ast_t var) {
   FILE *f = g->f;
   ast_vardef vardef = var->data.vardef;
   push_nt(&g->table, vardef.name.lexeme, NT_VAR, var);
   string_view type_name = vardef.type->data.type.name.lexeme;
 
-  // Global module vars cannot be initialized with TypeName_new() (not a constant).
-  // Emit NULL and defer the real initialization to main().
+  // Global module vars cannot be initialized with TypeName_new() (not a
+  // constant). Emit NULL and defer the real initialization to main().
   if (g->in_global_scope && !vardef.type->data.type.is_array &&
       is_module_type(type_name, g->table)) {
     generate_type(f, vardef.type);
@@ -2096,7 +2253,8 @@ void generate_vardef(generator_t *g, ast_t var) {
                 SV_Arg(vardef.name.lexeme), SV_Arg(type_name));
       } else {
         string_view c_type = c_scalar_type_name(type_name);
-        fprintf(code_f, SV_Fmt " = __internal_make_array(sizeof(" SV_Fmt "), %d);\n",
+        fprintf(code_f,
+                SV_Fmt " = __internal_make_array(sizeof(" SV_Fmt "), %d);\n",
                 SV_Arg(vardef.name.lexeme), SV_Arg(c_type), capacity);
       }
       fflush(code_f);
@@ -2128,7 +2286,8 @@ void generate_vardef(generator_t *g, ast_t var) {
                 SV_Arg(c_type), capacity);
       }
     }
-    // Track array variable for scope cleanup (not global — those are freed at exit)
+    // Track array variable for scope cleanup (not global — those are freed at
+    // exit)
     if (!g->in_global_scope) {
       int is_str = (svcmp(type_name, SV_STRING) == 0);
       track_array_var(g, vardef.name.lexeme, is_str);
@@ -2136,13 +2295,15 @@ void generate_vardef(generator_t *g, ast_t var) {
   } else if (is_builtin_typename(string_of_sv(type_name))) {
     // Capture the expression reference in a temp buffer while accumulating
     // setup statements to pre_f
-    char *expr_text = capture_expression(g, vardef.expr);
+    char *expr_text =
+        capture_expression_for_type(g, vardef.expr, vardef.type->data.type);
 
     if (g->in_global_scope) {
       // Check if the expression requires runtime setup (non-constant)
       fflush(g->pre_f);
       if (g->pre_buf && g->pre_buf_size > 0) {
-        // Non-constant: emit zero-init at global scope, defer real init to main()
+        // Non-constant: emit zero-init at global scope, defer real init to
+        // main()
         defer_global_init(g, vardef.name.lexeme, expr_text);
         generate_type(f, vardef.type);
         fprintf(f, " " SV_Fmt " = {0};\n", SV_Arg(vardef.name.lexeme));
@@ -2151,29 +2312,32 @@ void generate_vardef(generator_t *g, ast_t var) {
       }
     }
 
-    // Constant expression (e.g. integer literal) or inside a function: emit normally
+    // Constant expression (e.g. integer literal) or inside a function: emit
+    // normally
     flush_pre_f(g, f);
 
     // String-to-string init from a borrower (identifier, field read, array
     // index): descriptor copy + retain. Both alias share the same backing.
-    if (!g->in_global_scope && svcmp(type_name, SV_STRING) == 0
-        && !vardef.type->data.type.is_array && rhs_is_borrower(vardef.expr)) {
+    if (!g->in_global_scope && svcmp(type_name, SV_STRING) == 0 &&
+        !vardef.type->data.type.is_array && rhs_is_borrower(vardef.expr)) {
       fprintf(f, "string " SV_Fmt " = %s; __string_retain(" SV_Fmt ");\n",
-              SV_Arg(vardef.name.lexeme), expr_text, SV_Arg(vardef.name.lexeme));
+              SV_Arg(vardef.name.lexeme), expr_text,
+              SV_Arg(vardef.name.lexeme));
     } else {
       generate_type(f, vardef.type);
       fprintf(f, " " SV_Fmt " = %s;\n", SV_Arg(vardef.name.lexeme), expr_text);
-      // Transfer ownership from temp to user var (prevents double-free at scope exit)
-      if (!g->in_global_scope && svcmp(type_name, SV_STRING) == 0
-          && !vardef.type->data.type.is_array
-          && strncmp(expr_text, "__strtmp_", 9) == 0) {
+      // Transfer ownership from temp to user var (prevents double-free at scope
+      // exit)
+      if (!g->in_global_scope && svcmp(type_name, SV_STRING) == 0 &&
+          !vardef.type->data.type.is_array &&
+          strncmp(expr_text, "__strtmp_", 9) == 0) {
         emit_nullify_tmp(f, expr_text);
       }
     }
 
     // Track string variables for scope-based cleanup (not arrays)
-    if (!g->in_global_scope && svcmp(type_name, SV_STRING) == 0
-        && !vardef.type->data.type.is_array) {
+    if (!g->in_global_scope && svcmp(type_name, SV_STRING) == 0 &&
+        !vardef.type->data.type.is_array) {
       track_string_var(g, vardef.name.lexeme);
     }
 
@@ -2187,7 +2351,7 @@ void generate_vardef(generator_t *g, ast_t var) {
 
     if (vardef.is_rec) {
       // First, capture all field expressions (which fills pre_f with setup)
-      char **field_bufs = malloc(rec.names.length * sizeof(char*));
+      char **field_bufs = malloc(rec.names.length * sizeof(char *));
 
       for (int i = 0; i < rec.names.length; i++) {
         ast_t expr = rec.exprs.data[i];
@@ -2226,7 +2390,8 @@ void generate_vardef(generator_t *g, ast_t var) {
                      SV_Arg(field_element_type));
           } else {
             string_view c_field_type = c_scalar_type_name(field_element_type);
-            snprintf(field_bufs[i], 256, "__internal_make_array(sizeof(" SV_Fmt "), 0)",
+            snprintf(field_bufs[i], 256,
+                     "__internal_make_array(sizeof(" SV_Fmt "), 0)",
                      SV_Arg(c_field_type));
           }
         } else if (expr->tag == sub) {
@@ -2246,7 +2411,8 @@ void generate_vardef(generator_t *g, ast_t var) {
       for (int i = 0; i < rec.names.length; i++) {
         if (i > 0)
           fprintf(f, ",\n");
-        fprintf(f, "." SV_Fmt " = %s", SV_Arg(rec.names.data[i].lexeme), field_bufs[i]);
+        fprintf(f, "." SV_Fmt " = %s", SV_Arg(rec.names.data[i].lexeme),
+                field_bufs[i]);
       }
       fprintf(f, "};\n");
 
@@ -2267,7 +2433,8 @@ void generate_vardef(generator_t *g, ast_t var) {
     /* ADR-0003 Phase D extension: record body lives in the longlived
      * pool with a universal block header preceding it. The handle (the
      * pointer to the body) is the payload pointer returned by
-     * rift_longlived_alloc; the header is at handle - sizeof(rift_block_header). */
+     * rift_longlived_alloc; the header is at handle -
+     * sizeof(rift_block_header). */
     generate_type(f, vardef.type);
     fprintf(f, " " SV_Fmt " = rift_longlived_alloc(sizeof(struct ",
             SV_Arg(vardef.name.lexeme));
@@ -2275,8 +2442,9 @@ void generate_vardef(generator_t *g, ast_t var) {
     fprintf(f, "));\n");
     fprintf(f, "*" SV_Fmt " = tmp_" SV_Fmt ";\n", SV_Arg(vardef.name.lexeme),
             SV_Arg(vardef.name.lexeme));
-    // Deep-copy string fields to prevent aliasing (the source may be a temp or variable
-    // that gets freed at scope exit, while the record may outlive the scope)
+    // Deep-copy string fields to prevent aliasing (the source may be a temp or
+    // variable that gets freed at scope exit, while the record may outlive the
+    // scope)
     if (struct_ref && struct_ref->tag == tdef) {
       ast_tdef td = struct_ref->data.tdef;
       for (int j = 0; j < td.constructors.length; j++) {
@@ -2299,11 +2467,14 @@ void generate_vardef(generator_t *g, ast_t var) {
               fprintf(f, "__internal_retain_array(" SV_Fmt "->" SV_Fmt ");\n",
                       SV_Arg(vardef.name.lexeme), SV_Arg(c.name.lexeme));
             } else if (!ft.is_array && svcmp(ft.name.lexeme, SV_STRING) == 0) {
-              fprintf(f, "new_string(&" SV_Fmt "->" SV_Fmt ", tmp_" SV_Fmt "." SV_Fmt ");\n",
+              fprintf(f,
+                      "new_string(&" SV_Fmt "->" SV_Fmt ", tmp_" SV_Fmt
+                      "." SV_Fmt ");\n",
                       SV_Arg(vardef.name.lexeme), SV_Arg(c.name.lexeme),
                       SV_Arg(vardef.name.lexeme), SV_Arg(c.name.lexeme));
-            } else if (!ft.is_array && is_heap_allocated_type(ft.name.lexeme, g->table)
-                       && field_expr && rhs_is_borrower(field_expr)) {
+            } else if (!ft.is_array &&
+                       is_heap_allocated_type(ft.name.lexeme, g->table) &&
+                       field_expr && rhs_is_borrower(field_expr)) {
               fprintf(f, "__handle_retain(" SV_Fmt "->" SV_Fmt ");\n",
                       SV_Arg(vardef.name.lexeme), SV_Arg(c.name.lexeme));
             }
@@ -2316,12 +2487,14 @@ void generate_vardef(generator_t *g, ast_t var) {
       track_handle_var(g, vardef.name.lexeme, type_name);
     }
   } else {
-    // Capture expression to allow pre_f setup (e.g. string temps in function args)
+    // Capture expression to allow pre_f setup (e.g. string temps in function
+    // args)
     char *expr_text = capture_expression(g, vardef.expr);
     flush_pre_f(g, f);
     generate_type(f, vardef.type);
     fprintf(f, " " SV_Fmt " = %s;\n", SV_Arg(vardef.name.lexeme), expr_text);
-    int is_heap = !g->in_global_scope && is_heap_allocated_type(type_name, g->table);
+    int is_heap =
+        !g->in_global_scope && is_heap_allocated_type(type_name, g->table);
     // Borrower init: alias of an existing handle needs a retain so source
     // and alias each carry an rc share. Producer RHS (funcall) already
     // brings rc=1 via __return_handle on the callee.
@@ -2395,7 +2568,8 @@ void generate_match(generator_t *g, ast_t match_ast) {
         if (is_string)
           fprintf(f, "if (equals(__match_tmp, %s)) {\n", case_texts[i]);
         else if (is_union)
-          fprintf(f, "if (__match_tmp->" UNION_KEY_FIELD " == %s) {\n", case_texts[i]);
+          fprintf(f, "if (__match_tmp->" UNION_KEY_FIELD " == %s) {\n",
+                  case_texts[i]);
         else
           fprintf(f, "if (__match_tmp == %s) {\n", case_texts[i]);
         first = 0;
@@ -2403,7 +2577,8 @@ void generate_match(generator_t *g, ast_t match_ast) {
         if (is_string)
           fprintf(f, "else if (equals(__match_tmp, %s)) {\n", case_texts[i]);
         else if (is_union)
-          fprintf(f, "else if (__match_tmp->" UNION_KEY_FIELD " == %s) {\n", case_texts[i]);
+          fprintf(f, "else if (__match_tmp->" UNION_KEY_FIELD " == %s) {\n",
+                  case_texts[i]);
         else
           fprintf(f, "else if (__match_tmp == %s) {\n", case_texts[i]);
       }
@@ -2419,9 +2594,11 @@ void generate_match(generator_t *g, ast_t match_ast) {
   pop_scope(g);
   /* A produced scrutinee is an owned temporary. Match arms only borrow it. */
   int match_string_array = 0;
-  if (!rhs_is_borrower(m.expr) && expr_is_array(m.expr, g->table, &match_string_array)) {
+  if (!rhs_is_borrower(m.expr) &&
+      expr_is_array(m.expr, g->table, &match_string_array)) {
     fprintf(f, "__internal_free_array(__match_tmp, %d);\n", match_string_array);
-  } else if (!rhs_is_borrower(m.expr) && is_heap_allocated_type(type, g->table)) {
+  } else if (!rhs_is_borrower(m.expr) &&
+             is_heap_allocated_type(type, g->table)) {
     fprintf(f, "__rift_release_" SV_Fmt "(__match_tmp);\n", SV_Arg(type));
   } else if (!rhs_is_borrower(m.expr) && is_string && !string_temp_scrutinee) {
     fprintf(f, "__string_release(__match_tmp);\n");
@@ -2444,7 +2621,14 @@ void generate_return(generator_t *g, ast_t ret_ast) {
     return;
   }
   if (ret_ast->data.ret.expr != NULL) {
-    char *expr_text = capture_expression(g, ret_ast->data.ret.expr);
+    ast_type return_type = {0};
+    if (g->current_fundef && g->current_fundef->data.fundef.ret_type &&
+        g->current_fundef->data.fundef.ret_type->tag == type)
+      return_type = g->current_fundef->data.fundef.ret_type->data.type;
+    int inferred_input =
+        is_inferred_checked_input(ret_ast->data.ret.expr, return_type);
+    char *expr_text =
+        capture_expression_for_type(g, ret_ast->data.ret.expr, return_type);
     flush_pre_f(g, f);
 
     /* ADR-0003 §10.3: non-scalar returns are materialised into longlived
@@ -2457,7 +2641,8 @@ void generate_return(generator_t *g, ast_t ret_ast) {
      * wrap captured an extra reference to the return value's backing so
      * the release dec's it back to its pre-call refcount, then the
      * caller's transfer takes ownership. */
-    if (expr_returns_string(ret_ast->data.ret.expr, g->table)) {
+    if (!inferred_input &&
+        expr_returns_string(ret_ast->data.ret.expr, g->table)) {
       char retval[32];
       char source[32];
       int explicit_producer_release =
@@ -2484,21 +2669,22 @@ void generate_return(generator_t *g, ast_t ret_ast) {
      * release parameters/locals the return expression still references.
      * For aggregate handles, route the capture through __return_handle so
      * the subsequent release leaves the caller with an owned reference. */
-    if (g->current_fundef != NULL
-        && g->current_fundef->data.fundef.ret_type != NULL) {
+    if (g->current_fundef != NULL &&
+        g->current_fundef->data.fundef.ret_type != NULL) {
       ast_t ret_type_node = g->current_fundef->data.fundef.ret_type;
       int is_aggregate =
-          ret_type_node->tag == type
-          && !ret_type_node->data.type.is_array
-          && is_heap_allocated_type(ret_type_node->data.type.name.lexeme, g->table);
-      int is_array = ret_type_node->tag == type && ret_type_node->data.type.is_array;
-      int aggregate_borrower = is_aggregate && rhs_is_borrower(ret_ast->data.ret.expr);
+          ret_type_node->tag == type && !ret_type_node->data.type.is_array &&
+          is_heap_allocated_type(ret_type_node->data.type.name.lexeme,
+                                 g->table);
+      int is_array =
+          ret_type_node->tag == type && ret_type_node->data.type.is_array;
+      int aggregate_borrower =
+          is_aggregate && rhs_is_borrower(ret_ast->data.ret.expr);
       char retval[32];
       snprintf(retval, sizeof(retval), "__retval_%d", g->str_tmp_counter++);
       generate_type(f, ret_type_node);
       fprintf(f, " %s = %s%s%s;\n", retval,
-              aggregate_borrower ? "__return_handle(" : "",
-              expr_text,
+              aggregate_borrower ? "__return_handle(" : "", expr_text,
               aggregate_borrower ? ")" : "");
       if (is_array && rhs_is_borrower(ret_ast->data.ret.expr)) {
         fprintf(f, "__internal_retain_array(%s);\n", retval);
@@ -2544,8 +2730,8 @@ void generate_embed(generator_t *g, ast_t node) {
   } else if (strcmp(e.lang, "asm") == 0) {
     // Z88DK inline assembly: emitted only when compiled with SDCC.
     // Host/GCC builds skip the block entirely; Z80 mnemonics are not valid x86.
-    // Leading newline ensures the #ifdef starts on its own line (function open brace
-    // is emitted without a trailing newline).
+    // Leading newline ensures the #ifdef starts on its own line (function open
+    // brace is emitted without a trailing newline).
     fprintf(f, "\n#ifdef __SDCC\n#asm\n%s\n#endasm\n#endif\n", e.body);
   } else {
     // Unknown language: emit warning
@@ -2561,8 +2747,8 @@ void generate_statement(generator_t *g, ast_t stmt) {
   } else if (stmt->tag == vardef) {
     generate_vardef(g, stmt);
   } else if (stmt->tag == embed) {
-    // Skip top-level embed functions (they're already handled in generate_forward_defs)
-    // Only emit inline embed blocks
+    // Skip top-level embed functions (they're already handled in
+    // generate_forward_defs) Only emit inline embed blocks
     ast_embed e = stmt->data.embed;
     if (!e.is_function) {
       generate_embed(g, stmt);
@@ -2587,22 +2773,28 @@ void generate_statement(generator_t *g, ast_t stmt) {
   } else if (stmt->tag == iter_loop)
     generate_iter_loop(g, stmt);
   else {
-    // For expression statements, capture the expression (which fills pre_f with setup)
-    // then flush the setup before emitting the expression
+    // For expression statements, capture the expression (which fills pre_f with
+    // setup) then flush the setup before emitting the expression
     char *expr_text = capture_expression(g, stmt);
     // Flush any accumulated setup statements from pre_f
     flush_pre_f(g, f);
     string_view value_type = infer_expr_type(stmt, g->table);
     int discard_string_array = 0;
-    if (!rhs_is_borrower(stmt) && expr_is_array(stmt, g->table, &discard_string_array)) {
-      fprintf(f, "__internal_free_array(%s, %d);\n", expr_text, discard_string_array);
-    } else if (!rhs_is_borrower(stmt) && is_heap_allocated_type(value_type, g->table)) {
+    if (!rhs_is_borrower(stmt) &&
+        expr_is_array(stmt, g->table, &discard_string_array)) {
+      fprintf(f, "__internal_free_array(%s, %d);\n", expr_text,
+              discard_string_array);
+    } else if (!rhs_is_borrower(stmt) &&
+               is_heap_allocated_type(value_type, g->table)) {
       /* Materialise once before releasing: re-emitting a producer would
        * allocate a second value and leave the first ownerless. */
       char discard_tmp[64];
-      snprintf(discard_tmp, sizeof(discard_tmp), "__discardtmp_%d", g->str_tmp_counter++);
-      fprintf(f, SV_Fmt " %s = %s;\n", SV_Arg(value_type), discard_tmp, expr_text);
-      fprintf(f, "__rift_release_" SV_Fmt "(%s);\n", SV_Arg(value_type), discard_tmp);
+      snprintf(discard_tmp, sizeof(discard_tmp), "__discardtmp_%d",
+               g->str_tmp_counter++);
+      fprintf(f, SV_Fmt " %s = %s;\n", SV_Arg(value_type), discard_tmp,
+              expr_text);
+      fprintf(f, "__rift_release_" SV_Fmt "(%s);\n", SV_Arg(value_type),
+              discard_tmp);
     } else if (!rhs_is_borrower(stmt) && svcmp(value_type, SV_STRING) == 0 &&
                strncmp(expr_text, "__strtmp_", 9) != 0) {
       char discard_tmp[64];
@@ -2643,8 +2835,9 @@ void generate_function_body(generator_t *g, ast_t fun) {
   ast_fundef fundef = fun->data.fundef;
   if (g->semantic_plan_enabled && g->semantic_plans != NULL &&
       semantic_plan_selects(g->semantic_plans, fun)) {
-    error(fundef.name.filename, fundef.name.line, fundef.name.col,
-          "internal semantic-plan error: selected body entered legacy lowering");
+    error(
+        fundef.name.filename, fundef.name.line, fundef.name.col,
+        "internal semantic-plan error: selected body entered legacy lowering");
     return;
   }
   int bump_mark_id = g->bump_mark_counter++;
@@ -2662,9 +2855,11 @@ void generate_function_body(generator_t *g, ast_t fun) {
   g->current_fundef = fun;
 
   for (int i = 0; i < fundef.args.length; i++) {
-    if (i >= fundef.types.length) continue;
+    if (i >= fundef.types.length)
+      continue;
     ast_t t = fundef.types.data[i];
-    if (t == NULL || t->tag != type) continue;
+    if (t == NULL || t->tag != type)
+      continue;
     string_view tname = t->data.type.name.lexeme;
     string_view pname = fundef.args.data[i].lexeme;
     if (t->data.type.is_array) {
@@ -2698,8 +2893,7 @@ void generate_fundef(generator_t *g, ast_t fun) {
   if (g->semantic_plan_enabled &&
       semantic_plan_selects(g->semantic_plans, fun)) {
     semantic_plan_diagnostic diagnostic;
-    if (!semantic_plan_emit_signature(g->semantic_plans, fun, f,
-                                      &diagnostic)) {
+    if (!semantic_plan_emit_signature(g->semantic_plans, fun, f, &diagnostic)) {
       error(fundef.name.filename, fundef.name.line, fundef.name.col,
             "semantic-plan signature emission failed: %s",
             diagnostic.message ? diagnostic.message : "unknown error");
@@ -2789,8 +2983,8 @@ void generate_fundef(generator_t *g, ast_t fun) {
     for (int i = 0; i < g->deferred_module_inits.length; i++) {
       ast_vardef vd = g->deferred_module_inits.data[i]->data.vardef;
       string_view tn = vd.type->data.type.name.lexeme;
-      fprintf(f, SV_Fmt " = " SV_Fmt "_new();\n",
-              SV_Arg(vd.name.lexeme), SV_Arg(tn));
+      fprintf(f, SV_Fmt " = " SV_Fmt "_new();\n", SV_Arg(vd.name.lexeme),
+              SV_Arg(tn));
     }
     // Initialize any global vars with non-constant expressions (e.g. strings)
     for (int i = 0; i < g->deferred_global_init_count; i++) {
@@ -2802,7 +2996,8 @@ void generate_fundef(generator_t *g, ast_t fun) {
     generate_compound(g, fundef.body);
     g->in_main_body = 0;
     g->in_global_scope = saved_global;
-    if (g->main_needs_epilogue) fprintf(f, "rift_main_epilogue:\n");
+    if (g->main_needs_epilogue)
+      fprintf(f, "rift_main_epilogue:\n");
     if (g->zxn_test)
       fprintf(f, "zxn_test_finish();\n");
     generator_emit_component_shutdown(g);
@@ -2847,24 +3042,26 @@ void generate_forward_defs(generator_t *g, ast_t program) {
      * top-level function while producing its C prototype so those initializers
      * have the same lookup contract as normal expressions. */
     if (stmt->tag == tdef) {
-      if (is_asset_only_module(g, stmt)) continue;
+      if (is_asset_only_module(g, stmt))
+        continue;
       struct ast_tdef tdef = stmt->data.tdef;
       string_view name = tdef.name.lexeme;
       fprintf(f, "typedef struct " SV_Fmt " *" SV_Fmt ";\n", SV_Arg(name),
               SV_Arg(name));
       if (tdef.t == TDEF_MODULE)
-        fprintf(f, SV_Fmt " " SV_Fmt "_new(void);\n", SV_Arg(name), SV_Arg(name));
+        fprintf(f, SV_Fmt " " SV_Fmt "_new(void);\n", SV_Arg(name),
+                SV_Arg(name));
       if (tdef.t == TDEF_PRO) {
         for (int j = 0; j < tdef.constructors.length; j++) {
           ast_cons cons = tdef.constructors.data[j]->data.cons;
           ast_type ctype = cons.type->data.type;
           int is_void = svcmp(ctype.name.lexeme, sv_from_cstr("void")) == 0;
           if (is_void) {
-            fprintf(f, SV_Fmt " " SV_Fmt "_" SV_Fmt "(void);\n",
-                    SV_Arg(name), SV_Arg(name), SV_Arg(cons.name.lexeme));
+            fprintf(f, SV_Fmt " " SV_Fmt "_" SV_Fmt "(void);\n", SV_Arg(name),
+                    SV_Arg(name), SV_Arg(cons.name.lexeme));
           } else {
-            fprintf(f, SV_Fmt " " SV_Fmt "_" SV_Fmt "(",
-                    SV_Arg(name), SV_Arg(name), SV_Arg(cons.name.lexeme));
+            fprintf(f, SV_Fmt " " SV_Fmt "_" SV_Fmt "(", SV_Arg(name),
+                    SV_Arg(name), SV_Arg(cons.name.lexeme));
             generate_type(f, cons.type);
             fprintf(f, ");\n");
           }
@@ -2895,16 +3092,17 @@ void generate_forward_defs(generator_t *g, ast_t program) {
             int i = paren - body - 1;
 
             // Skip whitespace
-            while (i >= 0 && (body[i] == ' ' || body[i] == '\t')) i--;
+            while (i >= 0 && (body[i] == ' ' || body[i] == '\t'))
+              i--;
 
             // Find end of identifier
             int end = i + 1;
 
             // Walk back to find start of identifier
-            while (i >= 0 && ((body[i] >= 'a' && body[i] <= 'z') ||
-                             (body[i] >= 'A' && body[i] <= 'Z') ||
-                             (body[i] >= '0' && body[i] <= '9') ||
-                             body[i] == '_')) {
+            while (i >= 0 &&
+                   ((body[i] >= 'a' && body[i] <= 'z') ||
+                    (body[i] >= 'A' && body[i] <= 'Z') ||
+                    (body[i] >= '0' && body[i] <= '9') || body[i] == '_')) {
               i--;
             }
             int start = i + 1;
@@ -2973,7 +3171,8 @@ void generate_forward_defs(generator_t *g, ast_t program) {
   for (int i = 0; i < stmts.length; i++) {
     ast_t stmt = stmts.data[i];
     if (stmt->tag == tdef) {
-      if (is_asset_only_module(g, stmt)) continue;
+      if (is_asset_only_module(g, stmt))
+        continue;
       struct ast_tdef tdef = stmt->data.tdef;
       char *name = string_of_sv(tdef.name.lexeme);
       generate_array_funcs(g, name);
@@ -2991,11 +3190,13 @@ void generate_tdef(generator_t *g, ast_t tdef_ast) {
   struct ast_tdef tdef = tdef_ast->data.tdef;
   string_view name = tdef.name.lexeme;
 
-  if (is_asset_only_module(g, tdef_ast)) return;
+  if (is_asset_only_module(g, tdef_ast))
+    return;
 
   if (tdef.t == TDEF_MODULE) {
     // Register TypeName_new in the name table
-    register_builtin(&g->table, mangle_method(name, sv_from_cstr("new"), 0), string_of_sv(name));
+    register_builtin(&g->table, mangle_method(name, sv_from_cstr("new"), 0),
+                     string_of_sv(name));
 
     if (tdef.module_fields.length == 0) {
       fprintf(f, "struct " SV_Fmt " { char _reserved; };\n", SV_Arg(name));
@@ -3011,7 +3212,9 @@ void generate_tdef(generator_t *g, ast_t tdef_ast) {
     // Emit allocator: TypeName TypeName_new(void) { ... }
     fprintf(f, SV_Fmt " " SV_Fmt "_new(void) {\n", SV_Arg(name), SV_Arg(name));
     /* ADR-0003 Phase D extension: module body in the longlived pool. */
-    fprintf(f, "  " SV_Fmt " __inst = (" SV_Fmt ")rift_longlived_alloc(sizeof(struct " SV_Fmt "));\n",
+    fprintf(f,
+            "  " SV_Fmt " __inst = (" SV_Fmt
+            ")rift_longlived_alloc(sizeof(struct " SV_Fmt "));\n",
             SV_Arg(name), SV_Arg(name), SV_Arg(name));
     for (int i = 0; i < tdef.module_fields.length; i++) {
       ast_vardef vd = tdef.module_fields.data[i]->data.vardef;
@@ -3026,8 +3229,8 @@ void generate_tdef(generator_t *g, ast_t tdef_ast) {
         if (!rhs_is_borrower(vd.expr))
           fprintf(f, "  __string_release(%s);\n", field_text);
       } else {
-        fprintf(f, "  __inst->" SV_Fmt " = %s;\n",
-                SV_Arg(vd.name.lexeme), field_text);
+        fprintf(f, "  __inst->" SV_Fmt " = %s;\n", SV_Arg(vd.name.lexeme),
+                field_text);
         if ((field_type.is_array ||
              is_heap_allocated_type(field_type.name.lexeme, g->table)) &&
             rhs_is_borrower(vd.expr)) {
@@ -3088,22 +3291,26 @@ void generate_tdef(generator_t *g, ast_t tdef_ast) {
 
       // Function signature: TypeName TypeName_VariantName(payload_type payload)
       if (is_void) {
-        fprintf(f, SV_Fmt " " SV_Fmt "_" SV_Fmt "(void) {\n",
-                SV_Arg(name), SV_Arg(name), SV_Arg(cons.name.lexeme));
+        fprintf(f, SV_Fmt " " SV_Fmt "_" SV_Fmt "(void) {\n", SV_Arg(name),
+                SV_Arg(name), SV_Arg(cons.name.lexeme));
       } else {
-        fprintf(f, SV_Fmt " " SV_Fmt "_" SV_Fmt "(",
-                SV_Arg(name), SV_Arg(name), SV_Arg(cons.name.lexeme));
+        fprintf(f, SV_Fmt " " SV_Fmt "_" SV_Fmt "(", SV_Arg(name), SV_Arg(name),
+                SV_Arg(cons.name.lexeme));
         generate_type(f, cons.type);
         fprintf(f, " payload) {\n");
       }
 
       // Body: allocate, set tag, set data, return
       /* ADR-0003 Phase D extension: union body in the longlived pool. */
-      fprintf(f, "  " SV_Fmt " __inst = rift_longlived_alloc(sizeof(struct " SV_Fmt "));\n",
+      fprintf(f,
+              "  " SV_Fmt " __inst = rift_longlived_alloc(sizeof(struct " SV_Fmt
+              "));\n",
               SV_Arg(name), SV_Arg(name));
-      fprintf(f, "  __inst->" UNION_KEY_FIELD " = " SV_Fmt ";\n", SV_Arg(cons.name.lexeme));
+      fprintf(f, "  __inst->" UNION_KEY_FIELD " = " SV_Fmt ";\n",
+              SV_Arg(cons.name.lexeme));
       if (!is_void) {
-        fprintf(f, "  __inst->" UNION_VALUE_FIELD "." SV_Fmt " = payload;\n", SV_Arg(cons.name.lexeme));
+        fprintf(f, "  __inst->" UNION_VALUE_FIELD "." SV_Fmt " = payload;\n",
+                SV_Arg(cons.name.lexeme));
       }
       fprintf(f, "  return __inst;\n}\n");
 
@@ -3123,7 +3330,8 @@ void transpile(generator_t *g, ast_t program) {
   ast_array_t stmts = program->data.program.prog;
 
   semantic_prepare_program(g, program);
-  if (get_error_count() > 0) return;
+  if (get_error_count() > 0)
+    return;
   if (g->semantic_plan_enabled) {
     semantic_plan_diagnostic diagnostic;
     g->semantic_plans = semantic_plan_prepare(program, &diagnostic);
@@ -3138,19 +3346,24 @@ void transpile(generator_t *g, ast_t program) {
     }
   }
   g->assets = asset_generator_plan(g->asset_decls);
-  if (get_error_count() > 0) return;
-  generator_profile_analysis tiny = generator_analyse_profile(g->target, program);
+  if (get_error_count() > 0)
+    return;
+  generator_profile_analysis tiny =
+      generator_analyse_profile(g->target, program);
   g->zxn_tiny_eligible = tiny.eligible;
   g->zxn_tiny_uses_stdout = tiny.uses_stdout;
   g->zxn_tiny_simple_stdout = tiny.simple_stdout;
   g->zxn_light_core_eligible = g->target == TARGET_ZXN;
   g->zxn_bump_required = g->select_all_components;
   generator_collect_component_uses(g, program);
-  if (g->zxn_test) record_component(g, "tiny_test");
+  if (g->zxn_test)
+    record_component(g, "tiny_test");
   if (tiny.eligible) {
     int core = component_index(g, "core");
-    if (core >= 0) g->direct_components[core] = 0;
-    if (tiny.uses_stdout) record_component(g, "tiny_print");
+    if (core >= 0)
+      g->direct_components[core] = 0;
+    if (tiny.uses_stdout)
+      record_component(g, "tiny_print");
   }
   generator_compute_component_closure(g);
   int closure_startup31_safe = 1;
@@ -3186,8 +3399,7 @@ void transpile(generator_t *g, ast_t program) {
   }
 
   fprintf(f, "#include <stdlib.h>\n");
-  if (g->target == TARGET_ZXN && !tiny.eligible &&
-      !g->zxn_light_core_eligible)
+  if (g->target == TARGET_ZXN && !tiny.eligible && !g->zxn_light_core_eligible)
     fprintf(f, "#include <stdio.h>\n");
   generator_emit_manifest_headers(g);
   fprintf(f, "\n");
@@ -3197,7 +3409,8 @@ void transpile(generator_t *g, ast_t program) {
   for (int i = 0; i < stmts.length; i++) {
     ast_t stmt = stmts.data[i];
     if (stmt->tag == tdef) {
-      if (is_asset_only_module(g, stmt)) continue;
+      if (is_asset_only_module(g, stmt))
+        continue;
       fprintf(f, "static void __rift_release_" SV_Fmt "(void *);\n",
               SV_Arg(stmt->data.tdef.name.lexeme));
     }
@@ -3205,8 +3418,10 @@ void transpile(generator_t *g, ast_t program) {
   for (int i = 0; i < g->components->interface_count; i++) {
     component_interface_spec *entry = &g->components->interfaces[i];
     if (entry->kind == COMPONENT_OPAQUE && g->opaque_value_used[i])
-      fprintf(f, "static void __rift_release_%s(void *value) { "
-                 "__handle_release(value); }\n", entry->owner);
+      fprintf(f,
+              "static void __rift_release_%s(void *value) { "
+              "__handle_release(value); }\n",
+              entry->owner);
   }
   fprintf(f, "\n");
 

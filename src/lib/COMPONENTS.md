@@ -98,7 +98,8 @@ Dynamic/fixed arrays, aggregate-handle retain/release, process arguments, file
 I/O, and host scalar-cast helpers live in `arrays`, `handles`, `process_args`,
 `file_io`, and `scalar_casts`. The compiler selects these from resolved calls
 and type/lifetime use; a string-only program does not link array, argv, file,
-or aggregate-handle implementations. Host terminal lifecycle and termbox
+or aggregate-handle implementations. Target-directed `float value := input()`
+selects `number_parse`; ordinary string input does not. Host terminal lifecycle and termbox
 ownership live in `host_ui`; its lifecycle names are compile-time no-ops on
 ZXN. Raw `peek`/`poke` support lives in `asm_interop`, while the emulator test
 protocol lives in `tiny_test`. Scalar-only components such as `helpers`,

@@ -20,7 +20,7 @@ compile_with() {
 compile_with gcc "$WORK/host" "$FIXTURES/component_manifest_order.manifest"
 compile_with zxn "$WORK/zxn" "$FIXTURES/component_manifest_order.manifest"
 
-expected=$'RIFT_COMPONENTS_V2\n@pools=required\n@bump=none\n@profile=full\nalpha\nbeta\ngamma\ntop'
+expected=$'RIFT_COMPONENTS_V2\n@pools=required\n@bump=none\n@profile=full\nalpha\narrays\nbeta\ngamma\ntop'
 [ "$(cat "$WORK/host.components")" = "$expected" ] || fail "wrong dependency order"
 cmp "$WORK/host.components" "$WORK/zxn.components" >/dev/null || \
   fail "host and ZXN closures differ"
@@ -33,6 +33,46 @@ grep -q '^goto rift_main_epilogue;$' "$WORK/host.c" || fail "early return bypass
 grep -q '^later_native();$' "$WORK/host.c" || fail "manifest C symbol was not emitted"
 grep -q '__native_arg_' "$WORK/host.c" || fail "produced native string arg was not materialized"
 grep -q '__strtmp_.*data = NULL' "$WORK/host.c" || fail "produced native string arg was not transferred"
+grep -Eq '__native_arg_[0-9]+ = make_native_values\(__call_arg_[0-9]+\);' "$WORK/host.c" || \
+  fail "produced native array arg was not materialized"
+grep -Eq '__native_arg_[0-9]+ = native_make_probe\(\);' "$WORK/host.c" || \
+  fail "produced native handle arg was not materialized"
+grep -Eq '__internal_free_array\(__native_arg_[0-9]+, 0\);' "$WORK/host.c" || \
+  fail "produced native array arg was not released after the call"
+grep -Eq '__rift_release_Probe\(__native_arg_[0-9]+\);' "$WORK/host.c" || \
+  fail "produced native handle arg was not released after the call"
+
+awk '
+  /native_take_string\(__native_arg_[0-9]+\);/ { call = NR }
+  call && /__string_release\(__native_arg_[0-9]+\);/ {
+    if (NR != call + 1) exit 1
+    adjacent = 1
+    call = 0
+  }
+  END { if (!adjacent) exit 1 }
+' "$WORK/host.c" || fail "native string release was not adjacent to its call"
+[ "$(grep -Ec '= make_native_values\(__call_arg_[0-9]+\);' "$WORK/host.c")" -eq 1 ] || \
+  fail "native array producer was evaluated more than once"
+[ "$(grep -Ec '= native_make_probe\(\);' "$WORK/host.c")" -eq 1 ] || \
+  fail "native handle producer was evaluated more than once"
+[ "$(grep -Ec '= mark_native_order\(__call_arg_[0-9]+\);' "$WORK/host.c")" -eq 2 ] || \
+  fail "native scalar arguments were not each evaluated once"
+[ "$(grep -Ec '= mark_native_string\(__call_arg_[0-9]+\);' "$WORK/host.c")" -eq 1 ] || \
+  fail "native managed argument was evaluated more than once"
+awk '
+  /= mark_native_order\(__call_arg_[0-9]+\);/ {
+    if (!first) first = NR
+    else third = NR
+  }
+  /= mark_native_string\(__call_arg_[0-9]+\);/ { second = NR }
+  /native_order\(__native_arg_[0-9]+, __native_arg_[0-9]+, __native_arg_[0-9]+\);/ {
+    call = NR
+  }
+  END {
+    if (!first || !second || !third || !call ||
+        !(first < second && second < third && third < call)) exit 1
+  }
+' "$WORK/host.c" || fail "native arguments did not evaluate left to right"
 
 gcc -Wall -Werror -Wno-unused-variable -Wno-implicit-function-declaration \
   -I"$FIXTURES" -I"$ROOT/src/lib" -I"$ROOT/src/ext/lib" -o "$WORK/lifecycle" "$WORK/host.c" \
@@ -47,6 +87,24 @@ gcc -Wall -Werror -Wno-unused-variable -Wno-implicit-function-declaration \
   "$ROOT/src/lib/host/termbox2_impl.c" -lm
 [ "$("$WORK/lifecycle")" = "PASS: component lifecycle order" ] || \
   fail "lifecycle did not execute exactly once in dependency/reverse order"
+
+"$ROOT/riftc" "$FIXTURES/component_manifest_order.rift" "$WORK/constrained" \
+  --target=gcc \
+  "--component-manifest=$FIXTURES/component_manifest_order.manifest"
+gcc -Wall -Werror -Wno-unused-variable -Wno-implicit-function-declaration \
+  -I"$FIXTURES" -I"$ROOT/src/lib" -I"$ROOT/src/ext/lib" \
+  -o "$WORK/constrained" "$WORK/constrained.c" \
+  "$FIXTURES/component_lifecycle.c" "$ROOT/src/lib/arena_host.c" \
+  "$ROOT/src/lib/pools.c" \
+  "$ROOT/src/lib/segregated_heap.c" \
+  "$ROOT/src/lib/print_bytes.c" "$ROOT/src/lib/fundefs.c" \
+  "$ROOT/src/lib/error_sink.c" "$ROOT/src/lib/fundefs_internal.c" \
+  "$ROOT/src/lib/handle_runtime.c" "$ROOT/src/lib/termination.c" \
+  "$ROOT/src/lib/asm_interop.c" "$ROOT/src/lib/host_caps.c" \
+  "$ROOT/src/lib/zxn_test.c" "$ROOT/src/lib/host/termbox2_impl.c" \
+  -DRIFT_MEMORY_MAX_VALUE=7168 -DRIFT_MEMORY_MAX_PRESENT=1 -lm
+[ "$("$WORK/constrained")" = "PASS: component lifecycle order" ] || \
+  fail "managed native arguments exhausted the constrained pool"
 
 "$ROOT/riftc" "$FIXTURES/zxn_size_empty.rift" "$WORK/missing-hook" \
   "--component-manifest=$FIXTURES/component_manifest_unknown_hook.manifest"
@@ -70,11 +128,11 @@ fi
   fail "Sprite type-method use did not select the component exactly once"
 grep -q '^byte sprite = (byte)(3);$' "$WORK/sprite.c" || \
   fail "Sprite constructor did not lower to its byte representation"
-grep -q '^rift__im_L6_Sprite_L8_position_A2(sprite, 12, 34);$' \
+grep -Eq '^rift__im_L6_Sprite_L8_position_A2\(__native_recv_[0-9]+, __native_arg_[0-9]+, __native_arg_[0-9]+\);$' \
   "$WORK/sprite.c" || fail "Sprite.position did not lower to its native ABI"
-grep -q '^rift__im_L6_Sprite_L4_show_A0(sprite);$' "$WORK/sprite.c" || \
+grep -Eq '^rift__im_L6_Sprite_L4_show_A0\(__native_recv_[0-9]+\);$' "$WORK/sprite.c" || \
   fail "Sprite.show did not lower to its native ABI"
-grep -q '^rift__im_L6_Sprite_L4_hide_A0(sprite);$' "$WORK/sprite.c" || \
+grep -Eq '^rift__im_L6_Sprite_L4_hide_A0\(__native_recv_[0-9]+\);$' "$WORK/sprite.c" || \
   fail "Sprite.hide did not lower to its native ABI"
 grep -q '^rift__tm_L6_Sprite_L7_hideall_A0();$' "$WORK/sprite.c" || \
   fail "Sprite.hideall did not lower to its native ABI"
@@ -113,17 +171,17 @@ grep -q 'capabilities must contain only startup31 or pools' \
   "--component-manifest=$ROOT/src/lib/components.manifest"
 [ "$(cat "$WORK/shadow.components")" = $'RIFT_COMPONENTS_V2\n@pools=required\n@bump=none\n@profile=full\ntiny_print\nerror_sink\nhost_ui\ncore' ] || \
   fail "user function shadow incorrectly selected a native component"
-grep -q '^sleep(3);$' "$WORK/shadow.c" || fail "resolved user sleep call was lowered as native"
-if grep -q '^rift_sleep(3);$' "$WORK/shadow.c"; then fail "native lowering ignored resolved target"; fi
-grep -q '^rift_user_print(1);$' "$WORK/shadow.c" || \
+grep -Eq '^sleep\(__call_arg_[0-9]+\);$' "$WORK/shadow.c" || fail "resolved user sleep call was lowered as native"
+if grep -q 'rift_sleep(' "$WORK/shadow.c"; then fail "native lowering ignored resolved target"; fi
+grep -Eq '^rift_user_print\(__call_arg_[0-9]+\);$' "$WORK/shadow.c" || \
   fail "resolved user print call was lowered as a builtin"
-grep -q '^rift_user_println(2);$' "$WORK/shadow.c" || \
+grep -Eq '^rift_user_println\(__call_arg_[0-9]+\);$' "$WORK/shadow.c" || \
   fail "resolved user println call was lowered as a builtin"
-grep -q '^rift_user_concat(3, 4);$' "$WORK/shadow.c" || \
+grep -Eq '^rift_user_concat\(__call_arg_[0-9]+, __call_arg_[0-9]+\);$' "$WORK/shadow.c" || \
   fail "resolved user concat call was lowered as a builtin"
 grep -q '^rift_user_input();$' "$WORK/shadow.c" || \
   fail "resolved user input call was lowered as a builtin"
-grep -q '^rift_user_putchar(5);$' "$WORK/shadow.c" || \
+grep -Eq '^rift_user_putchar\(__call_arg_[0-9]+\);$' "$WORK/shadow.c" || \
   fail "resolved user putchar call was lowered as a builtin"
 
 if "$ROOT/riftc" "$FIXTURES/printf_undefined.rift" "$WORK/printf-undefined" \
@@ -153,9 +211,9 @@ for target in gcc zxn; do
   fi
   [ "$(cat "$WORK/clock-trig-$target.components")" = "$expected_clock_trig" ] || \
     fail "clock/trig selected the wrong $target component closure"
-  grep -q 'rift_sin(phase)' "$WORK/clock-trig-$target.c" || \
+  grep -Eq 'rift_sin\(__native_arg_[0-9]+\)' "$WORK/clock-trig-$target.c" || \
     fail "fixed sin did not lower to its collision-safe C symbol"
-  grep -q 'rift_cos(phase)' "$WORK/clock-trig-$target.c" || \
+  grep -Eq 'rift_cos\(__native_arg_[0-9]+\)' "$WORK/clock-trig-$target.c" || \
     fail "fixed cos did not lower to its collision-safe C symbol"
   grep -q 'rift_clock_ticks()' "$WORK/clock-trig-$target.c" || \
     fail "clock_ticks did not lower to its runtime symbol"
@@ -254,6 +312,36 @@ grep -q '__string_release(__strtmp_' "$WORK/input-ownership.c" || \
   fail "input producer temporary was not tracked for release"
 grep -q '__strtmp_.*\.data = NULL' "$WORK/input-ownership.c" || \
   fail "transferred input producer temporary was not nullified"
+awk '
+  /void exit_with_owned_values\(void\)$/ { in_exit = 1 }
+  in_exit && /int __terminal_arg_[0-9]+ = \(int\)\(__length_string\(inner\)\);/ {
+    status = NR
+  }
+  in_exit && /__string_release\(inner\);/ { inner = NR }
+  in_exit && /__string_release\(outer\);/ { outer = NR }
+  in_exit && /exit_rift\(__terminal_arg_[0-9]+\);/ {
+    if (!status || !inner || !outer ||
+        !(status < inner && inner < outer && outer < NR)) exit 1
+    found = 1
+    exit
+  }
+  END { if (!found) exit 1 }
+' "$WORK/input-ownership.c" || \
+  fail "exit did not unwind active owned scopes before termination"
+awk '
+  /void exit_with_owned_array\(void\)$/ { in_exit = 1 }
+  in_exit && /int __terminal_arg_[0-9]+ = \(int\)\(__length_array\(values\)\);/ {
+    status = NR
+  }
+  in_exit && /__internal_free_array\(values, 0\);/ { released = NR }
+  in_exit && /exit_rift\(__terminal_arg_[0-9]+\);/ {
+    if (!status || !released || !(status < released && released < NR)) exit 1
+    found = 1
+    exit
+  }
+  END { if (!found) exit 1 }
+' "$WORK/input-ownership.c" || \
+  fail "exit evaluated an array-derived code after releasing the array"
 
 if "$ROOT/riftc" "$FIXTURES/zxn_size_hello.rift" "$WORK/no-tiny" \
     --target=zxn "--component-manifest=$FIXTURES/component_manifest_order.manifest" \

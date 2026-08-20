@@ -224,6 +224,12 @@ class ZesaruxAdapter:
         "nex-entry-memory.txt": "read-memory %d 128" % entry_address,
         "snapshot.zsf.txt": "snapshot-save %s" % (self.artifacts / "snapshot.zsf"),
     }
+    for capture in self.args.capture_memory:
+      address_text, length_text = capture.split(":", 1)
+      address = int(address_text, 0)
+      length = int(length_text, 0)
+      commands["memory-%04X-%d.txt" % (address, length)] = \
+          "read-memory %d %d" % (address, length)
     for name, command in commands.items():
       try:
         output = zrcp_command(self.port, command)
@@ -287,7 +293,7 @@ def parse_args():
   parser.add_argument("--opcode-limit", type=positive_integer, default=10000000,
                       help="maximum emulated opcodes for each bounded measurement run")
   parser.add_argument("--capture-memory", action="append", default=[], metavar="ADDRESS:LENGTH",
-                      help="read target memory after a measurement breakpoint (repeatable)")
+                      help="read target memory at an inspect snapshot or measurement breakpoint (repeatable)")
   parser.add_argument("--send-keys-ascii", metavar="CODES",
                       help="after loading, send comma-separated ASCII key codes through ZEsarUX")
   parser.add_argument("--send-keys-after-memory", metavar="ADDRESS:VALUE",

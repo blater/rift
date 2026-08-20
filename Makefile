@@ -15,7 +15,7 @@ DRIVER_OBJECTS = $(BUILD)driver_main.o $(BUILD)driver_options.o \
                  $(BUILD)driver_sidecar.o $(BUILD)driver_build_plan.o
 DEPS = $(OBJECTS:.o=.d) $(DRIVER_OBJECTS:.o=.d)
 
-.PHONY: all clean test-driver-locations test-driver-options test-driver-sidecar test-arena test-pools test-managed-allocator test-name-table test-semantic-ir test-ownership-plan test-semantic-plan test-type-method-autocast test-component-manifest test-asset-language test-negative test-refcount test-sprite-runtime test-zesarux-index-cache test-zesarux-zrcp test-zesarux-maintenance test-zxn-assets test-zxn-sprite test-zxn test-zxn-tiny-print test-zxn-light-core test-autolink test-memory-options test-memory-profile test-zxn-size check-rift-rename
+.PHONY: all clean test-driver-locations test-driver-options test-driver-sidecar test-arena test-pools test-managed-allocator test-name-table test-semantic-ir test-ownership-plan test-semantic-plan test-type-method-autocast test-component-manifest test-asset-language test-negative test-refcount test-sprite-runtime test-inferred-input test-zesarux-index-cache test-zesarux-noupdates test-zesarux-silent-startup test-zesarux-zrcp test-zesarux-maintenance test-zxn-assets test-zxn-sprite test-zxn test-zxn-tiny-print test-zxn-light-core test-autolink test-memory-options test-memory-profile test-zxn-size test-zxn-memory-report check-rift-rename
 
 all: $(BUILD) riftc rift $(BUILD)verify-zxn-assets
 
@@ -247,15 +247,25 @@ test-refcount: riftc $(BUILD)string_refcount_test $(BUILD)fixed_array_set_test
 	@if $(BUILD)fixed_array_set_test gap >$(BUILD)fixed_array_set_gap.log 2>&1; then \
 		echo 'FAIL: fixed array accepted a gap set' >&2; exit 1; \
 	fi
-	@grep -q 'INDEX OUT OF BOUNDS (2, limit: 1)' $(BUILD)fixed_array_set_gap.log
+	@grep -q 'Could not set elem in dynamic array: INDEX OUT OF BOUNDS' \
+		$(BUILD)fixed_array_set_gap.log
 	@echo 'PASS: fixed array rejects a gap set before exposing skipped slots'
 	sh test/test_fixed_array_ownership.sh
 
 test-sprite-runtime:
 	sh test/test_sprite_runtime.sh
 
+test-inferred-input: rift riftc
+	sh test/test_inferred_input_conversion.sh
+
 test-zesarux-index-cache:
 	tools/test-zesarux-index-cache
+
+test-zesarux-noupdates:
+	tools/test-zesarux-noupdates
+
+test-zesarux-silent-startup:
+	tools/test-zesarux-silent-startup
 
 test-zesarux-zrcp:
 	tools/test-zesarux-zrcp
@@ -304,6 +314,9 @@ test-memory-options: rift riftc
 # configurable target pool capacities without requiring an emulator.
 test-zxn-size: riftc
 	sh test/test_zxn_size_profile.sh
+
+test-zxn-memory-report:
+	python3 -B test/test_zxn_memory_report.py
 
 clean:
 	rm -rf $(BUILD)

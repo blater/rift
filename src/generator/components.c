@@ -45,6 +45,12 @@ static void mark_opaque_type_usage(generator_t *g, ast_t type_node) {
   }
 }
 
+static void mark_inferred_checked_input(generator_t *g, ast_t expr,
+                                        ast_type expected_type) {
+  if (is_inferred_checked_input(expr, expected_type))
+    record_component(g, "number_parse");
+}
+
 static void collect_component_uses(generator_t *g, ast_t node) {
   if (!node) return;
   switch (node->tag) {
@@ -52,16 +58,20 @@ static void collect_component_uses(generator_t *g, ast_t node) {
     for (int i = 0; i < node->data.program.prog.length; i++)
       collect_component_uses(g, node->data.program.prog.data[i]);
     return;
-  case fundef:
+  case fundef: {
     mark_opaque_type_usage(g, node->data.fundef.ret_type);
     for (int i = 0; i < node->data.fundef.types.length; i++)
       mark_opaque_type_usage(g, node->data.fundef.types.data[i]);
     new_nt_scope(&g->table);
+    ast_t saved_fundef = g->current_fundef;
+    g->current_fundef = node;
     for (int i = 0; i < node->data.fundef.args.length; i++)
       push_nt(&g->table, node->data.fundef.args.data[i].lexeme, NT_VAR, node);
     collect_component_uses(g, node->data.fundef.body);
+    g->current_fundef = saved_fundef;
     end_nt_scope(&g->table);
     return;
+  }
   case compound:
     new_nt_scope(&g->table);
     for (int i = 0; i < node->data.compound.stmts.length; i++)
@@ -71,6 +81,13 @@ static void collect_component_uses(generator_t *g, ast_t node) {
   case funcall: {
     ast_funcall call = node->data.funcall;
     record_fundef_component(g, call.resolved_target);
+    if (call.resolved_target && call.resolved_target->tag == fundef) {
+      ast_array_t parameters = call.resolved_target->data.fundef.types;
+      for (int i = 0; i < call.args.length && i < parameters.length; i++)
+        if (parameters.data[i] && parameters.data[i]->tag == type)
+          mark_inferred_checked_input(g, call.args.data[i],
+                                      parameters.data[i]->data.type);
+    }
     int intrinsic_print =
         !call.resolved_target || call.resolved_target->tag != fundef ||
         call.resolved_target->data.fundef.body == NULL;
@@ -81,6 +98,16 @@ static void collect_component_uses(generator_t *g, ast_t node) {
          svcmp(call.name.lexeme, sv_from_cstr("pop")) == 0 ||
          svcmp(call.name.lexeme, sv_from_cstr("insert")) == 0))
       record_component(g, "arrays");
+    if (intrinsic_print && call.args.length >= 2 &&
+        (svcmp(call.name.lexeme, sv_from_cstr("append")) == 0 ||
+         svcmp(call.name.lexeme, sv_from_cstr("set")) == 0 ||
+         svcmp(call.name.lexeme, sv_from_cstr("insert")) == 0)) {
+      ast_type element_type = {0};
+      element_type.name.lexeme =
+          get_array_element_type(call.args.data[0], g->table, call.name);
+      mark_inferred_checked_input(g, call.args.data[call.args.length - 1],
+                                  element_type);
+    }
     if (intrinsic_print &&
         (svcmp(call.name.lexeme, sv_from_cstr("to_byte")) == 0 ||
          svcmp(call.name.lexeme, sv_from_cstr("to_word")) == 0 ||
@@ -145,16 +172,40 @@ static void collect_component_uses(generator_t *g, ast_t node) {
     record_fundef_component(g, node->data.method_call.resolved_target);
     if (node->data.method_call.resolved_kind == METHOD_ARRAY_INSTANCE)
       record_component(g, "arrays");
+    if (node->data.method_call.resolved_target &&
+        node->data.method_call.resolved_target->tag == fundef) {
+      ast_array_t parameters =
+          node->data.method_call.resolved_target->data.fundef.types;
+      int offset = node->data.method_call.resolved_kind == METHOD_TYPE_LEVEL
+                       ? 0
+                       : 1;
+      for (int i = 0;
+           i < node->data.method_call.args.length && i + offset < parameters.length;
+           i++)
+        if (parameters.data[i + offset] &&
+            parameters.data[i + offset]->tag == type)
+          mark_inferred_checked_input(
+              g, node->data.method_call.args.data[i],
+              parameters.data[i + offset]->data.type);
+    }
     collect_component_uses(g, node->data.method_call.receiver);
     for (int i = 0; i < node->data.method_call.args.length; i++)
       collect_component_uses(g, node->data.method_call.args.data[i]);
     return;
   case vardef:
     mark_opaque_type_usage(g, node->data.vardef.type);
+    mark_inferred_checked_input(g, node->data.vardef.expr,
+                                node->data.vardef.type->data.type);
     collect_component_uses(g, node->data.vardef.expr);
     push_nt(&g->table, node->data.vardef.name.lexeme, NT_VAR, node);
     return;
   case assign:
+    {
+      ast_type expected_type = {0};
+      expected_type.name.lexeme =
+          infer_expr_type(node->data.assign.target, g->table);
+      mark_inferred_checked_input(g, node->data.assign.expr, expected_type);
+    }
     collect_component_uses(g, node->data.assign.target);
     collect_component_uses(g, node->data.assign.expr);
     return;
@@ -166,6 +217,11 @@ static void collect_component_uses(generator_t *g, ast_t node) {
     collect_component_uses(g, node->data.unary_op.operand);
     return;
   case ret:
+    if (g->current_fundef && g->current_fundef->data.fundef.ret_type &&
+        g->current_fundef->data.fundef.ret_type->tag == type)
+      mark_inferred_checked_input(
+          g, node->data.ret.expr,
+          g->current_fundef->data.fundef.ret_type->data.type);
     collect_component_uses(g, node->data.ret.expr);
     return;
   case ifstmt:

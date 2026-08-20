@@ -17,6 +17,7 @@ for source in \
   test/fluent_array_ownership_test.rift \
   test/module_ownership_test.rift \
   test/collect_test.rift \
+  test/full_expression_ownership_test.rift \
   test/string_growth_test.rift \
   test/array_reassignment_soak_test.rift \
   test/mixed_memory_soak_test.rift

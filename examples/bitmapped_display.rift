@@ -1,0 +1,51 @@
+// Translation of a classic Spectrum BASIC bitmap-and-text display.
+//
+// Rift's draw() uses absolute endpoints and a top-left origin, so the BASIC
+// relative DRAW vectors are expressed here as their corresponding endpoints.
+
+sub main() {
+  border(1);
+  paper(1);
+  ink(7);
+  cls();
+
+  // Screen frame.
+  draw(0, 0, 255, 0);
+  draw(255, 0, 255, 175);
+  draw(255, 175, 0, 175);
+  draw(0, 175, 0, 0);
+
+  // Diagonal fan from the left and right edges.
+  for line := 0 to 17 {
+    int offset := -85 + line * 10;
+    draw(0, 88, 255, 88 + offset);
+    draw(255, 88, 0, 88 + offset);
+  }
+
+  // Diagonal fan from the top and bottom edges.
+  for line := 0 to 25 {
+    int offset := -125 + line * 10;
+    draw(128, 0, 128 + offset, 175);
+    draw(128, 175, 128 + offset, 0);
+  }
+
+  // Like the BASIC program, the text is written over the bitmap.
+  ink(6);
+  print(3, 4, "                          ");
+  print(3, 5, "   ALL SPECTRUM DISPLAYS  ");
+  print(3, 6, " ARE BITMAPPED, ALLOWING  ");
+  print(3, 7, " FOR SEAMLESS INTEGRATION ");
+  print(3, 8, " OF TEXT AND GRAPHICS.    ");
+  print(3, 9, "                          ");
+
+  ink(5);
+  draw(24, 143, 231, 143);
+  draw(231, 143, 231, 96);
+  draw(231, 96, 24, 96);
+  draw(24, 96, 24, 143);
+
+  draw(25, 142, 230, 142);
+  draw(230, 142, 230, 97);
+  draw(230, 97, 25, 97);
+  draw(25, 97, 25, 142);
+}

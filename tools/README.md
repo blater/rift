@@ -85,6 +85,30 @@ game/search browsers. Verify it with `make test-zesarux-noupdates`.
 diagnostics. `test` requires a `.nex` built with `rift --zxn-test` and accepts
 only a `RIFTTEST:FINISH` marker with no `RIFTTEST:FAIL` marker as success.
 
+`zxn-memory-report` turns a retained z88dk map into a repeatable memory
+breakdown. Build with `--debug`, then pass the matching NEX, map, and pre-wrap
+code image:
+
+```sh
+tools/zxn-memory-report program.nex \
+  --map /tmp/rift-build-XXXXXX/program.map \
+  --code-bin /tmp/rift-build-XXXXXX/program_CODE.bin \
+  --modules --verbose
+```
+
+The report separates NEX container padding, resident code/read-only data,
+initialized data, BSS, alignment, automatic managed-arena capacity, and the
+protected stack. For custom builds, pass the captured build output with
+`--build-log`, or repeat `--memory-max` and `--memory-reserve` explicitly.
+`--modules` also attributes resident bytes to the generated program, individual
+Rift runtime translation units, and Z88DK support using the link-map symbols.
+
+The report also prints the exact `rift-emu --capture-memory` argument needed
+for a workload-dependent allocator sample. `inspect` accepts that argument and
+writes a `memory-ADDR-LENGTH.txt` file alongside `registers.txt`; feed those
+back with `--allocator-memory ADDRESS:PATH` and `--registers PATH`. These are
+instantaneous/peak runtime samples and are labelled separately from capacity.
+
 The command prints one JSON result to stdout. Its `artifacts` path contains the
 emulator command and logs, and on failure or inspection, screen BMP/OCR,
 registers, stack, t-states, memory-page state, the first 128 bytes at the NEX

@@ -14,6 +14,20 @@ The Rift version uses named drawing and input helpers, accepts words of 1-20
 letters, compares guesses without regard to case, and ignores repeated or
 non-letter guesses.
 
+## Temperature converter
+
+`temperature_converter.rift` is a structured translation of
+`temperature_converter.bas`. It accepts signed decimal temperatures and
+converts in either direction between Celsius and Fahrenheit:
+
+```sh
+./rift examples/temperature_converter.rift
+```
+
+The example demonstrates single-key input, inferred checked conversion from
+line input to `float`, floating-point arithmetic, and mixed numeric and string
+output.
+
 ## ROM clock with fixed-point trig
 
 `clock.rift` renders an analogue clock face and continuously moves its second
@@ -41,6 +55,19 @@ bright intensity:
 
 The example exercises nested counter loops, numeric and string output without
 newlines, and sticky `paper`, `ink`, and `bright` console attributes.
+
+## Bitmapped text and graphics
+
+`bitmapped_display.rift` translates a Spectrum BASIC display that overlays
+positioned text onto a raster line grid:
+
+```sh
+./rift examples/bitmapped_display.rift
+```
+
+It demonstrates `cls`, screen attributes, absolute-endpoint `draw` calls, and
+positioned `print`. Rift does not provide BASIC's `INK 9` contrast mode, so the
+grid uses white ink against the original blue paper instead.
 
 ## Walking cat sprite
 

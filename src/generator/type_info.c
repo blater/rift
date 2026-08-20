@@ -193,6 +193,22 @@ int rhs_is_borrower(ast_t expr) {
   return !target || target->tag != fundef || target->data.fundef.body == NULL;
 }
 
+int is_builtin_input_call(ast_t expr) {
+  if (!expr || expr->tag != funcall) return 0;
+  ast_funcall call = expr->data.funcall;
+  if (call.args.length != 0 ||
+      svcmp(call.name.lexeme, sv_from_cstr("input")) != 0)
+    return 0;
+  return !call.resolved_target || call.resolved_target->tag != fundef ||
+         call.resolved_target->data.fundef.body == NULL;
+}
+
+int is_inferred_checked_input(ast_t expr, ast_type expected_type) {
+  return !expected_type.is_array &&
+         svcmp(expected_type.name.lexeme, sv_from_cstr("float")) == 0 &&
+         is_builtin_input_call(expr);
+}
+
 int expr_is_array(ast_t expr, name_table_t table, int *is_string) {
   ast_type type = {0};
   ast_t ref = NULL;

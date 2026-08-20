@@ -1,0 +1,417 @@
+// A compact Galaxian-style ZX Spectrum Next example.
+// Controls: Z = left, X = right, Space = fire.
+//
+// Each 32x32 image is composed from four 16x16 hardware sprites.  The .spr
+// files contain those frames in top-left, top-right, bottom-left,
+// bottom-right order.
+SpritePattern player_pattern := SpritePattern.load("assets/invaders/player.spr");
+SpritePattern alien1_pattern := SpritePattern.load("assets/invaders/alien1.spr");
+SpritePattern alien2_pattern := SpritePattern.load("assets/invaders/alien2.spr");
+SpritePattern alien3a_pattern := SpritePattern.load("assets/invaders/alien3a.spr");
+SpritePattern alien3b_pattern := SpritePattern.load("assets/invaders/alien3b.spr");
+SpritePattern alien_boss_pattern := SpritePattern.load("assets/invaders/alienboss1.spr");
+SpritePattern alien_bug_pattern := SpritePattern.load("assets/invaders/alienbug1.spr");
+SpritePattern alien_chb1_pattern := SpritePattern.load("assets/invaders/alienchb1.spr");
+SpritePattern alien_chb2_pattern := SpritePattern.load("assets/invaders/alienchb2.spr");
+
+// Rift currently has no immutable constant declaration.  Keep these scalar
+// bindings as read-only named values; target enums are avoided here because
+// the ZXN/SDCC enum path is not yet reliable.
+byte FRAME_TOP_LEFT := 0;
+byte FRAME_TOP_RIGHT := 1;
+byte FRAME_BOTTOM_LEFT := 2;
+byte FRAME_BOTTOM_RIGHT := 3;
+byte SPRITE_SIZE := 16;
+
+byte KIND_ALIEN1 := 0;
+byte KIND_ALIEN2 := 1;
+byte KIND_ALIEN3A := 2;
+byte KIND_ALIEN3B := 3;
+byte KIND_BOSS := 4;
+byte KIND_BUG := 5;
+byte KIND_CHB1 := 6;
+byte KIND_CHB2 := 7;
+
+byte PLAYER_TL_SLOT := 0;
+byte PLAYER_TR_SLOT := 1;
+byte PLAYER_BL_SLOT := 2;
+byte PLAYER_BR_SLOT := 3;
+byte ALIEN0_TL_SLOT := 4;
+byte ALIEN0_TR_SLOT := 5;
+byte ALIEN0_BL_SLOT := 6;
+byte ALIEN0_BR_SLOT := 7;
+byte ALIEN1_TL_SLOT := 8;
+byte ALIEN1_TR_SLOT := 9;
+byte ALIEN1_BL_SLOT := 10;
+byte ALIEN1_BR_SLOT := 11;
+byte ALIEN2_TL_SLOT := 12;
+byte ALIEN2_TR_SLOT := 13;
+byte ALIEN2_BL_SLOT := 14;
+byte ALIEN2_BR_SLOT := 15;
+byte ALIEN3_TL_SLOT := 16;
+byte ALIEN3_TR_SLOT := 17;
+byte ALIEN3_BL_SLOT := 18;
+byte ALIEN3_BR_SLOT := 19;
+byte ALIEN4_TL_SLOT := 20;
+byte ALIEN4_TR_SLOT := 21;
+byte ALIEN4_BL_SLOT := 22;
+byte ALIEN4_BR_SLOT := 23;
+byte SHOT_SLOT := 24;
+
+word PLAYER_START_X := 144;
+word PLAYER_Y := 208;
+word PLAYER_LEFT_BOUND := 2;
+word PLAYER_RIGHT_BOUND := 286;
+word FORMATION_START_X := 32;
+word FORMATION_LEFT_LIMIT := 8;
+word FORMATION_RIGHT_LIMIT := 64;
+word SHOT_START_Y := 196;
+word SHOT_PLAYER_X_OFFSET := 14;
+word ALIEN_COLUMN_SPACING := 48;
+word ALIEN_BOTTOM_Y := 88;
+word ALIEN_MIDDLE_Y := 72;
+word ALIEN_HIGH_Y := 56;
+word ALIEN_TOP_Y := 40;
+word SHOT_SPEED := 4;
+
+byte SPRITE_TRANSPARENCY_REGISTER := 75;
+byte SPRITE_CONTROL_REGISTER := 21;
+byte SPRITES_ENABLED := 1;
+
+sub place_player(Sprite top_left, Sprite top_right, Sprite bottom_left, Sprite bottom_right, word x, word y) {
+  top_left.frame(player_pattern, FRAME_TOP_LEFT);
+  top_right.frame(player_pattern, FRAME_TOP_RIGHT);
+  bottom_left.frame(player_pattern, FRAME_BOTTOM_LEFT);
+  bottom_right.frame(player_pattern, FRAME_BOTTOM_RIGHT);
+  top_left.position(x, y);
+  top_right.position(x + SPRITE_SIZE, y);
+  bottom_left.position(x, y + SPRITE_SIZE);
+  bottom_right.position(x + SPRITE_SIZE, y + SPRITE_SIZE);
+  top_left.show();
+  top_right.show();
+  bottom_left.show();
+  bottom_right.show();
+}
+
+sub set_alien_frame(Sprite top_left, Sprite top_right, Sprite bottom_left, Sprite bottom_right, byte kind) {
+  if kind = KIND_ALIEN1 {
+    top_left.frame(alien1_pattern, FRAME_TOP_LEFT);
+    top_right.frame(alien1_pattern, FRAME_TOP_RIGHT);
+    bottom_left.frame(alien1_pattern, FRAME_BOTTOM_LEFT);
+    bottom_right.frame(alien1_pattern, FRAME_BOTTOM_RIGHT);
+  } else if kind = KIND_ALIEN2 {
+    top_left.frame(alien2_pattern, FRAME_TOP_LEFT);
+    top_right.frame(alien2_pattern, FRAME_TOP_RIGHT);
+    bottom_left.frame(alien2_pattern, FRAME_BOTTOM_LEFT);
+    bottom_right.frame(alien2_pattern, FRAME_BOTTOM_RIGHT);
+  } else if kind = KIND_ALIEN3A {
+    top_left.frame(alien3a_pattern, FRAME_TOP_LEFT);
+    top_right.frame(alien3a_pattern, FRAME_TOP_RIGHT);
+    bottom_left.frame(alien3a_pattern, FRAME_BOTTOM_LEFT);
+    bottom_right.frame(alien3a_pattern, FRAME_BOTTOM_RIGHT);
+  } else if kind = KIND_ALIEN3B {
+    top_left.frame(alien3b_pattern, FRAME_TOP_LEFT);
+    top_right.frame(alien3b_pattern, FRAME_TOP_RIGHT);
+    bottom_left.frame(alien3b_pattern, FRAME_BOTTOM_LEFT);
+    bottom_right.frame(alien3b_pattern, FRAME_BOTTOM_RIGHT);
+  } else if kind = KIND_BOSS {
+    top_left.frame(alien_boss_pattern, FRAME_TOP_LEFT);
+    top_right.frame(alien_boss_pattern, FRAME_TOP_RIGHT);
+    bottom_left.frame(alien_boss_pattern, FRAME_BOTTOM_LEFT);
+    bottom_right.frame(alien_boss_pattern, FRAME_BOTTOM_RIGHT);
+  } else if kind = KIND_BUG {
+    top_left.frame(alien_bug_pattern, FRAME_TOP_LEFT);
+    top_right.frame(alien_bug_pattern, FRAME_TOP_RIGHT);
+    bottom_left.frame(alien_bug_pattern, FRAME_BOTTOM_LEFT);
+    bottom_right.frame(alien_bug_pattern, FRAME_BOTTOM_RIGHT);
+  } else if kind = KIND_CHB1 {
+    top_left.frame(alien_chb1_pattern, FRAME_TOP_LEFT);
+    top_right.frame(alien_chb1_pattern, FRAME_TOP_RIGHT);
+    bottom_left.frame(alien_chb1_pattern, FRAME_BOTTOM_LEFT);
+    bottom_right.frame(alien_chb1_pattern, FRAME_BOTTOM_RIGHT);
+  } else {
+    top_left.frame(alien_chb2_pattern, FRAME_TOP_LEFT);
+    top_right.frame(alien_chb2_pattern, FRAME_TOP_RIGHT);
+    bottom_left.frame(alien_chb2_pattern, FRAME_BOTTOM_LEFT);
+    bottom_right.frame(alien_chb2_pattern, FRAME_BOTTOM_RIGHT);
+  }
+}
+
+sub enemy_health(byte kind) returns byte {
+  if kind = KIND_ALIEN1 {
+    return 1;
+  }
+  if kind = KIND_ALIEN2 || kind = KIND_ALIEN3A {
+    return 2;
+  }
+  if kind = KIND_ALIEN3B || kind = KIND_BOSS || kind = KIND_BUG {
+    return 3;
+  }
+  return 4;
+}
+
+sub enemy_points(byte kind) returns int {
+  if kind = KIND_ALIEN1 {
+    return 10;
+  }
+  if kind = KIND_ALIEN2 || kind = KIND_ALIEN3A {
+    return 25;
+  }
+  if kind = KIND_ALIEN3B || kind = KIND_BOSS || kind = KIND_BUG {
+    return 60;
+  }
+  return 120;
+}
+
+sub place_alien(Sprite top_left, Sprite top_right, Sprite bottom_left, Sprite bottom_right, word x, word y, byte kind) {
+  set_alien_frame(top_left, top_right, bottom_left, bottom_right, kind);
+  top_left.position(x, y);
+  top_right.position(x + SPRITE_SIZE, y);
+  bottom_left.position(x, y + SPRITE_SIZE);
+  bottom_right.position(x + SPRITE_SIZE, y + SPRITE_SIZE);
+  top_left.show();
+  top_right.show();
+  bottom_left.show();
+  bottom_right.show();
+}
+
+sub hide_group(Sprite top_left, Sprite top_right, Sprite bottom_left, Sprite bottom_right) {
+  top_left.hide();
+  top_right.hide();
+  bottom_left.hide();
+  bottom_right.hide();
+}
+
+sub main() {
+  Sprite player_tl := Sprite(PLAYER_TL_SLOT);
+  Sprite player_tr := Sprite(PLAYER_TR_SLOT);
+  Sprite player_bl := Sprite(PLAYER_BL_SLOT);
+  Sprite player_br := Sprite(PLAYER_BR_SLOT);
+  Sprite alien0_tl := Sprite(ALIEN0_TL_SLOT);
+  Sprite alien0_tr := Sprite(ALIEN0_TR_SLOT);
+  Sprite alien0_bl := Sprite(ALIEN0_BL_SLOT);
+  Sprite alien0_br := Sprite(ALIEN0_BR_SLOT);
+  Sprite alien1_tl := Sprite(ALIEN1_TL_SLOT);
+  Sprite alien1_tr := Sprite(ALIEN1_TR_SLOT);
+  Sprite alien1_bl := Sprite(ALIEN1_BL_SLOT);
+  Sprite alien1_br := Sprite(ALIEN1_BR_SLOT);
+  Sprite alien2_tl := Sprite(ALIEN2_TL_SLOT);
+  Sprite alien2_tr := Sprite(ALIEN2_TR_SLOT);
+  Sprite alien2_bl := Sprite(ALIEN2_BL_SLOT);
+  Sprite alien2_br := Sprite(ALIEN2_BR_SLOT);
+  Sprite alien3_tl := Sprite(ALIEN3_TL_SLOT);
+  Sprite alien3_tr := Sprite(ALIEN3_TR_SLOT);
+  Sprite alien3_bl := Sprite(ALIEN3_BL_SLOT);
+  Sprite alien3_br := Sprite(ALIEN3_BR_SLOT);
+  Sprite alien4_tl := Sprite(ALIEN4_TL_SLOT);
+  Sprite alien4_tr := Sprite(ALIEN4_TR_SLOT);
+  Sprite alien4_bl := Sprite(ALIEN4_BL_SLOT);
+  Sprite alien4_br := Sprite(ALIEN4_BR_SLOT);
+  Sprite shot := Sprite(SHOT_SLOT);
+  word player_x := PLAYER_START_X;
+  word formation_x := FORMATION_START_X;
+  word shot_x := 0;
+  word shot_y := 0;
+  byte moving_right := 1;
+  byte movement_step := 1;
+  byte frame_delay := 22;
+  byte shot_active := 0;
+  byte fire_locked := 0;
+  byte alien0_kind := KIND_ALIEN1;
+  byte alien1_kind := KIND_ALIEN1;
+  byte alien2_kind := KIND_ALIEN2;
+  byte alien3_kind := KIND_ALIEN3A;
+  byte alien4_kind := KIND_BOSS;
+  byte alien0_alive := 1;
+  byte alien1_alive := 1;
+  byte alien2_alive := 1;
+  byte alien3_alive := 1;
+  byte alien4_alive := 1;
+  byte alien0_health := enemy_health(alien0_kind);
+  byte alien1_health := enemy_health(alien1_kind);
+  byte alien2_health := enemy_health(alien2_kind);
+  byte alien3_health := enemy_health(alien3_kind);
+  byte alien4_health := enemy_health(alien4_kind);
+  byte kills := 0;
+  byte wave := 0;
+  int score := 0;
+
+  paper(0);
+  border(0);
+  cls();
+  // Palette index 0 is transparent in the generated 4bpp assets; $15 enables
+  // the sprite plane above the plain black ULA screen.
+  next_reg_set(SPRITE_TRANSPARENCY_REGISTER, 0);
+  next_reg_set(SPRITE_CONTROL_REGISTER, SPRITES_ENABLED);
+  Sprite.hideall();
+
+  place_player(player_tl, player_tr, player_bl, player_br, player_x, PLAYER_Y);
+  shot.frame(player_pattern, FRAME_BOTTOM_LEFT);
+  shot.hide();
+  print(0, 0, "SCORE ");
+  print(7, 0, score);
+
+  while 1 {
+    scan_keyboard();
+
+    if key_pressed(KEY_Z) > 0 && player_x > PLAYER_LEFT_BOUND {
+      player_x := player_x - 2;
+    }
+    if key_pressed(KEY_X) > 0 && player_x < PLAYER_RIGHT_BOUND {
+      player_x := player_x + 2;
+    }
+    place_player(player_tl, player_tr, player_bl, player_br, player_x, PLAYER_Y);
+
+    if key_pressed(KEY_SPC) > 0 {
+      if fire_locked = 0 && shot_active = 0 {
+        shot_x := player_x + SHOT_PLAYER_X_OFFSET;
+        shot_y := SHOT_START_Y;
+        shot.position(shot_x, shot_y);
+        shot.show();
+        shot_active := 1;
+      }
+      fire_locked := 1;
+    } else {
+      fire_locked := 0;
+    }
+
+    if moving_right = 1 {
+      formation_x := formation_x + movement_step;
+      if formation_x > FORMATION_RIGHT_LIMIT {
+        moving_right := 0;
+      }
+    } else {
+      formation_x := formation_x - movement_step;
+      if formation_x < FORMATION_LEFT_LIMIT {
+        moving_right := 1;
+      }
+    }
+
+    // Increasing kind means rarer/tougher: it sits higher in the pack, needs
+    // more hits, and awards more points.
+    if alien0_alive = 1 {
+      place_alien(alien0_tl, alien0_tr, alien0_bl, alien0_br,
+                  formation_x, ALIEN_BOTTOM_Y, alien0_kind);
+    }
+    if alien1_alive = 1 {
+      place_alien(alien1_tl, alien1_tr, alien1_bl, alien1_br,
+                  formation_x + ALIEN_COLUMN_SPACING, ALIEN_BOTTOM_Y, alien1_kind);
+    }
+    if alien2_alive = 1 {
+      place_alien(alien2_tl, alien2_tr, alien2_bl, alien2_br,
+                  formation_x + ALIEN_COLUMN_SPACING * 2, ALIEN_MIDDLE_Y, alien2_kind);
+    }
+    if alien3_alive = 1 {
+      place_alien(alien3_tl, alien3_tr, alien3_bl, alien3_br,
+                  formation_x + ALIEN_COLUMN_SPACING * 3, ALIEN_HIGH_Y, alien3_kind);
+    }
+    if alien4_alive = 1 {
+      place_alien(alien4_tl, alien4_tr, alien4_bl, alien4_br,
+                  formation_x + ALIEN_COLUMN_SPACING * 4, ALIEN_TOP_Y, alien4_kind);
+    }
+
+    if shot_active = 1 {
+      if shot_y < 6 {
+        shot.hide();
+        shot_active := 0;
+      } else {
+        shot_y := shot_y - SHOT_SPEED;
+        shot.position(shot_x, shot_y);
+      }
+      if shot_y > 36 && shot_y < 120 {
+        if alien0_alive = 1 && shot_x > formation_x && shot_x < formation_x + 32 && shot_y > 84 {
+          alien0_health := alien0_health - 1;
+          if alien0_health = 0 {
+            hide_group(alien0_tl, alien0_tr, alien0_bl, alien0_br);
+            alien0_alive := 0;
+            kills := kills + 1;
+            score := score + enemy_points(alien0_kind);
+          }
+          shot.hide();
+          shot_active := 0;
+        }
+        if shot_active = 1 && alien1_alive = 1 && shot_x > formation_x + 48 && shot_x < formation_x + 80 && shot_y > 84 {
+          alien1_health := alien1_health - 1;
+          if alien1_health = 0 {
+            hide_group(alien1_tl, alien1_tr, alien1_bl, alien1_br);
+            alien1_alive := 0;
+            kills := kills + 1;
+            score := score + enemy_points(alien1_kind);
+          }
+          shot.hide();
+          shot_active := 0;
+        }
+        if shot_active = 1 && alien2_alive = 1 && shot_x > formation_x + 96 && shot_x < formation_x + 128 && shot_y > 68 {
+          alien2_health := alien2_health - 1;
+          if alien2_health = 0 {
+            hide_group(alien2_tl, alien2_tr, alien2_bl, alien2_br);
+            alien2_alive := 0;
+            kills := kills + 1;
+            score := score + enemy_points(alien2_kind);
+          }
+          shot.hide();
+          shot_active := 0;
+        }
+        if shot_active = 1 && alien3_alive = 1 && shot_x > formation_x + 144 && shot_x < formation_x + 176 && shot_y > 52 {
+          alien3_health := alien3_health - 1;
+          if alien3_health = 0 {
+            hide_group(alien3_tl, alien3_tr, alien3_bl, alien3_br);
+            alien3_alive := 0;
+            kills := kills + 1;
+            score := score + enemy_points(alien3_kind);
+          }
+          shot.hide();
+          shot_active := 0;
+        }
+        if shot_active = 1 && alien4_alive = 1 && shot_x > formation_x + 192 && shot_x < formation_x + 224 && shot_y > 36 {
+          alien4_health := alien4_health - 1;
+          if alien4_health = 0 {
+            hide_group(alien4_tl, alien4_tr, alien4_bl, alien4_br);
+            alien4_alive := 0;
+            kills := kills + 1;
+            score := score + enemy_points(alien4_kind);
+          }
+          shot.hide();
+          shot_active := 0;
+        }
+      }
+    }
+
+    if kills = 5 {
+      wave := wave + 1;
+      alien0_alive := 1;
+      alien1_alive := 1;
+      alien2_alive := 1;
+      alien3_alive := 1;
+      alien4_alive := 1;
+      if wave = 1 {
+        alien0_kind := KIND_ALIEN1;
+        alien1_kind := KIND_ALIEN2;
+        alien2_kind := KIND_ALIEN3A;
+        alien3_kind := KIND_ALIEN3B;
+        alien4_kind := KIND_BUG;
+      } else {
+        alien0_kind := KIND_ALIEN2;
+        alien1_kind := KIND_ALIEN3A;
+        alien2_kind := KIND_ALIEN3B;
+        alien3_kind := KIND_CHB1;
+        alien4_kind := KIND_CHB2;
+      }
+      alien0_health := enemy_health(alien0_kind);
+      alien1_health := enemy_health(alien1_kind);
+      alien2_health := enemy_health(alien2_kind);
+      alien3_health := enemy_health(alien3_kind);
+      alien4_health := enemy_health(alien4_kind);
+      if movement_step < 4 {
+        movement_step := movement_step + 1;
+      }
+      if frame_delay > 8 {
+        frame_delay := frame_delay - 3;
+      }
+      kills := 0;
+      formation_x := FORMATION_START_X;
+    }
+    print(7, 0, score);
+    sleep(frame_delay);
+  }
+}

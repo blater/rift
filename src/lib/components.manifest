@@ -28,6 +28,7 @@ component|clock||clock.h|clock.c|clock.c||zxn/clock.asm|rift_clock_init|rift_clo
 component|sound||sound.h|sound.c|sound.c||||||
 component|input|keyboard|input.h|input.c|input.c||||||startup31
 component|line_input|core,input,tiny_print||line_input.c|line_input.c||||||startup31
+component|number_parse|line_input,error_sink|number_parse.h|number_parse.c|number_parse.c||||||startup31
 component|print_at|tiny_print,ink_paper|print_at.h|print_at.c|print_at.c||||||startup31
 component|plot||plot.h|plot.c|plot.c||||||startup31
 component|draw|plot|draw.h|draw.c|draw.c||||||startup31

@@ -3,9 +3,66 @@ sub main() {
   return;
 }
 
+int native_order_trace := 0;
+
+sub mark_native_order(int digit) returns int {
+  native_order_trace := (native_order_trace * 10) + digit;
+  return digit;
+}
+
+sub mark_native_string(int digit) returns string {
+  native_order_trace := (native_order_trace * 10) + digit;
+  return concat("managed-", "arg");
+}
+
+string native_shared_value := "managed-arg";
+
+sub invalidate_native_value(int digit) returns int {
+  native_order_trace := (native_order_trace * 10) + digit;
+  native_shared_value := "changed";
+  return digit;
+}
+
 sub call_later() {
   later_use();
   string result := native_value(1);
   Probe probe;
   byte accepted := probe.accept(concat("native-", "string"));
+  for i := 1 to 2000 {
+    native_take_string(concat("owned-", "value"));
+    native_take_array(make_native_values(i));
+    native_take_probe(native_make_probe());
+  }
+  byte ordered := native_order(mark_native_order(1),
+                               mark_native_string(2),
+                               mark_native_order(3));
+  if native_order_trace != 123 then
+    exit(92);
+  if ordered != 1 then
+    exit(93);
+  native_shared_value := "managed-arg";
+  native_order_trace := 0;
+  byte borrowed_ordered := native_order(mark_native_order(1),
+                                        native_shared_value,
+                                        invalidate_native_value(3));
+  if native_order_trace != 13 then
+    exit(94);
+  if borrowed_ordered != 1 then
+    exit(95);
+  native_shared_value := "managed-arg";
+  native_order_trace := 0;
+  Probe ordered_probe := native_make_probe();
+  byte method_ordered := ordered_probe.order(mark_native_order(1),
+                                              native_shared_value,
+                                              invalidate_native_value(3));
+  if native_order_trace != 13 then
+    exit(96);
+  if method_ordered != 1 then
+    exit(97);
+}
+
+sub make_native_values(int value) returns int[] {
+  int[] values := [];
+  append(values, value);
+  return values;
 }

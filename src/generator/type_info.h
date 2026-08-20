@@ -12,6 +12,8 @@ int get_identifier_array_type(string_view name, name_table_t table,
                               ast_type *result);
 int is_scalar_string_var(string_view name, name_table_t table);
 int rhs_is_borrower(ast_t expr);
+int is_builtin_input_call(ast_t expr);
+int is_inferred_checked_input(ast_t expr, ast_type expected_type);
 int expr_is_array(ast_t expr, name_table_t table, int *is_string);
 void emit_borrowed_container_retain(generator_t *g, ast_t expr,
                                     ast_type value_type);

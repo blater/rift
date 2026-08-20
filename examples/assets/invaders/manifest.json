@@ -1,0 +1,225 @@
+{
+  "macro_tile_size": 32,
+  "hardware_frame_size": 16,
+  "bpp": 4,
+  "transparent_index": 0,
+  "palette": [
+    [
+      0,
+      0,
+      0
+    ],
+    [
+      144,
+      178,
+      151
+    ],
+    [
+      39,
+      168,
+      111
+    ],
+    [
+      123,
+      115,
+      131
+    ],
+    [
+      43,
+      114,
+      95
+    ],
+    [
+      137,
+      81,
+      133
+    ],
+    [
+      83,
+      81,
+      117
+    ],
+    [
+      45,
+      77,
+      136
+    ],
+    [
+      41,
+      79,
+      53
+    ],
+    [
+      150,
+      32,
+      143
+    ],
+    [
+      104,
+      28,
+      115
+    ],
+    [
+      70,
+      31,
+      97
+    ],
+    [
+      31,
+      42,
+      153
+    ],
+    [
+      32,
+      43,
+      57
+    ],
+    [
+      15,
+      9,
+      181
+    ],
+    [
+      25,
+      12,
+      62
+    ]
+  ],
+  "sprites": [
+    {
+      "name": "player",
+      "png": "player.png",
+      "data": "player.spr",
+      "pixels": [
+        32,
+        32
+      ],
+      "tiles": [
+        1,
+        1
+      ],
+      "frames": 4,
+      "frame_order": "macro tiles row-major; top-left, top-right, bottom-left, bottom-right"
+    },
+    {
+      "name": "alien1",
+      "png": "alien1.png",
+      "data": "alien1.spr",
+      "pixels": [
+        32,
+        32
+      ],
+      "tiles": [
+        1,
+        1
+      ],
+      "frames": 4,
+      "frame_order": "macro tiles row-major; top-left, top-right, bottom-left, bottom-right"
+    },
+    {
+      "name": "alien2",
+      "png": "alien2.png",
+      "data": "alien2.spr",
+      "pixels": [
+        32,
+        32
+      ],
+      "tiles": [
+        1,
+        1
+      ],
+      "frames": 4,
+      "frame_order": "macro tiles row-major; top-left, top-right, bottom-left, bottom-right"
+    },
+    {
+      "name": "alien3a",
+      "png": "alien3a.png",
+      "data": "alien3a.spr",
+      "pixels": [
+        32,
+        32
+      ],
+      "tiles": [
+        1,
+        1
+      ],
+      "frames": 4,
+      "frame_order": "macro tiles row-major; top-left, top-right, bottom-left, bottom-right"
+    },
+    {
+      "name": "alien3b",
+      "png": "alien3b.png",
+      "data": "alien3b.spr",
+      "pixels": [
+        32,
+        32
+      ],
+      "tiles": [
+        1,
+        1
+      ],
+      "frames": 4,
+      "frame_order": "macro tiles row-major; top-left, top-right, bottom-left, bottom-right"
+    },
+    {
+      "name": "alienboss1",
+      "png": "alienboss1.png",
+      "data": "alienboss1.spr",
+      "pixels": [
+        32,
+        32
+      ],
+      "tiles": [
+        1,
+        1
+      ],
+      "frames": 4,
+      "frame_order": "macro tiles row-major; top-left, top-right, bottom-left, bottom-right"
+    },
+    {
+      "name": "alienbug1",
+      "png": "alienbug1.png",
+      "data": "alienbug1.spr",
+      "pixels": [
+        32,
+        32
+      ],
+      "tiles": [
+        1,
+        1
+      ],
+      "frames": 4,
+      "frame_order": "macro tiles row-major; top-left, top-right, bottom-left, bottom-right"
+    },
+    {
+      "name": "alienchb1",
+      "png": "alienchb1.png",
+      "data": "alienchb1.spr",
+      "pixels": [
+        32,
+        32
+      ],
+      "tiles": [
+        1,
+        1
+      ],
+      "frames": 4,
+      "frame_order": "macro tiles row-major; top-left, top-right, bottom-left, bottom-right"
+    },
+    {
+      "name": "alienchb2",
+      "png": "alienchb2.png",
+      "data": "alienchb2.spr",
+      "pixels": [
+        32,
+        32
+      ],
+      "tiles": [
+        1,
+        1
+      ],
+      "frames": 4,
+      "frame_order": "macro tiles row-major; top-left, top-right, bottom-left, bottom-right"
+    }
+  ]
+}

@@ -70,4 +70,14 @@ sub main() {
   string capped := input();
   check(length(capped) = 255);
   check(charAt(capped, 254) = 'C');
+
+  injected_reset();
+  injected_push(to_byte('-'));
+  injected_push(to_byte('4'));
+  injected_push(to_byte('0'));
+  injected_push(to_byte('.'));
+  injected_push(to_byte('5'));
+  injected_push(13);
+  float parsed := input();
+  check(parsed = -40.5);
 }

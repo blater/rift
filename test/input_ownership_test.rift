@@ -23,6 +23,20 @@ sub concat_input() returns string {
   return concat(">", input());
 }
 
+sub exit_with_owned_values() {
+  string outer := concat("outer", "-owned");
+  {
+    string inner := concat("inner", "-owned");
+    exit(length(inner));
+  }
+}
+
+sub exit_with_owned_array() {
+  int[] values := [];
+  append(values, 7);
+  exit(length(values));
+}
+
 sub main() {
   Assert a;
   // These functions are compile-time ownership regressions. They are not

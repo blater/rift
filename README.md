@@ -141,15 +141,8 @@ println(42);
 putchar_at(to_byte(31), to_byte(23), '!');
 putchar_addr(to_word(16384), 'A');
 string line := input(); // echoed, blocking, maximum 255 characters
+float value := input(); // inferred checked conversion; invalid input exits
 ```
-
-The former Rift `printf` builtin has been removed; use `print`/`println`.
-Embedded C may still call C stdio and consequently selects the full CRT.
-
-`examples/cat_walk.rift` uses the regenerated
-`examples/assets/cat/walk.spr`: twelve complete 16×16 8bpp frames derived from
-`assets/cat/walk2.png`. Each source frame is normalized into its own 16-pixel
-cell before packing, so animation poses are not horizontally truncated.
 
 #### Tagged unions and match
 ```rift

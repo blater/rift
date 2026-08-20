@@ -1,0 +1,25 @@
+sub print_argument(float value) {
+  println(value);
+}
+
+sub read_return() returns float {
+  return input();
+}
+
+sub main() {
+  float value := input();
+  println(value);
+
+  value := input();
+  println(value);
+
+  print_argument(input());
+  println(read_return());
+
+  float[] values;
+  append(values, input());
+  println(get(values, 0));
+
+  string text := input();
+  println(text);
+}

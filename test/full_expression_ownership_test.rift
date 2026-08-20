@@ -1,0 +1,191 @@
+include "Assert.rift"
+
+int produced_calls := 0;
+
+record ExpressionHandle {
+  int value
+}
+
+union ExpressionChoice {
+  ExpressionHandle Some,
+  None
+}
+
+sub produce_full_expression(string source) returns string {
+  produced_calls := produced_calls + 1;
+  return concat(source, source);
+}
+
+sub produce_expression_array(int value) returns int[] {
+  int[] values := [];
+  append(values, value);
+  return values;
+}
+
+sub produce_expression_handle(int value) returns ExpressionHandle {
+  ExpressionHandle result := {value := value};
+  return result;
+}
+
+sub produce_expression_handles(int value) returns ExpressionHandle[] {
+  ExpressionHandle[] values := [];
+  append(values, produce_expression_handle(value));
+  return values;
+}
+
+sub produce_expression_choice(int value) returns ExpressionChoice {
+  return Some(produce_expression_handle(value));
+}
+
+sub return_from_expression_match(int value) returns int {
+  match produce_expression_choice(value) {
+    Some: return value;
+    None: return 0;
+  }
+  return -1;
+}
+
+string shared_user_argument := "preserved";
+string shared_match_source := "stable";
+int user_order_trace := 0;
+
+sub mark_user_order(int digit) returns int {
+  user_order_trace := (user_order_trace * 10) + digit;
+  return digit;
+}
+
+sub invalidate_user_argument(int digit) returns int {
+  user_order_trace := (user_order_trace * 10) + digit;
+  shared_user_argument := "changed";
+  return digit;
+}
+
+sub inspect_user_order(int first, string text, int third) returns int {
+  return (first * 100) + (length(text) * 10) + third;
+}
+
+sub make_user_receiver() returns string {
+  user_order_trace := (user_order_trace * 10) + 1;
+  return "preserved";
+}
+
+sub string.inspect_user_method(int first, int third) returns int {
+  return (first * 100) + (length(this) * 10) + third;
+}
+
+sub mutate_match_source() returns string {
+  shared_match_source := "changed";
+  return "stable";
+}
+
+sub match_borrow_survives_case_effect() returns int {
+  match shared_match_source {
+    mutate_match_source(): return 1;
+    default: return 0;
+  }
+}
+
+string global_owned_string := concat("global-", "owned");
+int global_array_value := get(produce_expression_array(41), 0);
+ExpressionHandle global_owned_handle := produce_expression_handle(42);
+
+sub main() {
+  string base := "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+
+  concat(base, base);
+  concat(base, base);
+  concat(base, base);
+  concat(base, base);
+
+  int condition_hits := 0;
+  if equals(concat(base, base), concat(base, base)) then
+    condition_hits := condition_hits + 1;
+  if equals(concat(base, base), concat(base, base)) then
+    condition_hits := condition_hits + 1;
+  if equals(concat(base, base), concat(base, base)) then
+    condition_hits := condition_hits + 1;
+
+  int loop_count := 0;
+  while loop_count < length(concat("abc", "")) {
+    loop_count := loop_count + 1;
+  }
+
+  length(produce_full_expression(base));
+  length(produce_full_expression(base));
+
+  int managed_total := 0;
+  for value := 1 to 100 {
+    managed_total := managed_total + length(produce_expression_array(value));
+    managed_total := managed_total + produce_expression_array(value)[0];
+    managed_total := managed_total + get(produce_expression_array(value), 0);
+    managed_total := managed_total + produce_expression_handle(value).value;
+  }
+  ExpressionHandle[] transferred;
+  append(transferred, get(produce_expression_handles(1), 0));
+  for value := 1 to 100 {
+    set(transferred, 0, get(produce_expression_handles(value), 0));
+    transferred[0] := get(produce_expression_handles(value + 1), 0);
+    insert(transferred, 0, get(produce_expression_handles(value + 2), 0));
+    ExpressionHandle dropped := pop(transferred);
+  }
+
+  shared_user_argument := "preserved";
+  user_order_trace := 0;
+  int user_call_value := inspect_user_order(mark_user_order(1),
+                                            shared_user_argument,
+                                            invalidate_user_argument(3));
+  int user_call_trace := user_order_trace;
+
+  user_order_trace := 0;
+  int user_method_value := make_user_receiver().inspect_user_method(
+      mark_user_order(2), mark_user_order(3));
+  int user_method_trace := user_order_trace;
+
+  shared_user_argument := "preserved";
+  user_order_trace := 0;
+  int borrowed_method_value := shared_user_argument.inspect_user_method(
+      mark_user_order(1), invalidate_user_argument(3));
+
+  int match_total := 0;
+  for value := 1 to 200 {
+    match_total := match_total + return_from_expression_match(value);
+  }
+  shared_match_source := "stable";
+  int borrowed_match := match_borrow_survives_case_effect();
+  length(produce_full_expression(base));
+  length(produce_full_expression(base));
+
+  Assert as;
+  as.AssertEQ("discarded strings release at the full-expression boundary",
+              1, 1);
+  as.AssertEQ("condition strings release before the selected branch",
+              3, condition_hits);
+  as.AssertEQ("while condition strings release on every evaluation",
+              3, loop_count);
+  as.AssertEQ("ordinary string producers evaluate and release once",
+              4, produced_calls);
+  as.AssertEQ("borrowed container producers release after their consumer",
+              15250, managed_total);
+  as.AssertEQ("aggregate array operands retain the captured value once",
+              102, transferred[0].value);
+  as.AssertEQ("user function arguments evaluate left to right", 13,
+              user_call_trace);
+  as.AssertEQ("borrowed user string args survive later mutation", 193,
+              user_call_value);
+  as.AssertEQ("user method receiver and args evaluate left to right", 123,
+              user_method_trace);
+  as.AssertEQ("produced user method receivers stay live through the call", 293,
+              user_method_value);
+  as.AssertEQ("borrowed user method receivers survive later mutation", 193,
+              borrowed_method_value);
+  as.AssertEQ("managed match frames unwind on early return", 20100,
+              match_total);
+  as.AssertEQ("borrowed match scrutinee survives case side effects", 1,
+              borrowed_match);
+  as.AssertEquals("global string producer transfers before temp cleanup",
+                  "global-owned", global_owned_string);
+  as.AssertEQ("global array-derived scalar releases producer", 41,
+              global_array_value);
+  as.AssertEQ("global handle producer transfers once", 42,
+              global_owned_handle.value);
+}

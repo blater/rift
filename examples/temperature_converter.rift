@@ -1,0 +1,38 @@
+// A structured Rift version of the classic ZX BASIC temperature converter.
+
+sub main() {
+  paper(7);
+  ink(0);
+  cls();
+
+  println("TEMPERATURE CONVERTER");
+  println();
+  println("Press F to convert from Fahrenheit");
+  println("or C to convert from Celsius.");
+
+  char scale := upcase(keypress());
+  while scale != 'F' && scale != 'C' {
+    scale := upcase(keypress());
+  }
+  println(scale);
+
+  float celsius;
+  float fahrenheit;
+  if scale = 'C' {
+    println("Enter Celsius degrees");
+    celsius := input();
+    fahrenheit := celsius * 9.0 / 5.0 + 32.0;
+  } else {
+    println("Enter Fahrenheit degrees");
+    fahrenheit := input();
+    float adjusted_fahrenheit := fahrenheit - 32.0;
+    celsius := adjusted_fahrenheit * 5.0 / 9.0;
+  }
+
+  println();
+  println("RESULTS");
+  print(fahrenheit);
+  println(" degrees Fahrenheit");
+  print(celsius);
+  println(" degrees Celsius");
+}

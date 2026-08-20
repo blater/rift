@@ -1,0 +1,523 @@
+#!/usr/bin/env python3
+"""Report deterministic and sampled memory use for a Rift ZX Next build."""
+
+import argparse
+import json
+import re
+import sys
+from pathlib import Path
+
+
+SYMBOL_RE = re.compile(r"^(\S+)\s+= \$([0-9A-Fa-f]+)\s*;")
+REGISTER_SP_RE = re.compile(r"\bSP=([0-9A-Fa-f]+)")
+HEX_LINE_RE = re.compile(r"^[0-9A-Fa-f]+$")
+
+DEFAULT_STACK_TOP = 0xFF58
+DEFAULT_STACK_SIZE = 2048
+DEFAULT_ALIGNMENT = 16
+
+ALLOCATOR_SYMBOLS = (
+    "_bump_base",
+    "_bump_top",
+    "_bump_cap",
+    "_zxn_arena_start",
+    "_zxn_arena_end",
+    "_zxn_arena_capacity",
+    "_rift_ll_base",
+    "_rift_ll_live_bytes",
+    "_rift_ll_peak_live_bytes",
+    "_rift_ll_magazine_free_bytes",
+    "_rift_ll_cap",
+)
+
+
+class ReportError(Exception):
+  pass
+
+
+def parse_map(path):
+  symbols = {}
+  for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    match = SYMBOL_RE.match(line)
+    if match:
+      symbols[match.group(1)] = int(match.group(2), 16)
+  return symbols
+
+
+def parse_map_entries(path):
+  entries = []
+  for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    match = SYMBOL_RE.match(line)
+    if not match or ";" not in line:
+      continue
+    fields = [field.strip() for field in line.split(";", 1)[1].split(",", 5)]
+    if len(fields) != 6 or fields[0] != "addr" or not fields[3] or not fields[4]:
+      continue
+    source = re.sub(r":\d+$", "", fields[5].strip())
+    entries.append({
+        "symbol": match.group(1),
+        "address": int(match.group(2), 16),
+        "module": fields[3],
+        "scope": fields[1],
+        "section": fields[4],
+        "source": source,
+    })
+  return entries
+
+
+def required_symbol(symbols, name):
+  try:
+    return symbols[name]
+  except KeyError as exc:
+    raise ReportError("link map has no %s" % name) from exc
+
+
+def align_up(value, alignment):
+  return (value + alignment - 1) // alignment * alignment
+
+
+def parse_build_log(path, memory_reserve, memory_max):
+  text = path.read_text(encoding="utf-8", errors="replace")
+  profile = re.search(
+      r"ZXN profile: .*memory-max=([^,]+), .*memory-reserve=(\d+)", text)
+  if profile:
+    if memory_max is None and profile.group(1) != "auto":
+      memory_max = int(profile.group(1))
+    if memory_reserve is None:
+      memory_reserve = int(profile.group(2))
+  return memory_reserve, memory_max
+
+
+def parse_memory_capture(value):
+  try:
+    address_text, path_text = value.split(":", 1)
+    address = int(address_text, 0)
+  except ValueError as exc:
+    raise ReportError("--allocator-memory must be ADDRESS:PATH") from exc
+  text = Path(path_text).read_text(encoding="utf-8", errors="replace")
+  candidates = [line.strip() for line in text.splitlines()
+                if HEX_LINE_RE.fullmatch(line.strip()) and len(line.strip()) % 2 == 0]
+  if not candidates:
+    raise ReportError("allocator capture contains no byte-aligned hexadecimal line")
+  return address, bytes.fromhex(max(candidates, key=len))
+
+
+def read_u16(memory_address, memory, symbol_address, name):
+  offset = symbol_address - memory_address
+  if offset < 0 or offset + 2 > len(memory):
+    raise ReportError("allocator capture does not include %s at 0x%04X" %
+                      (name, symbol_address))
+  return int.from_bytes(memory[offset:offset + 2], "little")
+
+
+def allocator_capture_plan(symbols):
+  present = [symbols[name] for name in ALLOCATOR_SYMBOLS if name in symbols]
+  if len(present) != len(ALLOCATOR_SYMBOLS):
+    return None
+  start = min(present)
+  end = max(present) + 2
+  return {"start": start, "length": end - start,
+          "rift_emu_argument": "--capture-memory 0x%04X:%d" %
+                                (start, end - start)}
+
+
+def allocator_sample(symbols, capture):
+  if capture is None:
+    return None
+  address, memory = capture
+  values = {}
+  for name in ALLOCATOR_SYMBOLS:
+    if name not in symbols:
+      raise ReportError("link map has no allocator symbol %s" % name)
+    values[name.removeprefix("_")] = read_u16(
+        address, memory, symbols[name], name)
+  committed = values["bump_top"] + values["rift_ll_cap"]
+  capacity = values["zxn_arena_capacity"]
+  values["committed_frontiers"] = committed
+  values["uncommitted_capacity"] = max(0, capacity - committed)
+  return values
+
+
+def stack_sample(path, stack_floor, stack_top):
+  if path is None:
+    return None
+  text = path.read_text(encoding="utf-8", errors="replace")
+  match = REGISTER_SP_RE.search(text)
+  if not match:
+    raise ReportError("register sample has no SP value")
+  sp = int(match.group(1), 16)
+  sample = {"sp": sp}
+  if stack_floor <= sp <= stack_top:
+    sample["bytes_below_stack_top"] = stack_top - sp
+    sample["bytes_above_stack_floor"] = sp - stack_floor
+  else:
+    sample["outside_protected_stack"] = True
+  return sample
+
+
+def section_ranges(symbols, resident_start, resident_end):
+  sections = {}
+  for name, address in symbols.items():
+    match = re.fullmatch(r"__(.+)_(head|tail)", name)
+    if match:
+      sections.setdefault(match.group(1), {})[match.group(2)] = address
+  result = []
+  for name, bounds in sections.items():
+    if "head" not in bounds or "tail" not in bounds:
+      continue
+    start, end = bounds["head"], bounds["tail"]
+    if start < end and resident_start <= start and end <= resident_end:
+      result.append({"name": name, "start": start, "end": end,
+                     "bytes": end - start})
+  result.sort(key=lambda item: (item["start"], item["end"], item["name"]))
+  return result
+
+
+def section_kind(name):
+  if name == "CODE" or name.startswith("code_"):
+    return "code"
+  if name.startswith("rodata_"):
+    return "rodata"
+  if name == "DATA" or name.startswith("data_"):
+    return "data"
+  if name == "BSS" or name.startswith("bss_"):
+    return "bss"
+  return "other"
+
+
+def module_origin(module, sources):
+  if any("/src/lib/" in source for source in sources):
+    return "rift_runtime"
+  if any(source.endswith(".exe.c") for source in sources):
+    return "generated_program"
+  if any("/z88dk/" in source or source.startswith("target/") or
+         source.startswith("../") for source in sources):
+    return "z88dk_runtime"
+  if module == "unattributed":
+    return "z88dk_runtime"
+  return "other"
+
+
+def module_breakdown(entries, sections):
+  modules = {}
+  for section in sections:
+    points = {}
+    source_by_module = {}
+    for entry in entries:
+      if entry["section"] != section["name"]:
+        continue
+      if not section["start"] <= entry["address"] < section["end"]:
+        continue
+      points.setdefault(entry["address"], set()).add(entry["module"])
+      if entry["source"]:
+        source_by_module.setdefault(entry["module"], set()).add(entry["source"])
+    addresses = sorted(set([section["start"], section["end"], *points.keys()]))
+    owner = "unattributed"
+    kind = section_kind(section["name"])
+    for index in range(len(addresses) - 1):
+      address = addresses[index]
+      candidates = points.get(address, set())
+      if candidates:
+        if owner not in candidates:
+          owner = sorted(candidates)[0] if len(candidates) == 1 else \
+              "+".join(sorted(candidates))
+      size = addresses[index + 1] - address
+      if size == 0:
+        continue
+      item = modules.setdefault(owner, {
+          "module": owner,
+          "code_bytes": 0,
+          "rodata_bytes": 0,
+          "data_bytes": 0,
+          "bss_bytes": 0,
+          "other_bytes": 0,
+          "sources": set(),
+      })
+      item[kind + "_bytes"] += size
+      for candidate in candidates or {owner}:
+        item["sources"].update(source_by_module.get(candidate, set()))
+  result = []
+  for item in modules.values():
+    item["sources"] = sorted(item["sources"])
+    item["bytes"] = sum(item[name] for name in (
+        "code_bytes", "rodata_bytes", "data_bytes", "bss_bytes", "other_bytes"))
+    item["origin"] = module_origin(item["module"], item["sources"])
+    result.append(item)
+  result.sort(key=lambda item: (-item["bytes"], item["module"]))
+  return result
+
+
+def origin_breakdown(modules):
+  totals = {}
+  for module in modules:
+    item = totals.setdefault(module["origin"], {
+        "origin": module["origin"],
+        "code_bytes": 0,
+        "rodata_bytes": 0,
+        "data_bytes": 0,
+        "bss_bytes": 0,
+        "other_bytes": 0,
+        "bytes": 0,
+    })
+    for name in ("code_bytes", "rodata_bytes", "data_bytes", "bss_bytes",
+                 "other_bytes", "bytes"):
+      item[name] += module[name]
+  return sorted(totals.values(), key=lambda item: (-item["bytes"], item["origin"]))
+
+
+def generated_function_breakdown(entries, sections, modules):
+  generated_modules = {module["module"] for module in modules
+                       if module["origin"] == "generated_program"}
+  functions = []
+  for section in sections:
+    if section_kind(section["name"]) != "code":
+      continue
+    section_entries = sorted(
+        (entry for entry in entries
+         if entry["section"] == section["name"] and
+         section["start"] <= entry["address"] < section["end"]),
+        key=lambda entry: entry["address"])
+    for module in generated_modules:
+      public = []
+      for entry in section_entries:
+        if entry["module"] == module and entry["scope"] == "public":
+          if not public or public[-1]["address"] != entry["address"]:
+            public.append(entry)
+      for index, entry in enumerate(public):
+        if index + 1 < len(public):
+          end = public[index + 1]["address"]
+        else:
+          later_other = [candidate["address"] for candidate in section_entries
+                         if candidate["address"] > entry["address"] and
+                         candidate["module"] != module]
+          end = min(later_other) if later_other else section["end"]
+        functions.append({
+            "module": module,
+            "name": entry["symbol"].removeprefix("_"),
+            "start": entry["address"],
+            "end": end,
+            "bytes": end - entry["address"],
+        })
+  functions.sort(key=lambda item: (-item["bytes"], item["name"]))
+  return functions
+
+
+def build_report(args):
+  symbols = parse_map(args.map)
+  entries = parse_map_entries(args.map)
+  code_start = required_symbol(symbols, "__CODE_head")
+  code_end = required_symbol(symbols, "__CODE_END_head")
+  data_start = required_symbol(symbols, "__DATA_head")
+  data_end = required_symbol(symbols, "__DATA_END_head")
+  bss_start = required_symbol(symbols, "__BSS_head")
+  bss_end = required_symbol(symbols, "__BSS_END_head")
+
+  if not (code_start <= code_end <= data_start <= data_end <= bss_start <= bss_end):
+    raise ReportError("link-map CODE/DATA/BSS boundaries are not monotonic")
+
+  memory_reserve = args.memory_reserve
+  memory_max = args.memory_max
+  if args.build_log:
+    memory_reserve, memory_max = parse_build_log(
+        args.build_log, memory_reserve, memory_max)
+  if memory_reserve is None:
+    memory_reserve = 0
+
+  stack_top = args.stack_top
+  stack_floor = stack_top - args.stack_size
+  arena_start = align_up(bss_end, args.alignment)
+  arena_ceiling = stack_floor - memory_reserve
+  if arena_start > arena_ceiling:
+    raise ReportError("aligned resident image enters reserved high memory")
+  available_arena = arena_ceiling - arena_start
+  pools_present = "_rift_zxn_arena_link_start" in symbols
+  arena_capacity = available_arena if pools_present else 0
+  if memory_max is not None:
+    arena_capacity = min(arena_capacity, memory_max)
+
+  code_bin_size = args.code_bin.stat().st_size if args.code_bin else None
+  resident_bytes = bss_end - code_start
+  sections = section_ranges(symbols, code_start, bss_end)
+  modules = module_breakdown(entries, sections)
+  functions = generated_function_breakdown(entries, sections, modules)
+  report = {
+      "artifact": str(args.artifact),
+      "map": str(args.map),
+      "nex_container_bytes": args.artifact.stat().st_size,
+      "resident": {
+          "start": code_start,
+          "end": bss_end,
+          "bytes": resident_bytes,
+          "code_and_rodata_bytes": code_end - code_start,
+          "initialized_data_bytes": data_end - data_start,
+          "bss_bytes": bss_end - bss_start,
+      },
+      "code_bin_bytes": code_bin_size,
+      "alignment_gap_bytes": arena_start - bss_end,
+      "managed_arena": {
+          "present": pools_present,
+          "start": arena_start if pools_present else None,
+          "end": arena_start + arena_capacity if pools_present else None,
+          "capacity_bytes": arena_capacity,
+          "available_before_cap_bytes": available_arena if pools_present else 0,
+          "memory_max": memory_max,
+      },
+      "unallocated_high_headroom_bytes": available_arena - arena_capacity,
+      "high_memory_reserve_bytes": memory_reserve,
+      "protected_stack": {
+          "start": stack_floor,
+          "end": stack_top,
+          "bytes": args.stack_size,
+      },
+      "runtime_window": {
+          "start": code_start,
+          "end": stack_top,
+          "bytes": stack_top - code_start,
+      },
+      "allocator_capture_plan": allocator_capture_plan(symbols),
+      "allocator_sample": allocator_sample(
+          symbols, parse_memory_capture(args.allocator_memory)
+          if args.allocator_memory else None),
+      "stack_sample": stack_sample(args.registers, stack_floor, stack_top),
+      "sections": sections,
+      "modules": modules,
+      "origins": origin_breakdown(modules),
+      "generated_functions": functions,
+  }
+  if code_bin_size is not None:
+    report["code_bin_matches_resident"] = code_bin_size == resident_bytes
+  return report
+
+
+def format_range(item):
+  return "0x%04X-0x%04X" % (item["start"], item["end"])
+
+
+def print_human(report, verbose, show_modules):
+  resident = report["resident"]
+  arena = report["managed_arena"]
+  stack = report["protected_stack"]
+  print("ZXN memory report: %s" % report["artifact"])
+  print("NEX container:          %7d bytes" % report["nex_container_bytes"])
+  print("Resident image:         %7d bytes  %s" %
+        (resident["bytes"], format_range(resident)))
+  print("  code + read-only:     %7d bytes" % resident["code_and_rodata_bytes"])
+  print("  initialized data:     %7d bytes" % resident["initialized_data_bytes"])
+  print("  BSS:                  %7d bytes" % resident["bss_bytes"])
+  print("Alignment gap:          %7d bytes" % report["alignment_gap_bytes"])
+  if arena["present"]:
+    print("Managed arena capacity: %7d bytes  %s" %
+          (arena["capacity_bytes"], format_range(arena)))
+  else:
+    print("Managed arena capacity: %7d bytes  (pool runtime omitted)" % 0)
+  if report["unallocated_high_headroom_bytes"]:
+    print("Unallocated headroom:   %7d bytes" %
+          report["unallocated_high_headroom_bytes"])
+  if report["high_memory_reserve_bytes"]:
+    print("High-memory reserve:    %7d bytes" %
+          report["high_memory_reserve_bytes"])
+  print("Protected stack:        %7d bytes  %s" %
+        (stack["bytes"], format_range(stack)))
+  print("Runtime address window: %7d bytes  %s" %
+        (report["runtime_window"]["bytes"],
+         format_range(report["runtime_window"])))
+  if report["code_bin_bytes"] is not None:
+    print("Pre-wrap _CODE.bin:     %7d bytes  (%s resident size)" %
+          (report["code_bin_bytes"],
+           "matches" if report["code_bin_matches_resident"] else "does not match"))
+  plan = report["allocator_capture_plan"]
+  if plan:
+    print("Allocator capture:      %s" % plan["rift_emu_argument"])
+  sample = report["allocator_sample"]
+  if sample:
+    print("Live allocator sample:")
+    print("  committed frontiers:  %7d bytes" % sample["committed_frontiers"])
+    print("  long-lived live:      %7d bytes" % sample["rift_ll_live_bytes"])
+    print("  long-lived peak:      %7d bytes" % sample["rift_ll_peak_live_bytes"])
+    print("  bump used:            %7d bytes" % sample["bump_top"])
+    print("  uncommitted capacity: %7d bytes" % sample["uncommitted_capacity"])
+  sample = report["stack_sample"]
+  if sample:
+    if sample.get("outside_protected_stack"):
+      print("Stack sample:            SP=0x%04X (outside protected range)" % sample["sp"])
+    else:
+      print("Stack sample:            SP=0x%04X, %d bytes below top, %d bytes above floor" %
+            (sample["sp"], sample["bytes_below_stack_top"],
+             sample["bytes_above_stack_floor"]))
+  if verbose:
+    print("Resident linker sections:")
+    for section in report["sections"]:
+      print("  %-28s %7d bytes  %s" %
+            (section["name"], section["bytes"], format_range(section)))
+  if show_modules:
+    print("Resident origin attribution:")
+    for origin in report["origins"]:
+      print("  %-22s %7d bytes  (code %d, rodata %d, data %d, BSS %d)" %
+            (origin["origin"], origin["bytes"], origin["code_bytes"],
+             origin["rodata_bytes"], origin["data_bytes"], origin["bss_bytes"]))
+    print("Resident module attribution:")
+    for module in report["modules"]:
+      source = Path(module["sources"][0]).name if module["sources"] else ""
+      label = module["module"] + ((" [%s]" % source) if source else "")
+      print("  %-42s %7d bytes  (code %d, rodata %d, data %d, BSS %d)" %
+            (label, module["bytes"], module["code_bytes"],
+             module["rodata_bytes"], module["data_bytes"], module["bss_bytes"]))
+    if report["generated_functions"]:
+      print("Generated program functions (linked code spans):")
+      for function in report["generated_functions"]:
+        print("  %-34s %7d bytes  %s" %
+              (function["name"], function["bytes"], format_range(function)))
+
+
+def parse_args(argv=None):
+  parser = argparse.ArgumentParser(description=__doc__)
+  parser.add_argument("artifact", type=Path, help="built .nex artifact")
+  parser.add_argument("--map", type=Path, required=True, help="matching z88dk link map")
+  parser.add_argument("--code-bin", type=Path, help="matching pre-wrap _CODE.bin")
+  parser.add_argument("--build-log", type=Path,
+                      help="build output used to infer memory cap/reserve")
+  parser.add_argument("--memory-max", type=int)
+  parser.add_argument("--memory-reserve", type=int)
+  parser.add_argument("--stack-top", type=lambda value: int(value, 0),
+                      default=DEFAULT_STACK_TOP)
+  parser.add_argument("--stack-size", type=int, default=DEFAULT_STACK_SIZE)
+  parser.add_argument("--alignment", type=int, default=DEFAULT_ALIGNMENT)
+  parser.add_argument("--registers", type=Path,
+                      help="rift-emu registers.txt for an instantaneous stack sample")
+  parser.add_argument("--allocator-memory", metavar="ADDRESS:PATH",
+                      help="rift-emu memory capture covering the allocator symbols")
+  parser.add_argument("--verbose", action="store_true",
+                      help="include individual non-empty linker sections")
+  parser.add_argument("--modules", action="store_true",
+                      help="attribute resident bytes to map modules and sources")
+  parser.add_argument("--json", action="store_true")
+  args = parser.parse_args(argv)
+  for path in (args.artifact, args.map, args.code_bin, args.build_log,
+               args.registers):
+    if path is not None and not path.is_file():
+      parser.error("file does not exist: %s" % path)
+  if args.memory_max is not None and args.memory_max < 0:
+    parser.error("--memory-max must be non-negative")
+  if args.memory_reserve is not None and args.memory_reserve < 0:
+    parser.error("--memory-reserve must be non-negative")
+  if args.stack_size < 1 or args.alignment < 1:
+    parser.error("stack size and alignment must be positive")
+  return args
+
+
+def main(argv=None):
+  args = parse_args(argv)
+  try:
+    report = build_report(args)
+  except (OSError, ReportError) as exc:
+    print("zxn-memory-report: %s" % exc, file=sys.stderr)
+    return 1
+  if args.json:
+    print(json.dumps(report, indent=2, sort_keys=True))
+  else:
+    print_human(report, args.verbose, args.modules)
+  return 0
+
+
+if __name__ == "__main__":
+  sys.exit(main())
